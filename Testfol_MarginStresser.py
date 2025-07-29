@@ -299,6 +299,7 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             yaxis=dict(
                 title="Value ($)", 
                 side="left",
+                type="log" if log_margin else "linear",
                 gridcolor="rgba(255,255,255,0.1)",
                 zerolinecolor="rgba(255,255,255,0.2)"
             ),
@@ -306,6 +307,7 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
                 title="Monthly Interest ($)", 
                 overlaying="y", 
                 side="right",
+                type="log" if log_margin else "linear",
                 gridcolor="rgba(255,255,255,0.1)",
                 zerolinecolor="rgba(255,255,255,0.2)"
             ),
