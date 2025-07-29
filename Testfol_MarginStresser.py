@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────────────
-# testfol_gui_v3.py
+# testfol_gui_v4.py
 #
-# Streamlit GUI for Testfol back-tests + dynamic margin simulation
-# • Editable table: Ticker | Weight % | Maint %
-# • Margin model:
-#       – initial equity % (cash vs. loan on day-0)
-#       – annual margin interest (daily compounding, 252 days/yr)
-#       – optional fixed monthly margin draw ($) – live-off-portfolio
-# • Calculates each trading day:
-#       – equity %, margin-usage % = loan / [ P × (1 − Maint %) ]
-# • Flags breaches and plots them.
-# • Chart features:
-#       – choose which series to plot
-#       – linear/log scale, unified hover, centered legend
-# • Preset management: save & load portfolio allocations
+# Enhanced Streamlit GUI for Testfol with dashboard view option
 # ─────────────────────────────────────────────────────────────────────────────
 
 import datetime as dt
@@ -166,10 +154,247 @@ def render_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_sca
     )
     st.plotly_chart(fig, use_container_width=True)
 
+def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats):
+    """Render dashboard-style separate charts"""
+    
+    # Get log scale settings
+    log_portfolio = st.session_state.get("log_portfolio", False)
+    log_leverage = st.session_state.get("log_leverage", False)
+    log_margin = st.session_state.get("log_margin", False)
+    
+    # Configure dark theme
+    dark_theme = {
+        "template": "plotly_dark",
+        "paper_bgcolor": "rgba(30,35,45,1)",
+        "plot_bgcolor": "rgba(30,35,45,1)",
+        "font": {"color": "#E0E0E0"},
+        "xaxis": {
+            "gridcolor": "rgba(255,255,255,0.1)",
+            "zerolinecolor": "rgba(255,255,255,0.2)"
+        },
+        "yaxis": {
+            "gridcolor": "rgba(255,255,255,0.1)",
+            "zerolinecolor": "rgba(255,255,255,0.2)"
+        }
+    }
+    
+    # Row 1: Portfolio Value Chart
+    st.markdown("### Portfolio Value Over Time")
+    fig1 = go.Figure()
+    
+    # Calculate leveraged portfolio (simulated with margin)
+    leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+    leveraged_port = port * leveraged_mult
+    
+    fig1.add_trace(go.Scatter(
+        x=port.index, y=leveraged_port,
+        name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
+        line=dict(color="#4A90E2", width=2)
+    ))
+    fig1.add_trace(go.Scatter(
+        x=port.index, y=port,
+        name="Margin Portfolio (Unleveraged)",
+        line=dict(color="#1DB954", width=2)
+    ))
+    
+    fig1.update_layout(
+        **dark_theme,
+        height=400,
+        xaxis_title="Month",
+        yaxis_title="Portfolio Value ($)",
+        yaxis_type="log" if log_portfolio else "linear",
+        legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+    
+    # Row 2: Two columns for Leverage and Margin Debt
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Leverage Over Time")
+        fig2 = go.Figure()
+        
+        # Calculate leverage metrics
+        current_leverage = port / equity
+        target_leverage = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+        max_allowed = 1 / (1 - maint_pct)
+        
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=current_leverage,
+            name="Current Leverage",
+            line=dict(color="#1DB954", width=2)
+        ))
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=[target_leverage]*len(port),
+            name="Target Leverage",
+            line=dict(color="#FFD700", width=2, dash="dot")
+        ))
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=[max_allowed]*len(port),
+            name="Max Allowed",
+            line=dict(color="#FF6B6B", width=2, dash="dash")
+        ))
+        
+        fig2.update_layout(
+            **dark_theme,
+            height=350,
+            xaxis_title="Date",
+            yaxis_title="Leverage Ratio",
+            yaxis_type="log" if log_leverage else "linear",
+            legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    with col2:
+        st.markdown("### Margin Debt Evolution")
+        fig3 = go.Figure()
+        
+        # Add area chart for margin debt
+        fig3.add_trace(go.Scatter(
+            x=loan.index, y=loan,
+            name="Margin Debt",
+            fill='tozeroy',
+            line=dict(color="#FF6B6B", width=2),
+            fillcolor="rgba(255,107,107,0.3)"
+        ))
+        
+        # Portfolio value line
+        fig3.add_trace(go.Scatter(
+            x=port.index, y=port,
+            name="Portfolio Value",
+            line=dict(color="#4A90E2", width=2),
+            yaxis="y"
+        ))
+        
+        # Net liquidating value
+        fig3.add_trace(go.Scatter(
+            x=equity.index, y=equity,
+            name="Net Liquidating Value",
+            line=dict(color="#1DB954", width=2),
+            yaxis="y"
+        ))
+        
+        # Monthly interest on secondary axis
+        monthly_interest = loan * (st.session_state.rate_annual / 100 / 12)
+        fig3.add_trace(go.Scatter(
+            x=loan.index, y=monthly_interest,
+            name="Monthly Interest",
+            line=dict(color="#FFD700", width=1),
+            yaxis="y2"
+        ))
+        
+        fig3.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(30,35,45,1)",
+            plot_bgcolor="rgba(30,35,45,1)",
+            font={"color": "#E0E0E0"},
+            height=350,
+            xaxis=dict(
+                title="Date",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            yaxis=dict(
+                title="Value ($)", 
+                side="left",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            yaxis2=dict(
+                title="Monthly Interest ($)", 
+                overlaying="y", 
+                side="right",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    
+    # Row 3: Final Margin Status - Enhanced display
+    st.markdown("### Final Margin Status")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Margin Utilization gauge
+        fig4 = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=usage_pct.iloc[-1] * 100,
+            title={'text': "Margin Utilization"},
+            domain={'x': [0, 1], 'y': [0, 1]},
+            gauge={
+                'axis': {'range': [None, 100], 'tickwidth': 1},
+                'bar': {'color': "#FFD700"},
+                'steps': [
+                    {'range': [0, 50], 'color': "rgba(0,255,0,0.3)"},
+                    {'range': [50, 80], 'color': "rgba(255,255,0,0.3)"},
+                    {'range': [80, 100], 'color': "rgba(255,0,0,0.3)"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 100
+                }
+            },
+            number={'suffix': "%", 'font': {'size': 40}},
+            delta={'reference': 50, 'increasing': {'color': "red"}}
+        ))
+        fig4.update_layout(
+            **dark_theme,
+            height=300,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig4, use_container_width=True)
+        st.markdown(f"<p style='text-align: center; color: #888;'>{'Moderate Risk' if usage_pct.iloc[-1] < 0.8 else 'High Risk'}</p>", unsafe_allow_html=True)
+    
+    with col2:
+        # Leverage gauge
+        final_leverage = (port.iloc[-1] / equity.iloc[-1])
+        fig5 = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=final_leverage,
+            title={'text': "Leverage"},
+            domain={'x': [0, 1], 'y': [0, 1]},
+            gauge={
+                'axis': {'range': [1, max_allowed], 'tickwidth': 1},
+                'bar': {'color': "#4A90E2"},
+                'steps': [
+                    {'range': [1, 2], 'color': "rgba(0,255,0,0.3)"},
+                    {'range': [2, 3], 'color': "rgba(255,255,0,0.3)"},
+                    {'range': [3, max_allowed], 'color': "rgba(255,0,0,0.3)"}
+                ],
+            },
+            number={'suffix': "x", 'font': {'size': 40}}
+        ))
+        fig5.update_layout(
+            **dark_theme,
+            height=300,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig5, use_container_width=True)
+        st.markdown(f"<p style='text-align: center; color: #888;'>Peak {max_allowed:.2f}x</p>", unsafe_allow_html=True)
+    
+    with col3:
+        # Available Margin display
+        available_margin = port.iloc[-1] * (1 - maint_pct) - loan.iloc[-1]
+        st.markdown(
+            f"""
+            <div style='background-color: rgba(30,35,45,1); padding: 20px; border-radius: 10px; text-align: center;'>
+                <h4 style='color: #888; margin-bottom: 10px;'>Available Margin</h4>
+                <h1 style='color: #1DB954; margin: 10px 0;'>${available_margin:,.2f}</h1>
+                <p style='color: #888; margin-top: 10px;'>Additional Borrowing Power</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
 def show_summary(port, equity, loan, usage_pct, stats):
     st.subheader("Summary statistics")
 
-    # ─── Row 1: Final outcomes ────────────────────────────────────────────────
+    # Row 1: Final outcomes
     port_metrics = [
         ("Final portfolio", port.iloc[-1], "$"),
         ("Final equity",   equity.iloc[-1], "$"),
@@ -183,7 +408,7 @@ def show_summary(port, equity, loan, usage_pct, stats):
 
     st.markdown("---")
 
-    # ─── Row 2: Back‐test statistics ───────────────────────────────────────────
+    # Row 2: Back‐test statistics
     stat_metrics = [
         ("CAGR",           stats.get("cagr"),         "%"),
         ("Sharpe ratio",   stats.get("sharpe_ratio") or stats.get("sharpe"), ""),
@@ -269,12 +494,24 @@ with st.sidebar:
     st.divider()
 
     st.header("Chart options")
-    series_opts = st.multiselect(
-        "Show series",
-        ["Portfolio","Equity","Loan","Margin usage %","Equity %"],
-        default=["Portfolio","Equity","Loan","Margin usage %","Equity %"]
+    view_mode = st.radio(
+        "View mode",
+        ["Combined Chart", "Dashboard View"],
+        help="Choose between single chart or dashboard-style separate charts"
     )
-    log_scale = st.checkbox("Log scale (left axis)", value=False)
+    
+    if view_mode == "Combined Chart":
+        series_opts = st.multiselect(
+            "Show series",
+            ["Portfolio","Equity","Loan","Margin usage %","Equity %"],
+            default=["Portfolio","Equity","Loan","Margin usage %","Equity %"]
+        )
+        log_scale = st.checkbox("Log scale (left axis)", value=False)
+    else:
+        st.markdown("**Dashboard log scales:**")
+        log_portfolio = st.checkbox("Portfolio chart", value=False, key="log_portfolio")
+        log_leverage = st.checkbox("Leverage chart", value=False, key="log_leverage")
+        log_margin = st.checkbox("Margin debt chart", value=False, key="log_margin")
     st.divider()
 
     handle_presets()
@@ -296,7 +533,7 @@ _default = [
 if "alloc_df" not in st.session_state:
     st.session_state.alloc_df = pd.DataFrame(_default)
 
-# Render editable table - let st.data_editor handle its own state
+# Render editable table
 edited_df = st.data_editor(
     st.session_state.alloc_df,
     num_rows="dynamic",
@@ -353,10 +590,16 @@ if st.button("Run back-test", type="primary"):
         port, st.session_state.starting_loan,
         rate_annual, draw_monthly, maint_pct
     )
-    render_chart(port, equity, loan_series, equity_pct, usage_pct,
-                 series_opts, log_scale)
-    show_summary(port, equity, loan_series, usage_pct, stats)
+    
+    # Render based on selected view mode
+    if view_mode == "Combined Chart":
+        render_chart(port, equity, loan_series, equity_pct, usage_pct,
+                     series_opts, log_scale)
+        show_summary(port, equity, loan_series, usage_pct, stats)
+    else:
+        render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats)
 
+    # Margin breaches table (shown in both views)
     breaches = pd.DataFrame({
         "Date":     usage_pct[usage_pct>=1].index.date,
         "Usage %":  (usage_pct[usage_pct>=1]*100).round(1),
