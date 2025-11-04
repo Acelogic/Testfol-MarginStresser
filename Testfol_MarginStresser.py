@@ -126,6 +126,15 @@ def convert_to_daily_ohlc(series):
     ohlc["date"] = pd.to_datetime(ohlc["date"])
     return ohlc
 
+def format_ohlc_for_tradingview(ohlc_df, name="data"):
+    """Format OHLC data for TradingView CSV import"""
+    tv_df = ohlc_df.copy()
+    tv_df['time'] = tv_df['date'].dt.strftime('%Y-%m-%d')
+    tv_df['volume'] = 0  # TradingView expects volume, set to 0 if not applicable
+    # Reorder columns to match TradingView format: time, open, high, low, close, volume
+    tv_df = tv_df[['time', 'open', 'high', 'low', 'close', 'volume']]
+    return tv_df
+
 def render_daily_candles(port, equity, loan, log_scale):
     """Render daily candlestick charts for portfolio, equity, and loan"""
 
@@ -208,6 +217,9 @@ def render_daily_candles(port, equity, loan, log_scale):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+    # Return OHLC data for export
+    return port_ohlc, equity_ohlc, loan_ohlc
 
 def render_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale):
     fig = go.Figure()
@@ -700,7 +712,51 @@ if st.button("Run back-test", type="primary"):
     elif view_mode == "Dashboard View":
         render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats)
     else:  # Daily Candles
-        render_daily_candles(port, equity, loan_series, st.session_state.get("log_candles", False))
+        port_ohlc, equity_ohlc, loan_ohlc = render_daily_candles(
+            port, equity, loan_series, st.session_state.get("log_candles", False)
+        )
+
+        # TradingView Export Section
+        st.subheader("📊 Export to TradingView")
+        st.markdown("""
+        Download OHLC data in TradingView-compatible CSV format.
+        You can import these files into TradingView by going to **Chart → Import** or using the import functionality.
+        """)
+
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            port_tv = format_ohlc_for_tradingview(port_ohlc, "portfolio")
+            st.download_button(
+                label="📥 Download Portfolio OHLC",
+                data=port_tv.to_csv(index=False),
+                file_name=f"portfolio_ohlc_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                help="Download portfolio data for TradingView import"
+            )
+
+        with col2:
+            equity_tv = format_ohlc_for_tradingview(equity_ohlc, "equity")
+            st.download_button(
+                label="📥 Download Equity OHLC",
+                data=equity_tv.to_csv(index=False),
+                file_name=f"equity_ohlc_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                help="Download equity data for TradingView import"
+            )
+
+        with col3:
+            loan_tv = format_ohlc_for_tradingview(loan_ohlc, "loan")
+            st.download_button(
+                label="📥 Download Loan OHLC",
+                data=loan_tv.to_csv(index=False),
+                file_name=f"loan_ohlc_{start_date}_{end_date}.csv",
+                mime="text/csv",
+                help="Download loan data for TradingView import"
+            )
+
+        st.info("💡 **TradingView Import Steps:** Open TradingView → Select Chart → Click on 'Import' → Choose the downloaded CSV file")
+
         show_summary(port, equity, loan_series, usage_pct, stats)
 
     # Margin breaches table (shown in both views)
