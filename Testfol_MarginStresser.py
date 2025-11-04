@@ -112,6 +112,103 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct):
     usage_pct = (loan_series / (port * (1 - maint_pct))).rename("Margin usage %")
     return loan_series, equity, equity_pct, usage_pct
 
+def convert_to_daily_ohlc(series):
+    """Convert a time series to daily OHLC (Open, High, Low, Close) format"""
+    df = pd.DataFrame({"value": series})
+    df["date"] = df.index.date
+
+    ohlc = df.groupby("date")["value"].agg([
+        ("open", "first"),
+        ("high", "max"),
+        ("low", "min"),
+        ("close", "last")
+    ]).reset_index()
+    ohlc["date"] = pd.to_datetime(ohlc["date"])
+    return ohlc
+
+def render_daily_candles(port, equity, loan, log_scale):
+    """Render daily candlestick charts for portfolio, equity, and loan"""
+
+    # Convert to daily OHLC
+    port_ohlc = convert_to_daily_ohlc(port)
+    equity_ohlc = convert_to_daily_ohlc(equity)
+    loan_ohlc = convert_to_daily_ohlc(loan)
+
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+
+    # Portfolio candlesticks
+    fig.add_trace(go.Candlestick(
+        x=port_ohlc["date"],
+        open=port_ohlc["open"],
+        high=port_ohlc["high"],
+        low=port_ohlc["low"],
+        close=port_ohlc["close"],
+        name="Portfolio",
+        increasing_line_color="#26a69a",
+        decreasing_line_color="#ef5350",
+        yaxis="y"
+    ))
+
+    # Equity candlesticks
+    fig.add_trace(go.Candlestick(
+        x=equity_ohlc["date"],
+        open=equity_ohlc["open"],
+        high=equity_ohlc["high"],
+        low=equity_ohlc["low"],
+        close=equity_ohlc["close"],
+        name="Equity",
+        increasing_line_color="#66bb6a",
+        decreasing_line_color="#ff7043",
+        visible="legendonly",
+        yaxis="y"
+    ))
+
+    # Loan line (on secondary axis for better visibility)
+    fig.add_trace(go.Scatter(
+        x=loan_ohlc["date"],
+        y=loan_ohlc["close"],
+        name="Loan",
+        line=dict(color="yellow", width=2, dash="dot"),
+        yaxis="y2"
+    ))
+
+    fig.update_layout(
+        template="plotly_white",
+        title="Daily Candles View",
+        hovermode="x unified",
+        xaxis=dict(
+            title="Date",
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.05)",
+            rangeslider_visible=False
+        ),
+        yaxis=dict(
+            title="Portfolio / Equity Value ($)",
+            showgrid=True,
+            gridcolor="rgba(0,0,0,0.05)",
+            type="log" if log_scale else "linear",
+            rangemode="tozero"
+        ),
+        yaxis2=dict(
+            title="Loan ($)",
+            overlaying="y",
+            side="right",
+            showgrid=False,
+            type="log" if log_scale else "linear"
+        ),
+        legend=dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.15,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(t=80, b=100, l=60, r=60)
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
 def render_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale):
     fig = go.Figure()
     TRACES = {
@@ -498,10 +595,10 @@ with st.sidebar:
     st.header("Chart options")
     view_mode = st.radio(
         "View mode",
-        ["Combined Chart", "Dashboard View"],
-        help="Choose between single chart or dashboard-style separate charts"
+        ["Combined Chart", "Dashboard View", "Daily Candles"],
+        help="Choose between single chart, dashboard-style separate charts, or daily candlestick view"
     )
-    
+
     if view_mode == "Combined Chart":
         series_opts = st.multiselect(
             "Show series",
@@ -509,11 +606,13 @@ with st.sidebar:
             default=["Portfolio","Equity","Loan","Margin usage %","Equity %"]
         )
         log_scale = st.checkbox("Log scale (left axis)", value=False)
-    else:
+    elif view_mode == "Dashboard View":
         st.markdown("**Dashboard log scales:**")
         log_portfolio = st.checkbox("Portfolio chart", value=False, key="log_portfolio")
         log_leverage = st.checkbox("Leverage chart", value=False, key="log_leverage")
         log_margin = st.checkbox("Margin debt chart", value=False, key="log_margin")
+    else:  # Daily Candles
+        log_scale = st.checkbox("Log scale", value=False, key="log_candles")
     st.divider()
 
     handle_presets()
@@ -598,8 +697,11 @@ if st.button("Run back-test", type="primary"):
         render_chart(port, equity, loan_series, equity_pct, usage_pct,
                      series_opts, log_scale)
         show_summary(port, equity, loan_series, usage_pct, stats)
-    else:
+    elif view_mode == "Dashboard View":
         render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats)
+    else:  # Daily Candles
+        render_daily_candles(port, equity, loan_series, st.session_state.get("log_candles", False))
+        show_summary(port, equity, loan_series, usage_pct, stats)
 
     # Margin breaches table (shown in both views)
     breaches = pd.DataFrame({
