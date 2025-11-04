@@ -139,16 +139,20 @@ def format_ohlc_for_tradingview(ohlc_df, name="data"):
 def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart"):
     """Render TradingView Lightweight Charts with OHLC data"""
 
-    # Convert OHLC data to TradingView format (Unix timestamp)
+    # Convert OHLC data to TradingView format (YYYY-MM-DD string format)
     chart_data = []
     for _, row in ohlc_df.iterrows():
         chart_data.append({
-            'time': int(row['date'].timestamp()),
+            'time': row['date'].strftime('%Y-%m-%d'),
             'open': float(row['open']),
             'high': float(row['high']),
             'low': float(row['low']),
             'close': float(row['close'])
         })
+
+    # Debug: Show data sample
+    if len(chart_data) > 0:
+        st.caption(f"Data points: {len(chart_data)} | First: {chart_data[0]['time']} | Last: {chart_data[-1]['time']}")
 
     # Create HTML with TradingView Lightweight Charts
     html_code = f"""
@@ -181,51 +185,71 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
         <div class="chart-title">{title}</div>
         <div id="container"></div>
         <script>
-            const chartData = {json.dumps(chart_data)};
+            try {{
+                const chartData = {json.dumps(chart_data)};
+                console.log('Chart data loaded:', chartData.length, 'points');
+                console.log('First data point:', chartData[0]);
+                console.log('Last data point:', chartData[chartData.length - 1]);
 
-            const chart = LightweightCharts.createChart(document.getElementById('container'), {{
-                width: document.getElementById('container').clientWidth,
-                height: {height},
-                layout: {{
-                    background: {{ type: 'solid', color: '#ffffff' }},
-                    textColor: '#333',
-                }},
-                grid: {{
-                    vertLines: {{ color: '#e1e3e6' }},
-                    horzLines: {{ color: '#e1e3e6' }},
-                }},
-                crosshair: {{
-                    mode: LightweightCharts.CrosshairMode.Normal,
-                }},
-                rightPriceScale: {{
-                    borderColor: '#d1d4dc',
-                }},
-                timeScale: {{
-                    borderColor: '#d1d4dc',
-                    timeVisible: true,
-                    secondsVisible: false,
-                }},
-            }});
+                const container = document.getElementById('container');
+                if (!container) {{
+                    console.error('Container not found');
+                    throw new Error('Container element not found');
+                }}
 
-            const candlestickSeries = chart.addCandlestickSeries({{
-                upColor: '#26a69a',
-                downColor: '#ef5350',
-                borderVisible: false,
-                wickUpColor: '#26a69a',
-                wickDownColor: '#ef5350',
-            }});
-
-            candlestickSeries.setData(chartData);
-
-            // Fit content
-            chart.timeScale().fitContent();
-
-            // Handle window resize
-            window.addEventListener('resize', () => {{
-                chart.applyOptions({{
-                    width: document.getElementById('container').clientWidth,
+                const chart = LightweightCharts.createChart(container, {{
+                    width: container.clientWidth,
+                    height: {height},
+                    layout: {{
+                        background: {{ type: 'solid', color: '#ffffff' }},
+                        textColor: '#333',
+                    }},
+                    grid: {{
+                        vertLines: {{ color: '#e1e3e6' }},
+                        horzLines: {{ color: '#e1e3e6' }},
+                    }},
+                    crosshair: {{
+                        mode: LightweightCharts.CrosshairMode.Normal,
+                    }},
+                    rightPriceScale: {{
+                        borderColor: '#d1d4dc',
+                    }},
+                    timeScale: {{
+                        borderColor: '#d1d4dc',
+                        timeVisible: true,
+                        secondsVisible: false,
+                    }},
                 }});
-            }});
+
+                console.log('Chart created successfully');
+
+                const candlestickSeries = chart.addCandlestickSeries({{
+                    upColor: '#26a69a',
+                    downColor: '#ef5350',
+                    borderVisible: false,
+                    wickUpColor: '#26a69a',
+                    wickDownColor: '#ef5350',
+                }});
+
+                console.log('Candlestick series added');
+
+                candlestickSeries.setData(chartData);
+                console.log('Data set on series');
+
+                // Fit content
+                chart.timeScale().fitContent();
+                console.log('Chart ready');
+
+                // Handle window resize
+                window.addEventListener('resize', () => {{
+                    chart.applyOptions({{
+                        width: container.clientWidth,
+                    }});
+                }});
+            }} catch (error) {{
+                console.error('Error creating chart:', error);
+                document.getElementById('container').innerHTML = '<div style="padding: 20px; color: red;">Error: ' + error.message + '</div>';
+            }}
         </script>
     </body>
     </html>
