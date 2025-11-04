@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # ─────────────────────────────────────────────────────────────────────────────
-# testfol_gui_v4.py
+# Testfol Margin Simulator
 #
-# Enhanced Streamlit GUI for Testfol with dashboard view option
+# Enhanced Streamlit GUI for Testfol with dashboard and TradingView integration
 # ─────────────────────────────────────────────────────────────────────────────
 
 import datetime as dt
@@ -14,13 +14,35 @@ import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Constants
+# ─────────────────────────────────────────────────────────────────────────────
+
 API_URL = "https://testfol.io/api/backtest"
+TRADINGVIEW_CDN = "https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"
+
+# Dark theme configuration for charts
+DARK_THEME = {
+    "template": "plotly_dark",
+    "paper_bgcolor": "rgba(30,35,45,1)",
+    "plot_bgcolor": "rgba(30,35,45,1)",
+    "font": {"color": "#E0E0E0"},
+    "xaxis": {
+        "gridcolor": "rgba(255,255,255,0.1)",
+        "zerolinecolor": "rgba(255,255,255,0.2)"
+    },
+    "yaxis": {
+        "gridcolor": "rgba(255,255,255,0.1)",
+        "zerolinecolor": "rgba(255,255,255,0.2)"
+    }
+}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Helpers
+# Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
 
 def num_input(label, key, default, step, **kwargs):
+    """Create a number input with session state support."""
     return st.number_input(
         label,
         value=st.session_state.get(key, default),
@@ -29,31 +51,40 @@ def num_input(label, key, default, step, **kwargs):
         **kwargs
     )
 
+
 def sync_equity():
-    sv = st.session_state.start_val
-    loan = st.session_state.starting_loan
-    # Compute equity % based on starting loan
+    """Compute equity percentage based on starting loan and value."""
+    sv = st.session_state.get("start_val", 1)  # Avoid division by zero
+    if sv == 0:
+        sv = 1
+    loan = st.session_state.get("starting_loan", 0)
     st.session_state.equity_init = 100 * max(0, 1 - loan / sv)
 
+
 def sync_loan():
-    sv = st.session_state.start_val
-    eq = st.session_state.equity_init
-    # Compute starting loan based on equity %
+    """Compute starting loan based on equity percentage."""
+    sv = st.session_state.get("start_val", 1)
+    eq = st.session_state.get("equity_init", 100)
     st.session_state.starting_loan = sv * max(0, 1 - eq / 100)
 
+
 def handle_presets(key="alloc_df"):
+    """Handle loading and saving portfolio presets."""
     st.header("Portfolio presets")
     up = st.file_uploader("Load preset (JSON)", type=["json"])
     if up:
         try:
             df = pd.read_json(up)
-            if set(df.columns) >= {"Ticker","Weight %","Maint %"}:
+            if set(df.columns) >= {"Ticker", "Weight %", "Maint %"}:
                 st.session_state[key] = df
                 st.success("Loaded preset")
             else:
-                st.error("Invalid preset format")
-        except Exception:
-            st.error("Failed to read preset")
+                st.error("Invalid preset format. Must include: Ticker, Weight %, Maint %")
+        except json.JSONDecodeError:
+            st.error("Invalid JSON file")
+        except Exception as e:
+            st.error(f"Failed to read preset: {str(e)}")
+
     if key in st.session_state:
         st.download_button(
             "Save preset",
@@ -62,59 +93,136 @@ def handle_presets(key="alloc_df"):
             mime="application/json"
         )
 
+
 def table_to_dicts(df: pd.DataFrame):
+    """
+    Convert allocation table to dictionaries.
+
+    Args:
+        df: DataFrame with Ticker, Weight %, Maint % columns
+
+    Returns:
+        tuple: (allocation_dict, maintenance_dict)
+    """
     df = df.dropna(subset=["Ticker"]).copy()
-    alloc = {r["Ticker"].strip(): float(r["Weight %"]) for _,r in df.iterrows()}
-    maint = {r["Ticker"].split("?")[0].strip(): float(r["Maint %"]) for _,r in df.iterrows()}
+    alloc = {r["Ticker"].strip(): float(r["Weight %"]) for _, r in df.iterrows()}
+    maint = {r["Ticker"].split("?")[0].strip(): float(r["Maint %"]) for _, r in df.iterrows()}
     return alloc, maint
+
 
 def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
                    invest_div, rebalance, allocation):
+    """
+    Fetch backtest data from Testfol API.
+
+    Args:
+        start_date: Start date for backtest
+        end_date: End date for backtest
+        start_val: Starting portfolio value
+        cashflow: Periodic cashflow amount
+        cashfreq: Cashflow frequency
+        rolling: Rolling window in months
+        invest_div: Whether to reinvest dividends
+        rebalance: Rebalancing frequency
+        allocation: Ticker allocation dictionary
+
+    Returns:
+        tuple: (portfolio_series, stats_dict)
+
+    Raises:
+        requests.HTTPError: If API request fails
+        ValueError: If response format is invalid
+    """
     payload = {
         "start_date": str(start_date),
-        "end_date":   str(end_date),
-        "start_val":  start_val,
+        "end_date": str(end_date),
+        "start_val": start_val,
         "adj_inflation": False,
         "cashflow": cashflow,
         "cashflow_freq": cashfreq,
         "rolling_window": rolling,
         "backtests": [{
             "invest_dividends": invest_div,
-            "rebalance_freq":   rebalance,
-            "allocation":       allocation,
+            "rebalance_freq": rebalance,
+            "allocation": allocation,
             "drag": 0,
             "absolute_dev": 0,
             "relative_dev": 0
         }]
     }
-    r = requests.post(API_URL, json=payload, timeout=30)
-    r.raise_for_status()
-    resp = r.json()
+
+    try:
+        r = requests.post(API_URL, json=payload, timeout=30)
+        r.raise_for_status()
+        resp = r.json()
+    except requests.Timeout:
+        raise requests.HTTPError("Request timed out. Please try again.")
+    except requests.RequestException as e:
+        raise requests.HTTPError(f"API request failed: {str(e)}")
+
+    # Parse response
     stats = resp.get("stats", {})
     if isinstance(stats, list):
         stats = stats[0] if stats else {}
-    ts, vals = resp["charts"]["history"]
-    dates = pd.to_datetime(ts, unit="s")
-    return pd.Series(vals, index=dates, name="Portfolio"), stats
+
+    try:
+        ts, vals = resp["charts"]["history"]
+        dates = pd.to_datetime(ts, unit="s")
+        return pd.Series(vals, index=dates, name="Portfolio"), stats
+    except (KeyError, ValueError) as e:
+        raise ValueError(f"Invalid API response format: {str(e)}")
+
 
 def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct):
+    """
+    Simulate margin trading with interest and monthly draws.
+
+    Args:
+        port: Portfolio value series
+        starting_loan: Initial loan amount
+        rate_annual: Annual interest rate (percentage)
+        draw_monthly: Monthly loan draw amount
+        maint_pct: Maintenance requirement (decimal)
+
+    Returns:
+        tuple: (loan_series, equity_series, equity_pct_series, usage_pct_series)
+    """
+    if len(port) == 0:
+        raise ValueError("Portfolio series is empty")
+
     rate_daily = (rate_annual / 100) / 252
-    loan_vals, loan = [], starting_loan
+    loan_vals = []
+    loan = starting_loan
     prev_m = port.index[0].month
+
     for d in port.index:
-        loan *= 1 + rate_daily
+        loan *= (1 + rate_daily)
         if draw_monthly and d.month != prev_m:
             loan += draw_monthly
             prev_m = d.month
         loan_vals.append(loan)
+
     loan_series = pd.Series(loan_vals, index=port.index, name="Loan")
     equity = port - loan_series
     equity_pct = (equity / port).rename("Equity %")
-    usage_pct = (loan_series / (port * (1 - maint_pct))).rename("Margin usage %")
+
+    # Avoid division by zero
+    denominator = port * (1 - maint_pct)
+    usage_pct = (loan_series / denominator.replace(0, 1)).rename("Margin usage %")
+
     return loan_series, equity, equity_pct, usage_pct
 
+
 def convert_to_daily_ohlc(series):
-    """Convert a time series to daily OHLC (Open, High, Low, Close) format"""
+    """
+    Convert a time series to daily OHLC (Open, High, Low, Close) format.
+
+    Args:
+        series: Pandas Series with datetime index
+
+    Returns:
+        DataFrame: OHLC data with date, open, high, low, close columns
+    """
     df = pd.DataFrame({"value": series})
     df["date"] = df.index.date
 
@@ -127,28 +235,43 @@ def convert_to_daily_ohlc(series):
     ohlc["date"] = pd.to_datetime(ohlc["date"])
     return ohlc
 
-def format_ohlc_for_tradingview(ohlc_df, name="data"):
-    """Format OHLC data for TradingView CSV import"""
+
+def format_ohlc_for_tradingview(ohlc_df):
+    """
+    Format OHLC data for TradingView CSV export.
+
+    Args:
+        ohlc_df: DataFrame with OHLC data
+
+    Returns:
+        DataFrame: TradingView-compatible format
+    """
     tv_df = ohlc_df.copy()
     tv_df['time'] = tv_df['date'].dt.strftime('%Y-%m-%d')
-    tv_df['volume'] = 0  # TradingView expects volume, set to 0 if not applicable
-    # Reorder columns to match TradingView format: time, open, high, low, close, volume
-    tv_df = tv_df[['time', 'open', 'high', 'low', 'close', 'volume']]
-    return tv_df
+    tv_df['volume'] = 0  # TradingView expects volume
+    return tv_df[['time', 'open', 'high', 'low', 'close', 'volume']]
 
-def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart"):
-    """Render TradingView Lightweight Charts with OHLC data"""
 
-    # Convert OHLC data to TradingView format (YYYY-MM-DD string format)
-    chart_data = []
-    for _, row in ohlc_df.iterrows():
-        chart_data.append({
+def render_tradingview_chart(ohlc_df, title="Chart", height=500):
+    """
+    Render TradingView Lightweight Charts with OHLC data.
+
+    Args:
+        ohlc_df: DataFrame with date, open, high, low, close columns
+        title: Chart title
+        height: Chart height in pixels
+    """
+    # Convert OHLC data to TradingView format using vectorized operations
+    chart_data = ohlc_df.apply(
+        lambda row: {
             'time': row['date'].strftime('%Y-%m-%d'),
             'open': float(row['open']),
             'high': float(row['high']),
             'low': float(row['low']),
             'close': float(row['close'])
-        })
+        },
+        axis=1
+    ).tolist()
 
     # Debug: Show data sample
     if len(chart_data) > 0:
@@ -159,7 +282,7 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
     <!DOCTYPE html>
     <html>
     <head>
-        <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+        <script src="{TRADINGVIEW_CDN}"></script>
         <style>
             body {{
                 margin: 0;
@@ -187,23 +310,13 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
         <script>
             window.addEventListener('load', function() {{
                 try {{
-                    // Check if library is loaded
                     if (typeof LightweightCharts === 'undefined') {{
                         throw new Error('TradingView Lightweight Charts library not loaded');
                     }}
 
-                    console.log('LightweightCharts loaded:', typeof LightweightCharts);
-                    console.log('Available methods:', Object.keys(LightweightCharts));
-
                     const chartData = {json.dumps(chart_data)};
-                    console.log('Chart data loaded:', chartData.length, 'points');
-
-                    if (chartData.length > 0) {{
-                        console.log('First data point:', chartData[0]);
-                        console.log('Last data point:', chartData[chartData.length - 1]);
-                    }}
-
                     const container = document.getElementById('container');
+
                     if (!container) {{
                         throw new Error('Container element not found');
                     }}
@@ -232,9 +345,6 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
                         }},
                     }});
 
-                    console.log('Chart created successfully');
-                    console.log('Chart methods:', Object.keys(chart));
-
                     const candlestickSeries = chart.addCandlestickSeries({{
                         upColor: '#26a69a',
                         downColor: '#ef5350',
@@ -243,14 +353,8 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
                         wickDownColor: '#ef5350',
                     }});
 
-                    console.log('Candlestick series added');
-
                     candlestickSeries.setData(chartData);
-                    console.log('Data set on series');
-
-                    // Fit content
                     chart.timeScale().fitContent();
-                    console.log('Chart ready and fitted');
 
                     // Handle window resize
                     window.addEventListener('resize', () => {{
@@ -260,10 +364,9 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
                     }});
                 }} catch (error) {{
                     console.error('Error creating chart:', error);
-                    console.error('Error stack:', error.stack);
                     const container = document.getElementById('container');
                     if (container) {{
-                        container.innerHTML = '<div style="padding: 20px; color: red; border: 1px solid red; margin: 10px;"><strong>Error:</strong> ' + error.message + '<br><small>' + error.stack + '</small></div>';
+                        container.innerHTML = '<div style="padding: 20px; color: red; border: 1px solid red; margin: 10px;"><strong>Error:</strong> ' + error.message + '</div>';
                     }}
                 }}
             }});
@@ -274,9 +377,20 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
 
     components.html(html_code, height=height + 50, scrolling=False)
 
-def render_daily_candles(port, equity, loan, log_scale):
-    """Render daily candlestick charts for portfolio, equity, and loan"""
 
+def render_daily_candles(port, equity, loan, log_scale):
+    """
+    Render daily candlestick charts using Plotly.
+
+    Args:
+        port: Portfolio value series
+        equity: Equity value series
+        loan: Loan value series
+        log_scale: Whether to use logarithmic scale
+
+    Returns:
+        tuple: (portfolio_ohlc, equity_ohlc, loan_ohlc)
+    """
     # Convert to daily OHLC
     port_ohlc = convert_to_daily_ohlc(port)
     equity_ohlc = convert_to_daily_ohlc(equity)
@@ -356,29 +470,43 @@ def render_daily_candles(port, equity, loan, log_scale):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-
-    # Return OHLC data for export
     return port_ohlc, equity_ohlc, loan_ohlc
 
+
 def render_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale):
+    """
+    Render combined chart with multiple series.
+
+    Args:
+        port: Portfolio series
+        equity: Equity series
+        loan: Loan series
+        equity_pct: Equity percentage series
+        usage_pct: Margin usage percentage series
+        series_opts: List of series to display
+        log_scale: Whether to use logarithmic scale
+    """
     fig = go.Figure()
     TRACES = {
-        "Portfolio":       (port.index, port, {"width":2}, "$%{y:,.0f}"),
-        "Equity":          (equity.index, equity, {"dash":"dot"}, "$%{y:,.0f}"),
-        "Loan":            (loan.index, loan, {"dash":"dot","width":1,"color":"lime"}, "$%{y:,.0f}"),
-        "Margin usage %":  (usage_pct.index, usage_pct*100, {"width":2,"color":"yellow"}, "%{y:.2f}%"),
-        "Equity %":        (equity_pct.index, equity_pct*100, {"dash":"dash"}, "%{y:.2f}%"),
+        "Portfolio": (port.index, port, {"width": 2}, "$%{y:,.0f}"),
+        "Equity": (equity.index, equity, {"dash": "dot"}, "$%{y:,.0f}"),
+        "Loan": (loan.index, loan, {"dash": "dot", "width": 1, "color": "lime"}, "$%{y:,.0f}"),
+        "Margin usage %": (usage_pct.index, usage_pct * 100, {"width": 2, "color": "yellow"}, "%{y:.2f}%"),
+        "Equity %": (equity_pct.index, equity_pct * 100, {"dash": "dash"}, "%{y:.2f}%"),
     }
+
     for key in series_opts:
         x, y, line, fmt = TRACES[key]
         fig.add_scatter(
             x=x, y=y, name=key,
             line=line,
-            hovertemplate=fmt+"<extra></extra>",
+            hovertemplate=fmt + "<extra></extra>",
             yaxis="y2" if "%" in key else "y"
         )
-    fig.add_hline(y=100, yref="y2", line={"dash":"dot"},
+
+    fig.add_hline(y=100, yref="y2", line={"dash": "dot"},
                   annotation_text="Margin call", annotation_position="top right")
+
     fig.update_layout(
         template="plotly_white",
         hovermode="x unified",
@@ -402,38 +530,35 @@ def render_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_sca
     )
     st.plotly_chart(fig, use_container_width=True)
 
-def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats):
-    """Render dashboard-style separate charts"""
-    
+
+def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, rate_annual, equity_init):
+    """
+    Render dashboard-style separate charts.
+
+    Args:
+        port: Portfolio series
+        equity: Equity series
+        loan: Loan series
+        equity_pct: Equity percentage series
+        usage_pct: Margin usage percentage series
+        maint_pct: Maintenance percentage
+        stats: Statistics dictionary
+        rate_annual: Annual interest rate
+        equity_init: Initial equity percentage
+    """
     # Get log scale settings
     log_portfolio = st.session_state.get("log_portfolio", False)
     log_leverage = st.session_state.get("log_leverage", False)
     log_margin = st.session_state.get("log_margin", False)
-    
-    # Configure dark theme
-    dark_theme = {
-        "template": "plotly_dark",
-        "paper_bgcolor": "rgba(30,35,45,1)",
-        "plot_bgcolor": "rgba(30,35,45,1)",
-        "font": {"color": "#E0E0E0"},
-        "xaxis": {
-            "gridcolor": "rgba(255,255,255,0.1)",
-            "zerolinecolor": "rgba(255,255,255,0.2)"
-        },
-        "yaxis": {
-            "gridcolor": "rgba(255,255,255,0.1)",
-            "zerolinecolor": "rgba(255,255,255,0.2)"
-        }
-    }
-    
+
     # Row 1: Portfolio Value Chart
     st.markdown("### Portfolio Value Over Time")
     fig1 = go.Figure()
-    
-    # Calculate leveraged portfolio (simulated with margin)
-    leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+
+    # Calculate leveraged portfolio
+    leveraged_mult = 1 / (equity_init / 100) if equity_init < 100 else 1
     leveraged_port = port * leveraged_mult
-    
+
     fig1.add_trace(go.Scatter(
         x=port.index, y=leveraged_port,
         name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
@@ -444,9 +569,9 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
         name="Margin Portfolio (Unleveraged)",
         line=dict(color="#1DB954", width=2)
     ))
-    
+
     fig1.update_layout(
-        **dark_theme,
+        **DARK_THEME,
         height=400,
         xaxis_title="Month",
         yaxis_title="Portfolio Value ($)",
@@ -455,37 +580,37 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
         hovermode="x unified"
     )
     st.plotly_chart(fig1, use_container_width=True)
-    
+
     # Row 2: Two columns for Leverage and Margin Debt
     col1, col2 = st.columns(2)
-    
+
     with col1:
         st.markdown("### Leverage Over Time")
         fig2 = go.Figure()
-        
+
         # Calculate leverage metrics
-        current_leverage = port / equity
-        target_leverage = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+        current_leverage = port / equity.replace(0, 1)  # Avoid division by zero
+        target_leverage = 1 / (equity_init / 100) if equity_init < 100 else 1
         max_allowed = 1 / (1 - maint_pct)
-        
+
         fig2.add_trace(go.Scatter(
             x=port.index, y=current_leverage,
             name="Current Leverage",
             line=dict(color="#1DB954", width=2)
         ))
         fig2.add_trace(go.Scatter(
-            x=port.index, y=[target_leverage]*len(port),
+            x=port.index, y=[target_leverage] * len(port),
             name="Target Leverage",
             line=dict(color="#FFD700", width=2, dash="dot")
         ))
         fig2.add_trace(go.Scatter(
-            x=port.index, y=[max_allowed]*len(port),
+            x=port.index, y=[max_allowed] * len(port),
             name="Max Allowed",
             line=dict(color="#FF6B6B", width=2, dash="dash")
         ))
-        
+
         fig2.update_layout(
-            **dark_theme,
+            **DARK_THEME,
             height=350,
             xaxis_title="Date",
             yaxis_title="Leverage Ratio",
@@ -494,11 +619,11 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             hovermode="x unified"
         )
         st.plotly_chart(fig2, use_container_width=True)
-    
+
     with col2:
         st.markdown("### Margin Debt Evolution")
         fig3 = go.Figure()
-        
+
         # Add area chart for margin debt
         fig3.add_trace(go.Scatter(
             x=loan.index, y=loan,
@@ -507,7 +632,7 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             line=dict(color="#FF6B6B", width=2),
             fillcolor="rgba(255,107,107,0.3)"
         ))
-        
+
         # Portfolio value line
         fig3.add_trace(go.Scatter(
             x=port.index, y=port,
@@ -515,7 +640,7 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             line=dict(color="#4A90E2", width=2),
             yaxis="y"
         ))
-        
+
         # Net liquidating value
         fig3.add_trace(go.Scatter(
             x=equity.index, y=equity,
@@ -523,56 +648,46 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             line=dict(color="#1DB954", width=2),
             yaxis="y"
         ))
-        
+
         # Monthly interest on secondary axis
-        monthly_interest = loan * (st.session_state.rate_annual / 100 / 12)
+        monthly_interest = loan * (rate_annual / 100 / 12)
         fig3.add_trace(go.Scatter(
             x=loan.index, y=monthly_interest,
             name="Monthly Interest",
             line=dict(color="#FFD700", width=1),
             yaxis="y2"
         ))
-        
+
         fig3.update_layout(
-            template="plotly_dark",
-            paper_bgcolor="rgba(30,35,45,1)",
-            plot_bgcolor="rgba(30,35,45,1)",
-            font={"color": "#E0E0E0"},
+            **DARK_THEME,
             height=350,
-            xaxis=dict(
-                title="Date",
-                gridcolor="rgba(255,255,255,0.1)",
-                zerolinecolor="rgba(255,255,255,0.2)"
-            ),
+            xaxis=dict(title="Date"),
             yaxis=dict(
-                title="Value ($)", 
+                title="Value ($)",
                 side="left",
-                type="log" if log_margin else "linear",
-                gridcolor="rgba(255,255,255,0.1)",
-                zerolinecolor="rgba(255,255,255,0.2)"
+                type="log" if log_margin else "linear"
             ),
             yaxis2=dict(
-                title="Monthly Interest ($)", 
-                overlaying="y", 
+                title="Monthly Interest ($)",
+                overlaying="y",
                 side="right",
-                type="log" if log_margin else "linear",
-                gridcolor="rgba(255,255,255,0.1)",
-                zerolinecolor="rgba(255,255,255,0.2)"
+                type="log" if log_margin else "linear"
             ),
             legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
             hovermode="x unified"
         )
         st.plotly_chart(fig3, use_container_width=True)
-    
-    # Row 3: Final Margin Status - Enhanced display
+
+    # Row 3: Final Margin Status
     st.markdown("### Final Margin Status")
     col1, col2, col3 = st.columns(3)
-    
+
     with col1:
         # Margin Utilization gauge
+        final_usage = usage_pct.iloc[-1] * 100
         fig4 = go.Figure(go.Indicator(
             mode="gauge+number+delta",
-            value=usage_pct.iloc[-1] * 100,
+            value=final_usage,
             title={'text': "Margin Utilization"},
             domain={'x': [0, 1], 'y': [0, 1]},
             gauge={
@@ -593,16 +708,19 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             delta={'reference': 50, 'increasing': {'color': "red"}}
         ))
         fig4.update_layout(
-            **dark_theme,
+            **DARK_THEME,
             height=300,
             margin=dict(l=20, r=20, t=40, b=20)
         )
         st.plotly_chart(fig4, use_container_width=True)
-        st.markdown(f"<p style='text-align: center; color: #888;'>{'Moderate Risk' if usage_pct.iloc[-1] < 0.8 else 'High Risk'}</p>", unsafe_allow_html=True)
-    
+        risk_level = 'Moderate Risk' if final_usage < 80 else 'High Risk'
+        st.markdown(f"<p style='text-align: center; color: #888;'>{risk_level}</p>", unsafe_allow_html=True)
+
     with col2:
         # Leverage gauge
-        final_leverage = (port.iloc[-1] / equity.iloc[-1])
+        final_equity = max(equity.iloc[-1], 0.01)  # Avoid division by zero
+        final_leverage = port.iloc[-1] / final_equity
+
         fig5 = go.Figure(go.Indicator(
             mode="gauge+number",
             value=final_leverage,
@@ -620,13 +738,13 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             number={'suffix': "x", 'font': {'size': 40}}
         ))
         fig5.update_layout(
-            **dark_theme,
+            **DARK_THEME,
             height=300,
             margin=dict(l=20, r=20, t=40, b=20)
         )
         st.plotly_chart(fig5, use_container_width=True)
-        st.markdown(f"<p style='text-align: center; color: #888;'>Peak {max_allowed:.2f}x</p>", unsafe_allow_html=True)
-    
+        st.markdown(f"<p style='text-align: center; color: #888;'>Max {max_allowed:.2f}x</p>", unsafe_allow_html=True)
+
     with col3:
         # Available Margin display
         available_margin = port.iloc[-1] * (1 - maint_pct) - loan.iloc[-1]
@@ -641,15 +759,26 @@ def render_dashboard(port, equity, loan, equity_pct, usage_pct, maint_pct, stats
             unsafe_allow_html=True
         )
 
+
 def show_summary(port, equity, loan, usage_pct, stats):
+    """
+    Display summary statistics.
+
+    Args:
+        port: Portfolio series
+        equity: Equity series
+        loan: Loan series
+        usage_pct: Margin usage percentage series
+        stats: Statistics dictionary
+    """
     st.subheader("Summary statistics")
 
     # Row 1: Final outcomes
     port_metrics = [
         ("Final portfolio", port.iloc[-1], "$"),
-        ("Final equity",   equity.iloc[-1], "$"),
-        ("Final loan",     loan.iloc[-1], "$"),
-        ("Final usage %",  usage_pct.iloc[-1]*100, "%")
+        ("Final equity", equity.iloc[-1], "$"),
+        ("Final loan", loan.iloc[-1], "$"),
+        ("Final usage %", usage_pct.iloc[-1] * 100, "%")
     ]
     cols1 = st.columns(len(port_metrics))
     for col, (label, val, suf) in zip(cols1, port_metrics):
@@ -658,11 +787,11 @@ def show_summary(port, equity, loan, usage_pct, stats):
 
     st.markdown("---")
 
-    # Row 2: Back‐test statistics
+    # Row 2: Backtest statistics
     stat_metrics = [
-        ("CAGR",           stats.get("cagr"),         "%"),
-        ("Sharpe ratio",   stats.get("sharpe_ratio") or stats.get("sharpe"), ""),
-        ("Max drawdown",   stats.get("max_drawdown"), "%")
+        ("CAGR", stats.get("cagr"), "%"),
+        ("Sharpe ratio", stats.get("sharpe_ratio") or stats.get("sharpe"), ""),
+        ("Max drawdown", stats.get("max_drawdown"), "%")
     ]
     cols2 = st.columns(len(stat_metrics))
     for col, (label, val, suf) in zip(cols2, stat_metrics):
@@ -678,45 +807,47 @@ def show_summary(port, equity, loan, usage_pct, stats):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main layout
+# Main Application
 # ─────────────────────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Testfol API  |  Margin Simulator", layout="wide")
-st.title("Testfol API  |  Margin Simulator")
 
+st.set_page_config(page_title="Testfol API | Margin Simulator", layout="wide")
+st.title("Testfol API | Margin Simulator")
+
+# Sidebar Configuration
 with st.sidebar:
     st.header("Global parameters")
     c1, c2 = st.columns(2)
     start_date = c1.date_input(
         "Start date",
-        value=dt.date(2012,1,1),
-        min_value=dt.date(1885,1,1),
+        value=dt.date(2012, 1, 1),
+        min_value=dt.date(1885, 1, 1),
         max_value=dt.date.today()
     )
-    end_date   = c2.date_input(
+    end_date = c2.date_input(
         "End date",
         value=dt.date.today(),
-        min_value=dt.date(1885,1,1),
+        min_value=dt.date(1885, 1, 1),
         max_value=dt.date.today()
     )
-    start_val  = num_input(
+    start_val = num_input(
         "Starting value", "start_val", 10000, 1000,
         on_change=sync_equity
     )
-    rolling    = num_input(
+    rolling = num_input(
         "Rolling window (months)", "rolling", 60, 1
     )
-    cashflow   = num_input("Cash-flow", "cashflow", 0, 100)
-    cashfreq   = st.selectbox(
+    cashflow = num_input("Cash-flow", "cashflow", 0, 100)
+    cashfreq = st.selectbox(
         "Cash-flow frequency",
-        ["Yearly","Quarterly","Monthly"]
+        ["Yearly", "Quarterly", "Monthly"]
     )
     st.divider()
 
     st.header("Rebalance & dividends")
     invest_div = st.checkbox("Re-invest dividends", value=True)
-    rebalance  = st.selectbox(
+    rebalance = st.selectbox(
         "Rebalance frequency",
-        ["Yearly","Quarterly","Monthly"]
+        ["Yearly", "Quarterly", "Monthly"]
     )
     st.divider()
 
@@ -725,8 +856,8 @@ with st.sidebar:
         "Starting loan ($)", "starting_loan", 0.0, 100.0,
         on_change=sync_equity
     )
-    equity_init   = num_input(
-        "Initial equity %  (100=no margin)",
+    equity_init = num_input(
+        "Initial equity % (100=no margin)",
         "equity_init", 100.0, 1.0,
         on_change=sync_loan
     )
@@ -734,7 +865,7 @@ with st.sidebar:
         f"**Loan:** ${st.session_state.starting_loan:,.2f}  —  "
         f"**Equity %:** {st.session_state.equity_init:.2f}%"
     )
-    rate_annual  = num_input(
+    rate_annual = num_input(
         "Interest % per year", "rate_annual", 8.0, 0.5
     )
     draw_monthly = num_input(
@@ -753,8 +884,8 @@ with st.sidebar:
     if view_mode == "Combined Chart":
         series_opts = st.multiselect(
             "Show series",
-            ["Portfolio","Equity","Loan","Margin usage %","Equity %"],
-            default=["Portfolio","Equity","Loan","Margin usage %","Equity %"]
+            ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"],
+            default=["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
         )
         log_scale = st.checkbox("Log scale (left axis)", value=False)
     elif view_mode == "Dashboard View":
@@ -768,19 +899,20 @@ with st.sidebar:
 
     handle_presets()
 
+# Portfolio Allocation Table
 st.subheader("Portfolio allocation + per-ticker maintenance")
 _default = [
-    {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
-    {"Ticker":"GLD","Weight %":20,"Maint %":25},
-    {"Ticker":"VXUS","Weight %":15,"Maint %":25},
-    {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
+    {"Ticker": "AAPL?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "MSFT?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "AVGO?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "AMZN?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "META?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "NVDA?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "GOOGL?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "TSLA?L=2", "Weight %": 7.5, "Maint %": 50},
+    {"Ticker": "GLD", "Weight %": 20, "Maint %": 25},
+    {"Ticker": "VXUS", "Weight %": 15, "Maint %": 25},
+    {"Ticker": "TQQQ", "Weight %": 5, "Maint %": 75},
 ]
 if "alloc_df" not in st.session_state:
     st.session_state.alloc_df = pd.DataFrame(_default)
@@ -789,7 +921,7 @@ if "alloc_df" not in st.session_state:
 edited_df = st.data_editor(
     st.session_state.alloc_df,
     num_rows="dynamic",
-    column_order=["Ticker","Weight %","Maint %"],
+    column_order=["Ticker", "Weight %", "Maint %"],
     column_config={
         "Weight %": st.column_config.NumberColumn(
             min_value=0.0, max_value=100.0, step=0.01, format="%.2f"
@@ -810,118 +942,132 @@ default_maint = num_input(
     "default_maint", 25.0, 1.0
 )
 
-# Use working_df for preview calculations
+# Preview calculations
 alloc_preview, maint_preview = table_to_dicts(working_df)
 if round(sum(alloc_preview.values()), 2) == 100:
     st.metric("Starting loan", f"${st.session_state.starting_loan:,.2f}")
     wmaint = sum(
-        (wt/100) * (maint_preview.get(t.split("?")[0], default_maint)/100)
+        (wt / 100) * (maint_preview.get(t.split("?")[0], default_maint) / 100)
         for t, wt in alloc_preview.items()
     )
-    st.metric("Weighted maint %", f"{wmaint*100:.2f}%")
+    st.metric("Weighted maint %", f"{wmaint * 100:.2f}%")
 else:
     st.info(f"Weights sum to {sum(alloc_preview.values()):.2f}%, must be 100% for preview")
 
+# Run Backtest
 if st.button("Run back-test", type="primary"):
     if round(sum(alloc_preview.values()), 2) != 100:
         st.error("Weights must sum to 100%.")
         st.stop()
 
-    port, stats = fetch_backtest(
-        start_date, end_date,
-        st.session_state.start_val,
-        cashflow, cashfreq,
-        rolling, invest_div,
-        rebalance, alloc_preview
-    )
-    maint_pct = sum(
-        (wt/100) * (maint_preview.get(t.split("?")[0], default_maint)/100)
-        for t, wt in alloc_preview.items()
-    )
-    loan_series, equity, equity_pct, usage_pct = simulate_margin(
-        port, st.session_state.starting_loan,
-        rate_annual, draw_monthly, maint_pct
-    )
-    
-    # Render based on selected view mode
-    if view_mode == "Combined Chart":
-        render_chart(port, equity, loan_series, equity_pct, usage_pct,
-                     series_opts, log_scale)
-        show_summary(port, equity, loan_series, usage_pct, stats)
-    elif view_mode == "Dashboard View":
-        render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats)
-    else:  # Daily Candles
-        port_ohlc, equity_ohlc, loan_ohlc = render_daily_candles(
-            port, equity, loan_series, log_scale=False
+    try:
+        # Fetch backtest data
+        with st.spinner("Fetching backtest data from Testfol API..."):
+            port, stats = fetch_backtest(
+                start_date, end_date,
+                st.session_state.start_val,
+                cashflow, cashfreq,
+                rolling, invest_div,
+                rebalance, alloc_preview
+            )
+
+        # Calculate margin simulation
+        maint_pct = sum(
+            (wt / 100) * (maint_preview.get(t.split("?")[0], default_maint) / 100)
+            for t, wt in alloc_preview.items()
+        )
+        loan_series, equity, equity_pct, usage_pct = simulate_margin(
+            port, st.session_state.starting_loan,
+            rate_annual, draw_monthly, maint_pct
         )
 
-        # TradingView Integrated Charts
+        # Render based on selected view mode
+        if view_mode == "Combined Chart":
+            render_chart(port, equity, loan_series, equity_pct, usage_pct,
+                         series_opts, log_scale)
+            show_summary(port, equity, loan_series, usage_pct, stats)
+        elif view_mode == "Dashboard View":
+            render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats,
+                           rate_annual, st.session_state.equity_init)
+        else:  # Daily Candles
+            port_ohlc, equity_ohlc, loan_ohlc = render_daily_candles(
+                port, equity, loan_series, log_scale=False
+            )
+
+            # TradingView Integrated Charts
+            st.markdown("---")
+            st.subheader("📈 TradingView Charts")
+            st.markdown("Interactive TradingView candlestick charts with full zoom and pan capabilities")
+
+            # Portfolio Chart
+            with st.expander("📊 Portfolio Value", expanded=True):
+                render_tradingview_chart(port_ohlc, title="Portfolio Value", height=450)
+
+            # Equity Chart
+            with st.expander("💰 Equity (Net Liquidating Value)", expanded=False):
+                render_tradingview_chart(equity_ohlc, title="Equity Value", height=450)
+
+            # Loan Chart
+            with st.expander("💳 Loan Balance", expanded=False):
+                render_tradingview_chart(loan_ohlc, title="Loan Balance", height=450)
+
+            # CSV Export Section
+            st.markdown("---")
+            st.subheader("📥 Export CSV Data")
+            st.markdown("Download OHLC data in CSV format for external analysis or import into other tools.")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                port_tv = format_ohlc_for_tradingview(port_ohlc)
+                st.download_button(
+                    label="📥 Portfolio CSV",
+                    data=port_tv.to_csv(index=False),
+                    file_name=f"portfolio_ohlc_{start_date}_{end_date}.csv",
+                    mime="text/csv",
+                    help="Download portfolio OHLC data"
+                )
+
+            with col2:
+                equity_tv = format_ohlc_for_tradingview(equity_ohlc)
+                st.download_button(
+                    label="📥 Equity CSV",
+                    data=equity_tv.to_csv(index=False),
+                    file_name=f"equity_ohlc_{start_date}_{end_date}.csv",
+                    mime="text/csv",
+                    help="Download equity OHLC data"
+                )
+
+            with col3:
+                loan_tv = format_ohlc_for_tradingview(loan_ohlc)
+                st.download_button(
+                    label="📥 Loan CSV",
+                    data=loan_tv.to_csv(index=False),
+                    file_name=f"loan_ohlc_{start_date}_{end_date}.csv",
+                    mime="text/csv",
+                    help="Download loan OHLC data"
+                )
+
+            show_summary(port, equity, loan_series, usage_pct, stats)
+
+        # Margin breaches table (shown in all views)
         st.markdown("---")
-        st.subheader("📈 TradingView Charts")
-        st.markdown("Interactive TradingView candlestick charts with full zoom and pan capabilities")
+        breaches = pd.DataFrame({
+            "Date": usage_pct[usage_pct >= 1].index.date,
+            "Usage %": (usage_pct[usage_pct >= 1] * 100).round(1),
+            "Equity %": (equity_pct[usage_pct >= 1] * 100).round(1)
+        })
+        st.subheader("Maintenance breaches")
+        if breaches.empty:
+            st.success("No margin calls 🎉")
+        else:
+            st.warning(f"⚠️ {len(breaches)} breach day(s)")
+            st.dataframe(breaches, hide_index=True, use_container_width=True)
 
-        # Portfolio Chart
-        with st.expander("📊 Portfolio Value", expanded=True):
-            render_tradingview_chart(port_ohlc, title="Portfolio Value", height=450)
-
-        # Equity Chart
-        with st.expander("💰 Equity (Net Liquidating Value)", expanded=False):
-            render_tradingview_chart(equity_ohlc, title="Equity Value", height=450)
-
-        # Loan Chart (convert to OHLC format for consistency)
-        with st.expander("💳 Loan Balance", expanded=False):
-            render_tradingview_chart(loan_ohlc, title="Loan Balance", height=450)
-
-        # TradingView Export Section
-        st.markdown("---")
-        st.subheader("📥 Export CSV Data")
-        st.markdown("""
-        Download OHLC data in CSV format for external analysis or import into other tools.
-        """)
-
-        col1, col2, col3 = st.columns(3)
-
-        with col1:
-            port_tv = format_ohlc_for_tradingview(port_ohlc, "portfolio")
-            st.download_button(
-                label="📥 Portfolio CSV",
-                data=port_tv.to_csv(index=False),
-                file_name=f"portfolio_ohlc_{start_date}_{end_date}.csv",
-                mime="text/csv",
-                help="Download portfolio OHLC data"
-            )
-
-        with col2:
-            equity_tv = format_ohlc_for_tradingview(equity_ohlc, "equity")
-            st.download_button(
-                label="📥 Equity CSV",
-                data=equity_tv.to_csv(index=False),
-                file_name=f"equity_ohlc_{start_date}_{end_date}.csv",
-                mime="text/csv",
-                help="Download equity OHLC data"
-            )
-
-        with col3:
-            loan_tv = format_ohlc_for_tradingview(loan_ohlc, "loan")
-            st.download_button(
-                label="📥 Loan CSV",
-                data=loan_tv.to_csv(index=False),
-                file_name=f"loan_ohlc_{start_date}_{end_date}.csv",
-                mime="text/csv",
-                help="Download loan OHLC data"
-            )
-
-        show_summary(port, equity, loan_series, usage_pct, stats)
-
-    # Margin breaches table (shown in both views)
-    breaches = pd.DataFrame({
-        "Date":     usage_pct[usage_pct>=1].index.date,
-        "Usage %":  (usage_pct[usage_pct>=1]*100).round(1),
-        "Equity %": (equity_pct[usage_pct>=1]*100).round(1)
-    })
-    st.subheader("Maintenance breaches")
-    if breaches.empty:
-        st.success("No margin calls 🎉")
-    else:
-        st.warning(f"⚠️ {len(breaches)} breach day(s)")
-        st.dataframe(breaches, hide_index=True, use_container_width=True)
+    except requests.HTTPError as e:
+        st.error(f"API Error: {str(e)}")
+    except ValueError as e:
+        st.error(f"Data Error: {str(e)}")
+    except Exception as e:
+        st.error(f"Unexpected Error: {str(e)}")
+        st.exception(e)
