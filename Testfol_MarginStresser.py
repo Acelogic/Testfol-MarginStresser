@@ -213,26 +213,29 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct):
     return loan_series, equity, equity_pct, usage_pct
 
 
-def convert_to_daily_ohlc(series):
+def convert_to_ohlc(series, timeframe='D'):
     """
-    Convert a time series to daily OHLC (Open, High, Low, Close) format.
+    Convert a time series to OHLC (Open, High, Low, Close) format with specified timeframe.
 
     Args:
         series: Pandas Series with datetime index
+        timeframe: Resampling frequency ('D'=Daily, 'W'=Weekly, 'M'=Monthly)
 
     Returns:
         DataFrame: OHLC data with date, open, high, low, close columns
     """
-    df = pd.DataFrame({"value": series})
-    df["date"] = df.index.date
+    # Resample to the specified timeframe
+    ohlc = series.resample(timeframe).agg([
+        ('open', 'first'),
+        ('high', 'max'),
+        ('low', 'min'),
+        ('close', 'last')
+    ]).dropna()
 
-    ohlc = df.groupby("date")["value"].agg([
-        ("open", "first"),
-        ("high", "max"),
-        ("low", "min"),
-        ("close", "last")
-    ]).reset_index()
-    ohlc["date"] = pd.to_datetime(ohlc["date"])
+    # Reset index to get date as column
+    ohlc = ohlc.reset_index()
+    ohlc.columns = ['date', 'open', 'high', 'low', 'close']
+
     return ohlc
 
 
@@ -252,30 +255,35 @@ def format_ohlc_for_tradingview(ohlc_df):
     return tv_df[['time', 'open', 'high', 'low', 'close', 'volume']]
 
 
-def render_tradingview_chart(ohlc_df, title="Chart", height=500):
+def render_tradingview_chart_multi(ohlc_data_dict, title="Chart", height=600):
     """
-    Render TradingView Lightweight Charts with OHLC data.
+    Render TradingView Lightweight Charts with multiple series in dark mode.
 
     Args:
-        ohlc_df: DataFrame with date, open, high, low, close columns
+        ohlc_data_dict: Dictionary with series names as keys and OHLC DataFrames as values
+                       e.g., {'Portfolio': df1, 'Equity': df2, 'Loan': df3}
         title: Chart title
         height: Chart height in pixels
     """
-    # Convert OHLC data to TradingView format using vectorized operations
-    chart_data = ohlc_df.apply(
-        lambda row: {
-            'time': row['date'].strftime('%Y-%m-%d'),
-            'open': float(row['open']),
-            'high': float(row['high']),
-            'low': float(row['low']),
-            'close': float(row['close'])
-        },
-        axis=1
-    ).tolist()
+    # Convert all OHLC data to TradingView format
+    all_series_data = {}
+    for series_name, ohlc_df in ohlc_data_dict.items():
+        chart_data = ohlc_df.apply(
+            lambda row: {
+                'time': row['date'].strftime('%Y-%m-%d'),
+                'open': float(row['open']),
+                'high': float(row['high']),
+                'low': float(row['low']),
+                'close': float(row['close'])
+            },
+            axis=1
+        ).tolist()
+        all_series_data[series_name] = chart_data
 
-    # Debug: Show data sample
-    if len(chart_data) > 0:
-        st.caption(f"Data points: {len(chart_data)} | First: {chart_data[0]['time']} | Last: {chart_data[-1]['time']}")
+    # Show data point info
+    first_series = list(all_series_data.values())[0]
+    if len(first_series) > 0:
+        st.caption(f"Data points: {len(first_series)} | First: {first_series[0]['time']} | Last: {first_series[-1]['time']}")
 
     # Create HTML with TradingView Lightweight Charts
     html_code = f"""
@@ -288,7 +296,7 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500):
                 margin: 0;
                 padding: 0;
                 font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
-                background: transparent;
+                background: #1e1e1e;
             }}
             #container {{
                 width: 100%;
@@ -298,14 +306,40 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500):
                 padding: 10px;
                 font-size: 18px;
                 font-weight: 600;
-                color: #333;
-                background: #f8f9fa;
-                border-bottom: 1px solid #dee2e6;
+                color: #e0e0e0;
+                background: #2d2d2d;
+                border-bottom: 1px solid #404040;
+            }}
+            .series-toggle {{
+                padding: 10px;
+                background: #2d2d2d;
+                border-bottom: 1px solid #404040;
+                display: flex;
+                gap: 10px;
+                flex-wrap: wrap;
+            }}
+            .series-btn {{
+                padding: 6px 12px;
+                background: #404040;
+                color: #e0e0e0;
+                border: 1px solid #505050;
+                border-radius: 4px;
+                cursor: pointer;
+                font-size: 13px;
+                transition: all 0.2s;
+            }}
+            .series-btn:hover {{
+                background: #505050;
+            }}
+            .series-btn.active {{
+                background: #4a90e2;
+                border-color: #4a90e2;
             }}
         </style>
     </head>
     <body>
         <div class="chart-title">{title}</div>
+        <div class="series-toggle" id="seriesToggle"></div>
         <div id="container"></div>
         <script>
             window.addEventListener('load', function() {{
@@ -314,46 +348,76 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500):
                         throw new Error('TradingView Lightweight Charts library not loaded');
                     }}
 
-                    const chartData = {json.dumps(chart_data)};
+                    const allSeriesData = {json.dumps(all_series_data)};
                     const container = document.getElementById('container');
 
                     if (!container) {{
                         throw new Error('Container element not found');
                     }}
 
+                    // Create chart with dark theme
                     const chart = LightweightCharts.createChart(container, {{
                         width: container.clientWidth,
                         height: {height},
                         layout: {{
-                            background: {{ type: 'solid', color: '#ffffff' }},
-                            textColor: '#333',
+                            background: {{ type: 'solid', color: '#1e1e1e' }},
+                            textColor: '#d1d4dc',
                         }},
                         grid: {{
-                            vertLines: {{ color: '#e1e3e6' }},
-                            horzLines: {{ color: '#e1e3e6' }},
+                            vertLines: {{ color: '#2b2b2b' }},
+                            horzLines: {{ color: '#2b2b2b' }},
                         }},
                         crosshair: {{
                             mode: LightweightCharts.CrosshairMode.Normal,
                         }},
                         rightPriceScale: {{
-                            borderColor: '#d1d4dc',
+                            borderColor: '#2b2b2b',
                         }},
                         timeScale: {{
-                            borderColor: '#d1d4dc',
+                            borderColor: '#2b2b2b',
                             timeVisible: true,
                             secondsVisible: false,
                         }},
                     }});
 
-                    const candlestickSeries = chart.addCandlestickSeries({{
-                        upColor: '#26a69a',
-                        downColor: '#ef5350',
-                        borderVisible: false,
-                        wickUpColor: '#26a69a',
-                        wickDownColor: '#ef5350',
+                    // Store series references
+                    const seriesMap = {{}};
+                    const seriesColors = {{
+                        'Portfolio': {{ up: '#26a69a', down: '#ef5350' }},
+                        'Equity': {{ up: '#66bb6a', down: '#ff7043' }},
+                        'Loan': {{ up: '#ffd700', down: '#ffb300' }}
+                    }};
+
+                    // Create series for each data set
+                    Object.keys(allSeriesData).forEach(seriesName => {{
+                        const colors = seriesColors[seriesName] || {{ up: '#26a69a', down: '#ef5350' }};
+                        const series = chart.addCandlestickSeries({{
+                            upColor: colors.up,
+                            downColor: colors.down,
+                            borderVisible: false,
+                            wickUpColor: colors.up,
+                            wickDownColor: colors.down,
+                            visible: seriesName === 'Portfolio'  // Only Portfolio visible by default
+                        }});
+                        series.setData(allSeriesData[seriesName]);
+                        seriesMap[seriesName] = {{ series: series, visible: seriesName === 'Portfolio' }};
                     }});
 
-                    candlestickSeries.setData(chartData);
+                    // Create toggle buttons
+                    const toggleContainer = document.getElementById('seriesToggle');
+                    Object.keys(seriesMap).forEach(seriesName => {{
+                        const btn = document.createElement('button');
+                        btn.className = 'series-btn' + (seriesMap[seriesName].visible ? ' active' : '');
+                        btn.textContent = seriesName;
+                        btn.onclick = function() {{
+                            const isVisible = !seriesMap[seriesName].visible;
+                            seriesMap[seriesName].visible = isVisible;
+                            seriesMap[seriesName].series.applyOptions({{ visible: isVisible }});
+                            btn.classList.toggle('active', isVisible);
+                        }};
+                        toggleContainer.appendChild(btn);
+                    }});
+
                     chart.timeScale().fitContent();
 
                     // Handle window resize
@@ -366,7 +430,7 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500):
                     console.error('Error creating chart:', error);
                     const container = document.getElementById('container');
                     if (container) {{
-                        container.innerHTML = '<div style="padding: 20px; color: red; border: 1px solid red; margin: 10px;"><strong>Error:</strong> ' + error.message + '</div>';
+                        container.innerHTML = '<div style="padding: 20px; color: #ff6b6b; border: 1px solid #ff6b6b; margin: 10px; background: #2d2d2d;"><strong>Error:</strong> ' + error.message + '</div>';
                     }}
                 }}
             }});
@@ -375,26 +439,27 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500):
     </html>
     """
 
-    components.html(html_code, height=height + 50, scrolling=False)
+    components.html(html_code, height=height + 90, scrolling=False)
 
 
-def render_daily_candles(port, equity, loan, log_scale):
+def render_daily_candles(port, equity, loan, log_scale, timeframe='D'):
     """
-    Render daily candlestick charts using Plotly.
+    Render candlestick charts using Plotly.
 
     Args:
         port: Portfolio value series
         equity: Equity value series
         loan: Loan value series
         log_scale: Whether to use logarithmic scale
+        timeframe: Resampling frequency ('D'=Daily, 'W'=Weekly, 'M'=Monthly)
 
     Returns:
         tuple: (portfolio_ohlc, equity_ohlc, loan_ohlc)
     """
-    # Convert to daily OHLC
-    port_ohlc = convert_to_daily_ohlc(port)
-    equity_ohlc = convert_to_daily_ohlc(equity)
-    loan_ohlc = convert_to_daily_ohlc(loan)
+    # Convert to OHLC with specified timeframe
+    port_ohlc = convert_to_ohlc(port, timeframe)
+    equity_ohlc = convert_to_ohlc(equity, timeframe)
+    loan_ohlc = convert_to_ohlc(loan, timeframe)
 
     # Create figure with secondary y-axis
     fig = go.Figure()
@@ -894,7 +959,12 @@ with st.sidebar:
         log_leverage = st.checkbox("Leverage chart", value=False, key="log_leverage")
         log_margin = st.checkbox("Margin debt chart", value=False, key="log_margin")
     else:  # Daily Candles
-        st.info("💡 TradingView charts include interactive zoom, pan, and crosshair tools")
+        timeframe = st.selectbox(
+            "Timeframe",
+            ["Daily", "Weekly", "Monthly"],
+            help="Choose the candlestick timeframe"
+        )
+        st.info("💡 TradingView charts include interactive zoom, pan, crosshair tools, and dark mode")
     st.divider()
 
     handle_presets()
@@ -990,26 +1060,33 @@ if st.button("Run back-test", type="primary"):
             render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats,
                            rate_annual, st.session_state.equity_init)
         else:  # Daily Candles
+            # Map timeframe selection to pandas resample frequency
+            timeframe_map = {
+                "Daily": "D",
+                "Weekly": "W",
+                "Monthly": "M"
+            }
+            tf = timeframe_map.get(timeframe, "D")
+
+            # Render Plotly candlestick chart
             port_ohlc, equity_ohlc, loan_ohlc = render_daily_candles(
-                port, equity, loan_series, log_scale=False
+                port, equity, loan_series, log_scale=False, timeframe=tf
             )
 
-            # TradingView Integrated Charts
+            # TradingView Integrated Chart (Single, Multi-Series, Dark Mode)
             st.markdown("---")
-            st.subheader("📈 TradingView Charts")
-            st.markdown("Interactive TradingView candlestick charts with full zoom and pan capabilities")
+            st.subheader(f"📈 TradingView Chart - {timeframe} Candles")
+            st.markdown("""
+            **Dark mode enabled** • Click buttons to toggle series visibility • Zoom with scroll • Pan by dragging
+            """)
 
-            # Portfolio Chart
-            with st.expander("📊 Portfolio Value", expanded=True):
-                render_tradingview_chart(port_ohlc, title="Portfolio Value", height=450)
-
-            # Equity Chart
-            with st.expander("💰 Equity (Net Liquidating Value)", expanded=False):
-                render_tradingview_chart(equity_ohlc, title="Equity Value", height=450)
-
-            # Loan Chart
-            with st.expander("💳 Loan Balance", expanded=False):
-                render_tradingview_chart(loan_ohlc, title="Loan Balance", height=450)
+            # Create multi-series chart
+            ohlc_data = {
+                'Portfolio': port_ohlc,
+                'Equity': equity_ohlc,
+                'Loan': loan_ohlc
+            }
+            render_tradingview_chart_multi(ohlc_data, title=f"{timeframe} Candlesticks", height=600)
 
             # CSV Export Section
             st.markdown("---")
