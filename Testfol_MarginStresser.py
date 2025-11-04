@@ -159,7 +159,7 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
     <!DOCTYPE html>
     <html>
     <head>
-        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <script src="https://unpkg.com/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
         <style>
             body {{
                 margin: 0;
@@ -185,71 +185,88 @@ def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart
         <div class="chart-title">{title}</div>
         <div id="container"></div>
         <script>
-            try {{
-                const chartData = {json.dumps(chart_data)};
-                console.log('Chart data loaded:', chartData.length, 'points');
-                console.log('First data point:', chartData[0]);
-                console.log('Last data point:', chartData[chartData.length - 1]);
+            window.addEventListener('load', function() {{
+                try {{
+                    // Check if library is loaded
+                    if (typeof LightweightCharts === 'undefined') {{
+                        throw new Error('TradingView Lightweight Charts library not loaded');
+                    }}
 
-                const container = document.getElementById('container');
-                if (!container) {{
-                    console.error('Container not found');
-                    throw new Error('Container element not found');
-                }}
+                    console.log('LightweightCharts loaded:', typeof LightweightCharts);
+                    console.log('Available methods:', Object.keys(LightweightCharts));
 
-                const chart = LightweightCharts.createChart(container, {{
-                    width: container.clientWidth,
-                    height: {height},
-                    layout: {{
-                        background: {{ type: 'solid', color: '#ffffff' }},
-                        textColor: '#333',
-                    }},
-                    grid: {{
-                        vertLines: {{ color: '#e1e3e6' }},
-                        horzLines: {{ color: '#e1e3e6' }},
-                    }},
-                    crosshair: {{
-                        mode: LightweightCharts.CrosshairMode.Normal,
-                    }},
-                    rightPriceScale: {{
-                        borderColor: '#d1d4dc',
-                    }},
-                    timeScale: {{
-                        borderColor: '#d1d4dc',
-                        timeVisible: true,
-                        secondsVisible: false,
-                    }},
-                }});
+                    const chartData = {json.dumps(chart_data)};
+                    console.log('Chart data loaded:', chartData.length, 'points');
 
-                console.log('Chart created successfully');
+                    if (chartData.length > 0) {{
+                        console.log('First data point:', chartData[0]);
+                        console.log('Last data point:', chartData[chartData.length - 1]);
+                    }}
 
-                const candlestickSeries = chart.addCandlestickSeries({{
-                    upColor: '#26a69a',
-                    downColor: '#ef5350',
-                    borderVisible: false,
-                    wickUpColor: '#26a69a',
-                    wickDownColor: '#ef5350',
-                }});
+                    const container = document.getElementById('container');
+                    if (!container) {{
+                        throw new Error('Container element not found');
+                    }}
 
-                console.log('Candlestick series added');
-
-                candlestickSeries.setData(chartData);
-                console.log('Data set on series');
-
-                // Fit content
-                chart.timeScale().fitContent();
-                console.log('Chart ready');
-
-                // Handle window resize
-                window.addEventListener('resize', () => {{
-                    chart.applyOptions({{
+                    const chart = LightweightCharts.createChart(container, {{
                         width: container.clientWidth,
+                        height: {height},
+                        layout: {{
+                            background: {{ type: 'solid', color: '#ffffff' }},
+                            textColor: '#333',
+                        }},
+                        grid: {{
+                            vertLines: {{ color: '#e1e3e6' }},
+                            horzLines: {{ color: '#e1e3e6' }},
+                        }},
+                        crosshair: {{
+                            mode: LightweightCharts.CrosshairMode.Normal,
+                        }},
+                        rightPriceScale: {{
+                            borderColor: '#d1d4dc',
+                        }},
+                        timeScale: {{
+                            borderColor: '#d1d4dc',
+                            timeVisible: true,
+                            secondsVisible: false,
+                        }},
                     }});
-                }});
-            }} catch (error) {{
-                console.error('Error creating chart:', error);
-                document.getElementById('container').innerHTML = '<div style="padding: 20px; color: red;">Error: ' + error.message + '</div>';
-            }}
+
+                    console.log('Chart created successfully');
+                    console.log('Chart methods:', Object.keys(chart));
+
+                    const candlestickSeries = chart.addCandlestickSeries({{
+                        upColor: '#26a69a',
+                        downColor: '#ef5350',
+                        borderVisible: false,
+                        wickUpColor: '#26a69a',
+                        wickDownColor: '#ef5350',
+                    }});
+
+                    console.log('Candlestick series added');
+
+                    candlestickSeries.setData(chartData);
+                    console.log('Data set on series');
+
+                    // Fit content
+                    chart.timeScale().fitContent();
+                    console.log('Chart ready and fitted');
+
+                    // Handle window resize
+                    window.addEventListener('resize', () => {{
+                        chart.applyOptions({{
+                            width: container.clientWidth,
+                        }});
+                    }});
+                }} catch (error) {{
+                    console.error('Error creating chart:', error);
+                    console.error('Error stack:', error.stack);
+                    const container = document.getElementById('container');
+                    if (container) {{
+                        container.innerHTML = '<div style="padding: 20px; color: red; border: 1px solid red; margin: 10px;"><strong>Error:</strong> ' + error.message + '<br><small>' + error.stack + '</small></div>';
+                    }}
+                }}
+            }});
         </script>
     </body>
     </html>
