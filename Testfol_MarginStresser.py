@@ -12,6 +12,7 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 API_URL = "https://testfol.io/api/backtest"
 
@@ -134,6 +135,103 @@ def format_ohlc_for_tradingview(ohlc_df, name="data"):
     # Reorder columns to match TradingView format: time, open, high, low, close, volume
     tv_df = tv_df[['time', 'open', 'high', 'low', 'close', 'volume']]
     return tv_df
+
+def render_tradingview_chart(ohlc_df, title="Chart", height=500, chart_id="chart"):
+    """Render TradingView Lightweight Charts with OHLC data"""
+
+    # Convert OHLC data to TradingView format (Unix timestamp)
+    chart_data = []
+    for _, row in ohlc_df.iterrows():
+        chart_data.append({
+            'time': int(row['date'].timestamp()),
+            'open': float(row['open']),
+            'high': float(row['high']),
+            'low': float(row['low']),
+            'close': float(row['close'])
+        })
+
+    # Create HTML with TradingView Lightweight Charts
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+        <style>
+            body {{
+                margin: 0;
+                padding: 0;
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+                background: transparent;
+            }}
+            #container {{
+                width: 100%;
+                height: {height}px;
+            }}
+            .chart-title {{
+                padding: 10px;
+                font-size: 18px;
+                font-weight: 600;
+                color: #333;
+                background: #f8f9fa;
+                border-bottom: 1px solid #dee2e6;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="chart-title">{title}</div>
+        <div id="container"></div>
+        <script>
+            const chartData = {json.dumps(chart_data)};
+
+            const chart = LightweightCharts.createChart(document.getElementById('container'), {{
+                width: document.getElementById('container').clientWidth,
+                height: {height},
+                layout: {{
+                    background: {{ type: 'solid', color: '#ffffff' }},
+                    textColor: '#333',
+                }},
+                grid: {{
+                    vertLines: {{ color: '#e1e3e6' }},
+                    horzLines: {{ color: '#e1e3e6' }},
+                }},
+                crosshair: {{
+                    mode: LightweightCharts.CrosshairMode.Normal,
+                }},
+                rightPriceScale: {{
+                    borderColor: '#d1d4dc',
+                }},
+                timeScale: {{
+                    borderColor: '#d1d4dc',
+                    timeVisible: true,
+                    secondsVisible: false,
+                }},
+            }});
+
+            const candlestickSeries = chart.addCandlestickSeries({{
+                upColor: '#26a69a',
+                downColor: '#ef5350',
+                borderVisible: false,
+                wickUpColor: '#26a69a',
+                wickDownColor: '#ef5350',
+            }});
+
+            candlestickSeries.setData(chartData);
+
+            // Fit content
+            chart.timeScale().fitContent();
+
+            // Handle window resize
+            window.addEventListener('resize', () => {{
+                chart.applyOptions({{
+                    width: document.getElementById('container').clientWidth,
+                }});
+            }});
+        </script>
+    </body>
+    </html>
+    """
+
+    components.html(html_code, height=height + 50, scrolling=False)
 
 def render_daily_candles(port, equity, loan, log_scale):
     """Render daily candlestick charts for portfolio, equity, and loan"""
@@ -608,7 +706,7 @@ with st.sidebar:
     view_mode = st.radio(
         "View mode",
         ["Combined Chart", "Dashboard View", "Daily Candles"],
-        help="Choose between single chart, dashboard-style separate charts, or daily candlestick view"
+        help="Choose between single chart, dashboard-style separate charts, or TradingView candlestick charts"
     )
 
     if view_mode == "Combined Chart":
@@ -624,7 +722,7 @@ with st.sidebar:
         log_leverage = st.checkbox("Leverage chart", value=False, key="log_leverage")
         log_margin = st.checkbox("Margin debt chart", value=False, key="log_margin")
     else:  # Daily Candles
-        log_scale = st.checkbox("Log scale", value=False, key="log_candles")
+        st.info("💡 TradingView charts include interactive zoom, pan, and crosshair tools")
     st.divider()
 
     handle_presets()
@@ -713,14 +811,31 @@ if st.button("Run back-test", type="primary"):
         render_dashboard(port, equity, loan_series, equity_pct, usage_pct, maint_pct, stats)
     else:  # Daily Candles
         port_ohlc, equity_ohlc, loan_ohlc = render_daily_candles(
-            port, equity, loan_series, st.session_state.get("log_candles", False)
+            port, equity, loan_series, log_scale=False
         )
 
+        # TradingView Integrated Charts
+        st.markdown("---")
+        st.subheader("📈 TradingView Charts")
+        st.markdown("Interactive TradingView candlestick charts with full zoom and pan capabilities")
+
+        # Portfolio Chart
+        with st.expander("📊 Portfolio Value", expanded=True):
+            render_tradingview_chart(port_ohlc, title="Portfolio Value", height=450)
+
+        # Equity Chart
+        with st.expander("💰 Equity (Net Liquidating Value)", expanded=False):
+            render_tradingview_chart(equity_ohlc, title="Equity Value", height=450)
+
+        # Loan Chart (convert to OHLC format for consistency)
+        with st.expander("💳 Loan Balance", expanded=False):
+            render_tradingview_chart(loan_ohlc, title="Loan Balance", height=450)
+
         # TradingView Export Section
-        st.subheader("📊 Export to TradingView")
+        st.markdown("---")
+        st.subheader("📥 Export CSV Data")
         st.markdown("""
-        Download OHLC data in TradingView-compatible CSV format.
-        You can import these files into TradingView by going to **Chart → Import** or using the import functionality.
+        Download OHLC data in CSV format for external analysis or import into other tools.
         """)
 
         col1, col2, col3 = st.columns(3)
@@ -728,34 +843,32 @@ if st.button("Run back-test", type="primary"):
         with col1:
             port_tv = format_ohlc_for_tradingview(port_ohlc, "portfolio")
             st.download_button(
-                label="📥 Download Portfolio OHLC",
+                label="📥 Portfolio CSV",
                 data=port_tv.to_csv(index=False),
                 file_name=f"portfolio_ohlc_{start_date}_{end_date}.csv",
                 mime="text/csv",
-                help="Download portfolio data for TradingView import"
+                help="Download portfolio OHLC data"
             )
 
         with col2:
             equity_tv = format_ohlc_for_tradingview(equity_ohlc, "equity")
             st.download_button(
-                label="📥 Download Equity OHLC",
+                label="📥 Equity CSV",
                 data=equity_tv.to_csv(index=False),
                 file_name=f"equity_ohlc_{start_date}_{end_date}.csv",
                 mime="text/csv",
-                help="Download equity data for TradingView import"
+                help="Download equity OHLC data"
             )
 
         with col3:
             loan_tv = format_ohlc_for_tradingview(loan_ohlc, "loan")
             st.download_button(
-                label="📥 Download Loan OHLC",
+                label="📥 Loan CSV",
                 data=loan_tv.to_csv(index=False),
                 file_name=f"loan_ohlc_{start_date}_{end_date}.csv",
                 mime="text/csv",
-                help="Download loan data for TradingView import"
+                help="Download loan OHLC data"
             )
-
-        st.info("💡 **TradingView Import Steps:** Open TradingView → Select Chart → Click on 'Import' → Choose the downloaded CSV file")
 
         show_summary(port, equity, loan_series, usage_pct, stats)
 
