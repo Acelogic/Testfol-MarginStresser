@@ -1,0 +1,84 @@
+{
+    "Main Split": {
+        "alloc": [
+            {
+                "Ticker": "AAPL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "MSFT?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "AVGO?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "AMZN?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "META?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "NVDA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "GOOGL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "TSLA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "GLD",
+                "Weight %": 20.0,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "VXUS",
+                "Weight %": 15.0,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TQQQ",
+                "Weight %": 5.0,
+                "Maint %": 75
+            }
+        ],
+        "start_val": 10000.0,
+        "cashflow": 0.0,
+        "starting_loan": 0.0,
+        "equity_init": 100.0,
+        "rate_annual": 8.0,
+        "draw_monthly": 0.0,
+        "default_maint": 25.0
+    },
+    "SPY": {
+        "alloc": [
+            {
+                "Ticker": "SPY",
+                "Weight %": 100.0,
+                "Maint %": 25.0
+            }
+        ],
+        "start_val": 10000.0,
+        "cashflow": 0.0,
+        "starting_loan": 0.0,
+        "equity_init": 100.0,
+        "rate_annual": 8.0,
+        "draw_monthly": 0.0,
+        "default_maint": 25.0
+    }
+}
