@@ -56,11 +56,11 @@ def calculate_sharpe_ratio(series, risk_free_rate=0.0):
     sharpe = (excess_returns.mean() / std) * (252 ** 0.5)
     return sharpe
 
-def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_series, loan_series, rate_annual):
+def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=0.0):
     """
-    Simulates the equity curve if taxes were paid from capital (reducing the base).
+    Simulates the equity curve if taxes AND draws were paid from capital (reducing the base).
     Accounts for lost compounding and scales future taxes down proportionally.
-    Correctly models leverage drag: Assets shrink, but Loan (and Interest) remains constant.
+    Correctly models leverage dynamics: Assets shrink, but Loan (and Interest) remains constant (or zero).
     
     Returns:
         (adjusted_equity_series, adjusted_tax_series)
@@ -68,8 +68,6 @@ def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_s
     if base_equity_series.empty: return base_equity_series, pd.Series(dtype=float)
     
     # Calculate daily returns of the underlying ASSETS (Portfolio)
-    # We need the asset return, not the equity return, because we are reconstructing the equity
-    # based on a different leverage ratio (since assets shrink but loan doesn't).
     asset_returns = port_series.pct_change().fillna(0)
     
     # Daily interest rate
@@ -80,12 +78,13 @@ def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_s
     
     adj_tax_payments = {}
     
+    prev_month = base_equity_series.index[0].month
+    
     for i in range(1, len(base_equity_series)):
         date = base_equity_series.index[i]
         r_asset = asset_returns.iloc[i]
         
-        # Current Loan (remains constant regardless of our tax payments, 
-        # because we are paying tax from CASH/ASSETS, not adding to loan)
+        # Current Loan
         current_loan = loan_series.iloc[i]
         
         # Current Assets = Our Adjusted Equity + The Loan
@@ -100,7 +99,21 @@ def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_s
         # Update Equity
         current_equity = current_equity + dollar_gain - dollar_interest
         
-        # 3. Subtract Tax if any
+        # 3. Subtract Monthly Draw (if any)
+        if draw_monthly > 0 and date.month != prev_month:
+            current_equity -= draw_monthly
+            prev_month = date.month
+        elif draw_monthly > 0 and date.month == prev_month:
+             pass # Same month, no draw
+        elif draw_monthly > 0:
+             # Initialize prev_month if needed (handled by logic above)
+             pass
+             
+        # Update prev_month tracker for next iteration
+        if date.month != prev_month:
+            prev_month = date.month
+        
+        # 4. Subtract Tax if any
         tax = tax_payment_series.iloc[i] if i < len(tax_payment_series) else 0
         if tax > 0:
             # Scale tax based on portfolio shrinkage
@@ -1657,35 +1670,57 @@ with tab_port:
     use_std_deduction = st.checkbox("Apply Standard Deduction", value=True, help="Subtracts historical standard deduction from income before calculating tax.")
 
 with tab_margin:
-    c1, c2 = st.columns(2)
-    
-    with c1:
-        st.markdown("##### Loan Configuration")
-        starting_loan = num_input(
-            "Starting Loan ($)", "starting_loan", 0.0, 100.0,
-            on_change=sync_equity
-        )
-        equity_init = num_input(
-            "Initial Equity %", "equity_init", 100.0, 1.0,
-            on_change=sync_loan
-        )
-        st.caption(f"Current Leverage: **{start_val / (start_val - starting_loan) if start_val != starting_loan else 0:.2f}x**")
-        
-    with c2:
-        st.markdown("##### Rates & Maintenance")
-        rate_annual = num_input("Interest % per year", "rate_annual", 8.0, 0.5)
-        draw_monthly = num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
-        default_maint = num_input("Default Maint %", "default_maint", 25.0, 1.0)
-        tax_sim_mode = st.radio(
+    # Move Tax Simulation to top to control state of other inputs
+    tax_sim_mode = st.radio(
         "Tax Payment Simulation",
         ["None (Gross)", "Pay from Cash", "Pay with Margin"],
         index=0,
+        horizontal=True, # Make it horizontal to save space at top
         help="**None (Gross)**: Show raw pre-tax returns.\n**Pay from Cash**: Simulate selling shares to pay taxes (reduces equity).\n**Pay with Margin**: Simulate borrowing to pay taxes (increases loan)."
     )
     
     # Map selection to flags
     pay_tax_margin = (tax_sim_mode == "Pay with Margin")
     pay_tax_cash = (tax_sim_mode == "Pay from Cash")
+    
+    # Disable margin inputs if "Pay from Cash" is selected (per user request)
+    # This implies a "Cash Only" mindset for this mode
+    margin_disabled = pay_tax_cash
+
+    c1, c2 = st.columns(2)
+    
+    with c1:
+        st.markdown("##### Loan Configuration")
+        starting_loan = num_input(
+            "Starting Loan ($)", "starting_loan", 0.0, 100.0,
+            on_change=sync_equity,
+            disabled=margin_disabled
+        )
+        equity_init = num_input(
+            "Initial Equity %", "equity_init", 100.0, 1.0,
+            on_change=sync_loan,
+            disabled=margin_disabled
+        )
+        
+        # Calculate leverage for display (handle zero division)
+        if start_val != starting_loan:
+            current_lev = start_val / (start_val - starting_loan)
+        else:
+            current_lev = 0.0
+            
+        st.caption(f"Current Leverage: **{current_lev:.2f}x**")
+        
+    with c2:
+        st.markdown("##### Rates & Maintenance")
+        rate_annual = num_input("Interest % per year", "rate_annual", 8.0, 0.5, disabled=margin_disabled)
+        draw_monthly = num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0) # Draws allowed in cash mode? Assuming yes.
+        default_maint = num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
+        
+        # Portfolio Margin Toggle
+        pm_enabled = st.checkbox("Enable Portfolio Margin (PM)", value=False, help="Enforces $100k Minimum Equity requirement.", disabled=margin_disabled)
+
+
+
 
 with tab_settings:
     c1, c2 = st.columns(2)
@@ -1815,7 +1850,15 @@ else:
         pl_by_year = results["pl_by_year"]
         composition_df = results.get("composition_df", pd.DataFrame())
         raw_response = results["raw_response"]
-        wmaint = results["wmaint"]
+        
+        # Use dynamic wmaint from main scope to allow interactive updates
+        # But fallback to stored wmaint if current allocation is invalid (e.g. empty)
+        if total_weight > 0:
+             # wmaint is already calculated from current inputs in main scope
+             pass 
+        else:
+             wmaint = results["wmaint"]
+             
         start_val = results["start_val"]
         logs = results.get("logs", [])
         
@@ -1873,9 +1916,16 @@ else:
         # Only pass tax_series if the user opted to pay with margin
         sim_tax_series = tax_payment_series if pay_tax_margin else None
         
+        # If paying from cash (Cash Mode), we want to simulate a "Cash Only" scenario for the base
+        # This means NO loan, NO interest, NO draws added to loan.
+        # We will handle the draws (and taxes) by subtracting from equity in calculate_tax_adjusted_equity.
+        eff_loan = 0.0 if pay_tax_cash else st.session_state.starting_loan
+        eff_rate = 0.0 if pay_tax_cash else rate_annual
+        eff_draw = 0.0 if pay_tax_cash else draw_monthly
+        
         loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
-            port_series, st.session_state.starting_loan,
-            rate_annual, draw_monthly, wmaint,
+            port_series, eff_loan,
+            eff_rate, eff_draw, wmaint,
             tax_series=sim_tax_series
         )
                 
@@ -1892,11 +1942,15 @@ else:
             elif pay_tax_cash:
                 if tax_payment_series is not None and tax_payment_series.sum() > 0:
                     final_adj_series, final_tax_series = calculate_tax_adjusted_equity(
-                        equity_series, tax_payment_series, port_series, loan_series, rate_annual
+                        equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
                     )
                 else:
-                    final_adj_series = equity_series
-                    final_tax_series = pd.Series(0.0, index=equity_series.index)
+                    # Even if no taxes, we still need to apply the monthly draw if it exists
+                    # Re-use the function but with empty tax series
+                    empty_tax = pd.Series(0.0, index=equity_series.index)
+                    final_adj_series, final_tax_series = calculate_tax_adjusted_equity(
+                        equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                    )
             else: # None (Gross)
                 final_adj_series = equity_series
                 final_tax_series = pd.Series(0.0, index=equity_series.index)
@@ -1930,10 +1984,17 @@ else:
         # usage = loan / max_loan
         
         tax_adj_usage_series = pd.Series(0.0, index=tax_adj_port_series.index)
-        if wmaint > 0:
-            max_loan_series = final_adj_series * (1 - wmaint) / wmaint
+        if wmaint < 1.0: # Avoid division by zero if maint is 100%
+            # Match the logic in simulate_margin: Usage = Loan / (Port * (1 - Maint))
+            # This represents usage of the current collateral's loan value (Risk of Call)
+            max_loan_series = tax_adj_port_series * (1 - wmaint)
             valid_loan = max_loan_series > 0
             tax_adj_usage_series[valid_loan] = loan_series[valid_loan] / max_loan_series[valid_loan]
+        else:
+            # If maint is 100%, max loan is 0. Usage is infinite if loan > 0.
+            # We can set it to 0 if loan is 0, or some high number if loan > 0.
+            # For charting, maybe just 0 if loan is 0.
+            pass
         
         
         ohlc_data = resample_data(tax_adj_port_series, timeframe, method="ohlc")
@@ -2059,8 +2120,19 @@ else:
                 
                 # 3. Annual Market Value (Gross Assets)
                 # Market Value = Net Equity + Loan
-                # This works for both Margin (Loan increases) and Cash (Equity decreases) scenarios
-                market_val_series = final_adj_series + loan_series
+                # This works for Margin (Loan increases)
+                # For Cash Mode, we need a "Gross" baseline that includes Draws but NO Taxes
+                if pay_tax_cash:
+                    # Calculate Gross Cash Series (Draws YES, Taxes NO)
+                    empty_tax = pd.Series(0.0, index=equity_series.index)
+                    gross_cash_series, _ = calculate_tax_adjusted_equity(
+                        equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                    )
+                    market_val_series = gross_cash_series
+                else:
+                    # Margin Mode: Market Value = Net Equity + Loan (which includes tax debt)
+                    market_val_series = final_adj_series + loan_series
+                
                 annual_mv = market_val_series.resample("YE").last()
                 annual_mv.index = annual_mv.index.year
                 
@@ -2075,14 +2147,16 @@ else:
                 fig_tax_impact = go.Figure()
                 
                 # Market Value as a Line (to compare against the stack)
-                fig_tax_impact.add_trace(go.Scatter(
-                    x=tax_impact_df.index,
-                    y=tax_impact_df["Market Value"],
-                    name="Market Value (Gross)",
-                    line=dict(color="#636EFA", width=3),
-                    mode='lines+markers',
-                    hovertemplate="%{y:$,.0f}<extra></extra>"
-                ))
+                # User requested NO Gross line in Cash Mode
+                if not pay_tax_cash:
+                    fig_tax_impact.add_trace(go.Scatter(
+                        x=tax_impact_df.index,
+                        y=tax_impact_df["Market Value"],
+                        name="Market Value (Gross)",
+                        line=dict(color="#636EFA", width=3),
+                        mode='lines+markers',
+                        hovertemplate="%{y:$,.0f}<extra></extra>"
+                    ))
                 
                 # Net Balance (Bar)
                 fig_tax_impact.add_trace(go.Bar(
@@ -2164,24 +2238,151 @@ else:
                     timeframe, log_scale, show_range_slider, show_volume
                 )
             
-            with st.expander("Detailed Margin Statistics", expanded=True):
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
-                c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
-                c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
-                
-                breaches = pd.DataFrame({
-                    "Date": usage_series[usage_series >= 1].index.date,
-                    "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
-                    "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2)
-                })
-                
-                st.markdown("##### Margin Breaches")
-                if breaches.empty:
-                    st.success("No margin calls triggered! 🎉")
-                else:
-                    st.error(f"⚠️ {len(breaches)} margin call(s) triggered.")
-                    st.dataframe(breaches, use_container_width=True)
+            if pay_tax_cash:
+                with st.expander("Detailed Cash Statistics", expanded=True):
+                    # Calculate Total Withdrawals
+                    # 1. Taxes
+                    total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
+                    
+                    # 2. Monthly Draws
+                    # We need to calculate total draws made over the period
+                    # Logic: Count months in the range and multiply by draw_monthly
+                    # Or iterate dates like in the sim
+                    total_draws = 0.0
+                    if draw_monthly > 0 and not equity_series.empty:
+                        # Simple approximation: (Months) * Draw
+                        # Better: Iterate dates to match exact logic
+                        prev_m = equity_series.index[0].month
+                        for d in equity_series.index[1:]:
+                            if d.month != prev_m:
+                                total_draws += draw_monthly
+                                prev_m = d.month
+                                
+                    total_withdrawn = total_tax_paid + total_draws
+                    
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Final Balance", f"${final_adj_series.iloc[-1]:,.2f}")
+                    c2.metric("Total Withdrawn", f"${total_withdrawn:,.2f}", help="Includes Taxes + Monthly Draws")
+                    c3.metric("Total Tax Paid", f"${total_tax_paid:,.2f}")
+                    
+                    st.markdown("##### Withdrawal Breakdown")
+                    w_df = pd.DataFrame({
+                        "Category": ["Monthly Draws", "Taxes Paid"],
+                        "Amount": [total_draws, total_tax_paid]
+                    })
+                    st.dataframe(w_df.style.format({"Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+            else:
+                with st.expander("Detailed Margin Statistics", expanded=True):
+                    # --- Calculations ---
+                    # Max Usage & Min Equity
+                    max_usage_idx = usage_series.idxmax()
+                    max_usage_val = usage_series.max()
+                    equity_at_max = equity_series.loc[max_usage_idx]
+                    
+                    min_equity_idx = equity_series.idxmin()
+                    min_equity_val = equity_series.min()
+                    
+                    # Survival Metrics Calculations
+                    total_draws = 0.0
+                    if draw_monthly > 0 and not equity_series.empty:
+                        prev_m = equity_series.index[0].month
+                        for d in equity_series.index[1:]:
+                            if d.month != prev_m:
+                                total_draws += draw_monthly
+                                prev_m = d.month
+                    
+                    total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
+                    start_loan_val = loan_series.iloc[0]
+                    final_loan_val = loan_series.iloc[-1]
+                    total_interest = (final_loan_val - start_loan_val) - total_draws - total_tax_paid
+                    
+                    avg_usage = usage_series.mean()
+                    current_usage = usage_series.iloc[-1]
+                    safety_buffer = 1.0 - current_usage
+                    
+                    current_port_val = tax_adj_port_series.iloc[-1]
+                    max_loan_allowed = current_port_val * (1 - wmaint)
+                    avail_withdraw = max_loan_allowed - final_loan_val
+
+                    # --- Display Layout (Aligned 3-Column Grid) ---
+                    
+                    # Row 1: Current Status
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
+                    c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
+                    c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
+                    
+                    # Row 2: Extremes & Capacity (Aligned with Row 1)
+                    c4, c5, c6 = st.columns(3)
+                    c4.metric(
+                        "Lowest Equity", 
+                        f"${min_equity_val:,.2f}", 
+                        f"{min_equity_idx.date()}",
+                        delta_color="off" 
+                    )
+                    c5.metric(
+                        "Avail. to Withdraw", 
+                        f"${avail_withdraw:,.2f}", 
+                        help="Excess Borrowing Power"
+                    )
+                    c6.metric(
+                        "Max Margin Usage", 
+                        f"{max_usage_val*100:.2f}%", 
+                        f"{max_usage_idx.date()} (Eq: ${equity_at_max:,.0f})",
+                        delta_color="inverse" 
+                    )
+                    
+                    st.markdown("##### Survival Metrics")
+                    # Row 3: Long-term Health
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Total Interest Paid", f"${total_interest:,.2f}", help="Cost of Leverage")
+                    m2.metric("Avg Margin Usage", f"{avg_usage*100:.2f}%", help="Chronic Stress Level")
+                    m3.metric("Safety Buffer", f"{safety_buffer*100:.2f}%", help="% Market Drop allowed before Margin Call")
+                    
+                    # Standard Margin Breaches (Usage >= 100%)
+                    breaches = pd.DataFrame({
+                        "Date": usage_series[usage_series >= 1].index.date,
+                        "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
+                        "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2),
+                        "Type": "Reg T Call"
+                    })
+                    
+                    # Portfolio Margin Breaches (Equity < $100k)
+                    if pm_enabled:
+                        pm_breach_mask = equity_series < 100000
+                        if pm_breach_mask.any():
+                            pm_breaches = pd.DataFrame({
+                                "Date": equity_series[pm_breach_mask].index.date,
+                                "Usage %": (usage_series[pm_breach_mask] * 100).round(2),
+                                "Equity %": (equity_pct_series[pm_breach_mask] * 100).round(2),
+                                "Type": "PM Min Equity < $100k"
+                            })
+                            # Combine and sort
+                            breaches = pd.concat([breaches, pm_breaches]).sort_values("Date")
+                    
+                    st.markdown("##### Margin & PM Breaches")
+                    if breaches.empty:
+                        st.success("No breaches triggered! 🎉")
+                    else:
+                        # Count types
+                        reg_t_count = len(breaches[breaches["Type"] == "Reg T Call"])
+                        pm_count = len(breaches[breaches["Type"] == "PM Min Equity < $100k"])
+                        
+                        msg_parts = []
+                        if reg_t_count > 0:
+                            msg_parts.append(f"{reg_t_count} Margin Call(s)")
+                        if pm_count > 0:
+                            msg_parts.append(f"{pm_count} PM Breach(es)")
+                        
+                        full_msg = f"⚠️ {' + '.join(msg_parts)} triggered."
+                        
+                        if reg_t_count > 0:
+                            st.error(full_msg) # Red for Margin Calls (Critical)
+                        else:
+                            st.warning(full_msg) # Yellow for PM Breaches (Warning)
+                            
+                        st.dataframe(breaches, use_container_width=True)
         
         with res_tab_returns:
             if pay_tax_cash:
