@@ -94,7 +94,289 @@ def resample_data(series: pd.Series, timeframe: str, method="ohlc") -> pd.DataFr
     else:
         return series.resample(rule).last().dropna()
 
-def render_charts(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True):
+def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale):
+    fig = go.Figure()
+    TRACES = {
+        "Portfolio":       (port.index, port, {"width":2}, "$%{y:,.0f}"),
+        "Equity":          (equity.index, equity, {"dash":"dot"}, "$%{y:,.0f}"),
+        "Loan":            (loan.index, loan, {"dash":"dot","width":1,"color":"lime"}, "$%{y:,.0f}"),
+        "Margin usage %":  (usage_pct.index, usage_pct*100, {"width":2,"color":"yellow"}, "%{y:.2f}%"),
+        "Equity %":        (equity_pct.index, equity_pct*100, {"dash":"dash"}, "%{y:.2f}%"),
+    }
+    for key in series_opts:
+        if key in TRACES:
+            x, y, line, fmt = TRACES[key]
+            fig.add_scatter(
+                x=x, y=y, name=key,
+                line=line,
+                hovertemplate=fmt+"<extra></extra>",
+                yaxis="y2" if "%" in key else "y"
+            )
+    fig.add_hline(y=100, yref="y2", line={"dash":"dot"},
+                  annotation_text="Margin call", annotation_position="top right")
+    fig.update_layout(
+        template="plotly_white",
+        hovermode="x unified",
+        xaxis=dict(
+            showgrid=True, gridcolor="rgba(0,0,0,0.05)",
+            showspikes=True, spikemode="across", spikesnap="cursor",
+            spikecolor="rgba(0,0,0,0.3)", spikethickness=1
+        ),
+        yaxis=dict(
+            title="Portfolio value", showgrid=True,
+            gridcolor="rgba(0,0,0,0.05)",
+            type="log" if log_scale else "linear", rangemode="tozero"
+        ),
+        yaxis2=dict(
+            overlaying="y", side="right",
+            title="% of portfolio / allowance", rangemode="tozero"
+        ),
+        legend=dict(orientation="h", yanchor="top", y=-0.25,
+                    xanchor="center", x=0.5),
+        margin=dict(t=48, b=100, l=60, r=60)
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts):
+    """Render dashboard-style separate charts"""
+    
+    # Get log scale settings
+    log_portfolio = log_opts.get("portfolio", False)
+    log_leverage = log_opts.get("leverage", False)
+    log_margin = log_opts.get("margin", False)
+    
+    # Configure dark theme
+    dark_theme = {
+        "template": "plotly_dark",
+        "paper_bgcolor": "rgba(30,35,45,1)",
+        "plot_bgcolor": "rgba(30,35,45,1)",
+        "font": {"color": "#E0E0E0"},
+        "xaxis": {
+            "gridcolor": "rgba(255,255,255,0.1)",
+            "zerolinecolor": "rgba(255,255,255,0.2)"
+        },
+        "yaxis": {
+            "gridcolor": "rgba(255,255,255,0.1)",
+            "zerolinecolor": "rgba(255,255,255,0.2)"
+        }
+    }
+    
+    # Row 1: Portfolio Value Chart
+    st.markdown("### Portfolio Value Over Time")
+    fig1 = go.Figure()
+    
+    # Calculate leveraged portfolio (simulated with margin)
+    leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+    leveraged_port = port * leveraged_mult
+    
+    fig1.add_trace(go.Scatter(
+        x=port.index, y=leveraged_port,
+        name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
+        line=dict(color="#4A90E2", width=2)
+    ))
+    fig1.add_trace(go.Scatter(
+        x=port.index, y=port,
+        name="Margin Portfolio (Unleveraged)",
+        line=dict(color="#1DB954", width=2)
+    ))
+    
+    fig1.update_layout(
+        **dark_theme,
+        height=400,
+        xaxis_title="Month",
+        yaxis_title="Portfolio Value ($)",
+        yaxis_type="log" if log_portfolio else "linear",
+        legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig1, use_container_width=True)
+    
+    # Row 2: Two columns for Leverage and Margin Debt
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Leverage Over Time")
+        fig2 = go.Figure()
+        
+        # Calculate leverage metrics
+        current_leverage = port / equity
+        target_leverage = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+        max_allowed = 1 / (1 - maint_pct)
+        
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=current_leverage,
+            name="Current Leverage",
+            line=dict(color="#1DB954", width=2)
+        ))
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=[target_leverage]*len(port),
+            name="Target Leverage",
+            line=dict(color="#FFD700", width=2, dash="dot")
+        ))
+        fig2.add_trace(go.Scatter(
+            x=port.index, y=[max_allowed]*len(port),
+            name="Max Allowed",
+            line=dict(color="#FF6B6B", width=2, dash="dash")
+        ))
+        
+        fig2.update_layout(
+            **dark_theme,
+            height=350,
+            xaxis_title="Date",
+            yaxis_title="Leverage Ratio",
+            yaxis_type="log" if log_leverage else "linear",
+            legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig2, use_container_width=True)
+    
+    with col2:
+        st.markdown("### Margin Debt Evolution")
+        fig3 = go.Figure()
+        
+        # Add area chart for margin debt
+        fig3.add_trace(go.Scatter(
+            x=loan.index, y=loan,
+            name="Margin Debt",
+            fill='tozeroy',
+            line=dict(color="#FF6B6B", width=2),
+            fillcolor="rgba(255,107,107,0.3)"
+        ))
+        
+        # Portfolio value line
+        fig3.add_trace(go.Scatter(
+            x=port.index, y=port,
+            name="Portfolio Value",
+            line=dict(color="#4A90E2", width=2),
+            yaxis="y"
+        ))
+        
+        # Net liquidating value
+        fig3.add_trace(go.Scatter(
+            x=equity.index, y=equity,
+            name="Net Liquidating Value",
+            line=dict(color="#1DB954", width=2),
+            yaxis="y"
+        ))
+        
+        # Monthly interest on secondary axis
+        monthly_interest = loan * (st.session_state.rate_annual / 100 / 12)
+        fig3.add_trace(go.Scatter(
+            x=loan.index, y=monthly_interest,
+            name="Monthly Interest",
+            line=dict(color="#FFD700", width=1),
+            yaxis="y2"
+        ))
+        
+        fig3.update_layout(
+            template="plotly_dark",
+            paper_bgcolor="rgba(30,35,45,1)",
+            plot_bgcolor="rgba(30,35,45,1)",
+            font={"color": "#E0E0E0"},
+            height=350,
+            xaxis=dict(
+                title="Date",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            yaxis=dict(
+                title="Value ($)", 
+                side="left",
+                type="log" if log_margin else "linear",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            yaxis2=dict(
+                title="Monthly Interest ($)", 
+                overlaying="y", 
+                side="right",
+                type="log" if log_margin else "linear",
+                gridcolor="rgba(255,255,255,0.1)",
+                zerolinecolor="rgba(255,255,255,0.2)"
+            ),
+            legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
+            hovermode="x unified"
+        )
+        st.plotly_chart(fig3, use_container_width=True)
+    
+    # Row 3: Final Margin Status - Enhanced display
+    st.markdown("### Final Margin Status")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        # Margin Utilization gauge
+        fig4 = go.Figure(go.Indicator(
+            mode="gauge+number+delta",
+            value=usage_pct.iloc[-1] * 100,
+            title={'text': "Margin Utilization"},
+            domain={'x': [0, 1], 'y': [0, 1]},
+            gauge={
+                'axis': {'range': [None, 100], 'tickwidth': 1},
+                'bar': {'color': "#FFD700"},
+                'steps': [
+                    {'range': [0, 50], 'color': "rgba(0,255,0,0.3)"},
+                    {'range': [50, 80], 'color': "rgba(255,255,0,0.3)"},
+                    {'range': [80, 100], 'color': "rgba(255,0,0,0.3)"}
+                ],
+                'threshold': {
+                    'line': {'color': "red", 'width': 4},
+                    'thickness': 0.75,
+                    'value': 100
+                }
+            },
+            number={'suffix': "%", 'font': {'size': 40}},
+            delta={'reference': 50, 'increasing': {'color': "red"}}
+        ))
+        fig4.update_layout(
+            **dark_theme,
+            height=300,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig4, use_container_width=True)
+        st.markdown(f"<p style='text-align: center; color: #888;'>{'Moderate Risk' if usage_pct.iloc[-1] < 0.8 else 'High Risk'}</p>", unsafe_allow_html=True)
+    
+    with col2:
+        # Leverage gauge
+        final_leverage = (port.iloc[-1] / equity.iloc[-1])
+        fig5 = go.Figure(go.Indicator(
+            mode="gauge+number",
+            value=final_leverage,
+            title={'text': "Leverage"},
+            domain={'x': [0, 1], 'y': [0, 1]},
+            gauge={
+                'axis': {'range': [1, max_allowed], 'tickwidth': 1},
+                'bar': {'color': "#4A90E2"},
+                'steps': [
+                    {'range': [1, 2], 'color': "rgba(0,255,0,0.3)"},
+                    {'range': [2, 3], 'color': "rgba(255,255,0,0.3)"},
+                    {'range': [3, max_allowed], 'color': "rgba(255,0,0,0.3)"}
+                ],
+            },
+            number={'suffix': "x", 'font': {'size': 40}}
+        ))
+        fig5.update_layout(
+            **dark_theme,
+            height=300,
+            margin=dict(l=20, r=20, t=40, b=20)
+        )
+        st.plotly_chart(fig5, use_container_width=True)
+        st.markdown(f"<p style='text-align: center; color: #888;'>Peak {max_allowed:.2f}x</p>", unsafe_allow_html=True)
+    
+    with col3:
+        # Available Margin display
+        available_margin = port.iloc[-1] * (1 - maint_pct) - loan.iloc[-1]
+        st.markdown(
+            f"""
+            <div style='background-color: rgba(30,35,45,1); padding: 20px; border-radius: 10px; text-align: center;'>
+                <h4 style='color: #888; margin-bottom: 10px;'>Available Margin</h4>
+                <h1 style='color: #1DB954; margin: 10px 0;'>${available_margin:,.2f}</h1>
+                <p style='color: #888; margin-top: 10px;'>Additional Borrowing Power</p>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
+
+def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True):
     title_map = {
         "1D": "Daily",
         "1W": "Weekly",
@@ -671,12 +953,23 @@ with tab_margin:
 with tab_settings:
     c1, c2 = st.columns(2)
     with c1:
+        chart_style = st.selectbox(
+            "Chart Style",
+            ["Classic (Combined)", "Classic (Dashboard)", "Candlestick"],
+            index=0
+        )
         timeframe = st.selectbox(
             "Chart Timeframe",
             ["1D", "1W", "1M", "3M", "1Y"],
             index=2
         )
         log_scale = st.checkbox("Logarithmic Scale", value=True)
+        
+        if chart_style == "Classic (Dashboard)":
+            st.markdown("**Dashboard Log Scales:**")
+            log_portfolio = st.checkbox("Portfolio Chart", value=False, key="log_portfolio")
+            log_leverage = st.checkbox("Leverage Chart", value=False, key="log_leverage")
+            log_margin = st.checkbox("Margin Debt Chart", value=False, key="log_margin")
     with c2:
         show_range_slider = st.checkbox("Show Range Slider", value=True)
         show_volume = st.checkbox("Show Range/Volume Panel", value=True)
@@ -722,10 +1015,19 @@ else:
         st.divider()
         with st.spinner("Crunching numbers..."):
             try:
+                # Fetch backtest data
                 port_series, stats = api.fetch_backtest(
                     start_date, end_date, start_val,
                     cashflow, cashfreq, 60,
                     invest_div, rebalance, alloc_preview
+                )
+                
+                # Also get raw response for debugging
+                raw_response = api.fetch_backtest(
+                    start_date, end_date, start_val,
+                    cashflow, cashfreq, 60,
+                    invest_div, rebalance, alloc_preview,
+                    return_raw=True
                 )
                 
                 loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
@@ -749,14 +1051,34 @@ else:
                 m4.metric("Max Drawdown", f"{calculate_max_drawdown(port_series)*100:.2f}%", delta_color="inverse")
                 m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
 
-                res_tab_chart, res_tab_returns = st.tabs(["📈 Chart", "📊 Returns Analysis"])
+                res_tab_chart, res_tab_returns, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "🔧 Debug"])
                 
                 with res_tab_chart:
-                    render_charts(
-                        ohlc_data, equity_resampled, loan_resampled, 
-                        usage_resampled, equity_pct_resampled, 
-                        timeframe, log_scale, show_range_slider, show_volume
-                    )
+                    if chart_style == "Classic (Combined)":
+                        # Default series options for classic view
+                        series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
+                        render_classic_chart(
+                            port_series, equity_series, loan_series, 
+                            equity_pct_series, usage_series, 
+                            series_opts, log_scale
+                        )
+                    elif chart_style == "Classic (Dashboard)":
+                        log_opts = {
+                            "portfolio": st.session_state.get("log_portfolio", False),
+                            "leverage": st.session_state.get("log_leverage", False),
+                            "margin": st.session_state.get("log_margin", False)
+                        }
+                        render_dashboard_view(
+                            port_series, equity_series, loan_series, 
+                            equity_pct_series, usage_series, 
+                            wmaint, stats, log_opts
+                        )
+                    else:
+                        render_candlestick_chart(
+                            ohlc_data, equity_resampled, loan_resampled, 
+                            usage_resampled, equity_pct_resampled, 
+                            timeframe, log_scale, show_range_slider, show_volume
+                        )
                     
                     with st.expander("Detailed Margin Statistics", expanded=True):
                         c1, c2, c3 = st.columns(3)
@@ -779,6 +1101,23 @@ else:
                 
                 with res_tab_returns:
                     render_returns_analysis(port_series)
+                
+                with res_tab_debug:
+                    st.subheader("Raw API Response")
+                    st.caption("This shows the complete JSON response from the Testfol API backtest endpoint.")
+                    
+                    # Display raw response as JSON
+                    st.json(raw_response)
+                    
+                    # Also provide download button
+                    import json as json_lib
+                    json_str = json_lib.dumps(raw_response, indent=2)
+                    st.download_button(
+                        label="Download Raw Response",
+                        data=json_str,
+                        file_name="testfol_api_response.json",
+                        mime="application/json"
+                    )
                 
             except Exception as e:
                 st.error(f"Error running backtest: {str(e)}")
