@@ -1264,7 +1264,11 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
     if view_freq == "Yearly":
         # Already have pl_by_year, but let's re-aggregate from trades_df to be consistent
         # Group by Year
-        agg_df = df_chart.groupby("Year")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        cols_to_agg = ["Realized P&L", "Realized ST P&L", "Realized LT P&L"]
+        if "Realized LT (Collectible)" in df_chart.columns:
+            cols_to_agg.append("Realized LT (Collectible)")
+            
+        agg_df = df_chart.groupby("Year")[cols_to_agg].sum().sort_index()
         
         # Merge Unrealized P&L if available
         if unrealized_pl_df is not None and not unrealized_pl_df.empty:
@@ -1278,7 +1282,12 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
     elif view_freq == "Quarterly":
         # Group by Year-Quarter
         df_chart["Quarter"] = df_chart["Date"].dt.to_period("Q")
-        agg_df = df_chart.groupby("Quarter")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        
+        cols_to_agg = ["Realized P&L", "Realized ST P&L", "Realized LT P&L"]
+        if "Realized LT (Collectible)" in df_chart.columns:
+            cols_to_agg.append("Realized LT (Collectible)")
+            
+        agg_df = df_chart.groupby("Quarter")[cols_to_agg].sum().sort_index()
         
         # Merge Unrealized P&L
         if unrealized_pl_df is not None and not unrealized_pl_df.empty:
@@ -1292,7 +1301,12 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
     elif view_freq == "Monthly":
         # Group by Year-Month
         df_chart["Month"] = df_chart["Date"].dt.to_period("M")
-        agg_df = df_chart.groupby("Month")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        
+        cols_to_agg = ["Realized P&L", "Realized ST P&L", "Realized LT P&L"]
+        if "Realized LT (Collectible)" in df_chart.columns:
+            cols_to_agg.append("Realized LT (Collectible)")
+            
+        agg_df = df_chart.groupby("Month")[cols_to_agg].sum().sort_index()
         
         # Merge Unrealized P&L
         if unrealized_pl_df is not None and not unrealized_pl_df.empty:
@@ -1334,6 +1348,15 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                 marker_color="#00CC96", # Green/Teal
                 hovertemplate="%{y:$,.0f}"
             ))
+            
+            if "Realized LT (Collectible)" in agg_df.columns and agg_df["Realized LT (Collectible)"].abs().sum() > 0:
+                fig.add_trace(go.Bar(
+                    x=x_axis, 
+                    y=agg_df["Realized LT (Collectible)"], 
+                    name="Realized LT (Collectible)",
+                    marker_color="#FFA15A", # Gold/Orange
+                    hovertemplate="%{y:$,.0f}"
+                ))
             
             # Add Unrealized P&L Trace
             if "Unrealized P&L" in agg_df.columns and agg_df["Unrealized P&L"].abs().sum() > 0:

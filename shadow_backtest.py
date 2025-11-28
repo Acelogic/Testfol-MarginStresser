@@ -86,6 +86,38 @@ def parse_ticker(ticker):
     
     return base, leverage
 
+def get_tax_treatment(ticker):
+    """
+    Determines the tax treatment of an asset based on its ticker.
+    Returns: 'Equity', 'Collectible', or 'Section1256'
+    """
+    base, _ = parse_ticker(ticker)
+    
+    # Collectibles (Physical Metal ETFs)
+    collectibles = {
+        "GLD", "IAU", "SLV", "SGOL", "PPLT", "PALL", "BAR", "AAAU", "PHYS", "PSLV",
+        "OUNZ"
+    }
+    
+    # Section 1256 (Futures-based ETFs, Currency ETFs, VIX)
+    # Note: DBMF is a managed futures ETF, treated as 1256? 
+    # DBMF issues a 1099, but gains are often from Cayman sub (ordinary) or 1256.
+    # For simplicity/conservatism in this "Stresser", let's treat known 1256 names.
+    # GSG (GSCI) is a partnership (K-1), usually 60/40.
+    # PDBC is 1099 but uses Cayman sub (Ordinary/Capital mix).
+    # Let's stick to the clear 1256 ones or K-1 commodities.
+    section1256 = {
+        "GSG", "DBC", "UUP", "CYA", "DBMF", "KMLM", "CTA", # Managed Futures often 60/40
+        "VIX", "VXX", "UVXY", "SVXY" # VIX Futures
+    }
+    
+    if base in collectibles:
+        return "Collectible"
+    elif base in section1256:
+        return "Section1256"
+    else:
+        return "Equity"
+
 def fetch_prices(tickers, start_date, end_date):
     """Fetches adjusted close prices for unique base tickers."""
     unique_bases = set()
@@ -346,9 +378,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 
                 st_gain = 0.0
                 lt_gain = 0.0
+                lt_gain_collectible = 0.0
                 
                 if abs(trade_amt) < 0.01:
                     continue
+                
+                # Determine Tax Treatment
+                tax_treatment = get_tax_treatment(ticker)
                 
                 if trade_amt > 0: # BUY
                     # Add new tax lot
@@ -383,6 +419,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         "Trade Amount": trade_amt,
                         "Realized ST P&L": 0,
                         "Realized LT P&L": 0,
+                        "Realized LT (Collectible)": 0,
                         "Realized P&L": 0,
                         "Price (Est)": current_pos
                     })
@@ -415,11 +452,24 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         holding_period = date - current_lot.date_acquired
                         is_long_term = holding_period.days > 365
                         
-                        if is_long_term:
-                            lt_gain += gain_loss
-                        else:
-                            st_gain += gain_loss
+                        # Apply Tax Treatment Rules
+                        if tax_treatment == "Section1256":
+                            # 60/40 Rule regardless of holding period
+                            lt_gain += gain_loss * 0.60
+                            st_gain += gain_loss * 0.40
                             
+                        elif tax_treatment == "Collectible":
+                            if is_long_term:
+                                lt_gain_collectible += gain_loss
+                            else:
+                                st_gain += gain_loss
+                                
+                        else: # Equity (Standard)
+                            if is_long_term:
+                                lt_gain += gain_loss
+                            else:
+                                st_gain += gain_loss
+                        
                         # Update Lots
                         if remaining_lot:
                             tax_lots[ticker][0] = remaining_lot
@@ -430,7 +480,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                             
                     positions[ticker] += trade_amt # trade_amt is negative
                     
-                    logs.append(f"{ticker:<10} {'SELL':<6} ${abs(trade_amt):,.2f}      ${st_gain:,.2f}      ${lt_gain:,.2f}")
+                    logs.append(f"{ticker:<10} {'SELL':<6} ${sell_val:,.2f}      ${st_gain:,.2f}      ${lt_gain:,.2f}")
                     
                     trades.append({
                         "Date": date,
@@ -438,8 +488,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         "Trade Amount": trade_amt,
                         "Realized ST P&L": st_gain,
                         "Realized LT P&L": lt_gain,
-                        "Realized P&L": st_gain + lt_gain,
-                        "Price (Est)": current_pos
+                        "Realized LT (Collectible)": lt_gain_collectible,
+                        "Realized P&L": st_gain + lt_gain + lt_gain_collectible,
+                        "Price (Est)": current_price
                     })
 
             logs.append("-" * 75)
