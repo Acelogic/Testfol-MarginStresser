@@ -57,18 +57,31 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     
     return pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data
 
-def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct):
+def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, tax_series=None):
     """
     Simulates margin loan and calculates equity/usage metrics.
     """
     rate_daily = (rate_annual / 100) / 252
     loan_vals, loan = [], starting_loan
     prev_m = port.index[0].month
+    
+    # Ensure tax_series is aligned or reindexed if provided
+    # We assume tax_series is indexed by Date and contains 0.0 for non-payment days
+    
     for d in port.index:
         loan *= 1 + rate_daily
         if draw_monthly and d.month != prev_m:
             loan += draw_monthly
             prev_m = d.month
+            
+        # Add tax payment if applicable
+        if tax_series is not None:
+            # Check if there's a tax payment for this day
+            # We use .get() which is safe if d is not in index
+            payment = tax_series.get(d, 0.0)
+            if payment > 0:
+                loan += payment
+                
         loan_vals.append(loan)
     loan_series = pd.Series(loan_vals, index=port.index, name="Loan")
     equity = port - loan_series
