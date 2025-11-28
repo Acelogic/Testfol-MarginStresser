@@ -140,6 +140,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     cost_basis = {}
     trades = []
     composition = []
+    unrealized_pl_by_year = []
     
     # Check if we are starting late (Hybrid Mode)
     if sim_start_date > pd.to_datetime(start_date) and api_port_series is not None:
@@ -251,10 +252,26 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     "Price (Est)": current_pos
                 })
             logs.append("-" * 75)
+            
+        # 4. Record Year-End Unrealized P&L
+        # We capture this at the end of the year (after any rebalancing)
+        is_year_end = False
+        if i < len(dates) - 1:
+            if dates[i+1].year != date.year:
+                is_year_end = True
+        elif i == len(dates) - 1:
+            is_year_end = True
+            
+        if is_year_end:
+            total_unrealized = sum(positions[t] - cost_basis[t] for t in tickers)
+            unrealized_pl_by_year.append({
+                "Year": date.year,
+                "Unrealized P&L": total_unrealized
+            })
                 
     # Record final composition snapshot
     if dates.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs
         
     last_date = dates[-1]
     
@@ -286,6 +303,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     if not composition_df.empty:
         composition_df["Year"] = composition_df["Date"].dt.year
         
+    # Calculate Unrealized P&L by Year
+    unrealized_pl_df = pd.DataFrame(unrealized_pl_by_year)
+    if not unrealized_pl_df.empty:
+        unrealized_pl_df = unrealized_pl_df.set_index("Year").sort_index()
+    else:
+        unrealized_pl_df = pd.DataFrame()
+
     logs.append("Shadow Backtest Completed Successfully.")
     
     # Write logs to file
@@ -298,4 +322,4 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     except Exception as e:
         logs.append(f"Failed to write log file: {e}")
         
-    return trades_df, pl_by_year, composition_df, logs
+    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs

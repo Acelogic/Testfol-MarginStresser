@@ -1066,6 +1066,27 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df):
         )
         st.plotly_chart(fig, use_container_width=True)
         
+        # Unrealized P&L Chart
+        unrealized_pl_df = results.get("unrealized_pl_df", pd.DataFrame())
+        if not unrealized_pl_df.empty:
+            st.subheader("Unrealized P&L by Year (Year End)")
+            colors_unrealized = ["#00CC96" if x >= 0 else "#EF553B" for x in unrealized_pl_df["Unrealized P&L"]]
+            fig_unrealized = go.Figure(go.Bar(
+                x=unrealized_pl_df.index,
+                y=unrealized_pl_df["Unrealized P&L"],
+                marker_color=colors_unrealized,
+                text=unrealized_pl_df["Unrealized P&L"].apply(lambda x: f"${x:,.0f}"),
+                textposition="auto"
+            ))
+            fig_unrealized.update_layout(
+                yaxis_title="Unrealized P&L ($)",
+                xaxis_title="Year",
+                template="plotly_dark",
+                showlegend=False,
+                height=400
+            )
+            st.plotly_chart(fig_unrealized, use_container_width=True)
+        
     with c2:
         st.subheader("Total Turnover")
         
@@ -1372,12 +1393,12 @@ else:
                         start_date = port_series.index[0]
                         end_date = port_series.index[-1]
                         
-                        trades_df, pl_by_year, composition_df, logs = shadow_backtest.run_shadow_backtest(
-                            alloc_preview, # Use alloc_preview which matches the keys
+                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs = shadow_backtest.run_shadow_backtest(
+                            alloc_preview, 
                             start_val, 
                             start_date, 
                             end_date, 
-                            api_port_series=port_series, # Pass API series for hybrid mode
+                            api_port_series=port_series, 
                             rebalance_freq=rebalance
                         )
                         
@@ -1385,6 +1406,7 @@ else:
                         st.session_state.bt_results["trades_df"] = trades_df
                         st.session_state.bt_results["pl_by_year"] = pl_by_year
                         st.session_state.bt_results["composition_df"] = composition_df
+                        st.session_state.bt_results["unrealized_pl_df"] = unrealized_pl_df
                         st.session_state.bt_results["logs"] = logs
                         
                     except Exception as e:
