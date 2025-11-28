@@ -1044,10 +1044,12 @@ def render_portfolio_composition(composition_df):
         x="Value", 
         color="Ticker", 
         title="Portfolio Value by Asset (Pre-Rebalance)",
-        text_auto=".2s",
+        text_auto="$.2s",
         orientation='h',
         template="plotly_dark"
     )
+    
+    fig.update_traces(hovertemplate="%{x:$,.0f}<extra></extra>")
     
     fig.update_layout(
         xaxis_title="Value ($)",
@@ -1277,8 +1279,9 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                     x=x_axis_tax,
                     y=tax_to_plot,
                     marker_color="#EF553B", # Red for taxes
-                    text=tax_to_plot.apply(lambda x: f"${x:,.0f}"),
+                    texttemplate="%{y:$.2s}",
                     textposition="auto",
+                    hovertemplate="%{y:$,.0f}<extra></extra>",
                     name="Estimated Tax"
                 ))
                 fig_tax.update_layout(
