@@ -28,13 +28,15 @@ def calculate_cagr(series):
     end_val = series.iloc[-1]
     years = (series.index[-1] - series.index[0]).days / 365.25
     if years <= 0: return 0.0
-    return ((end_val / start_val) ** (1 / years) - 1) * 100
+    cagr = ((end_val / start_val) ** (1 / years) - 1) * 100
+    return cagr
 
 def calculate_max_drawdown(series):
     if series.empty: return 0.0
     roll_max = series.cummax()
     drawdown = (series - roll_max) / roll_max
-    return drawdown.min() * 100
+    max_dd = drawdown.min() * 100
+    return max_dd
 
 def calculate_sharpe_ratio(series, risk_free_rate=0.0):
     if series.empty: return 0.0
@@ -54,46 +56,59 @@ def calculate_sharpe_ratio(series, risk_free_rate=0.0):
     sharpe = (excess_returns.mean() / std) * (252 ** 0.5)
     return sharpe
 
-def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_series=None):
+def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_series, loan_series, rate_annual):
     """
     Simulates the equity curve if taxes were paid from capital (reducing the base).
     Accounts for lost compounding and scales future taxes down proportionally.
+    Correctly models leverage drag: Assets shrink, but Loan (and Interest) remains constant.
     
     Returns:
         (adjusted_equity_series, adjusted_tax_series)
     """
     if base_equity_series.empty: return base_equity_series, pd.Series(dtype=float)
     
-    # Calculate daily returns of the underlying strategy
-    returns = base_equity_series.pct_change().fillna(0)
+    # Calculate daily returns of the underlying ASSETS (Portfolio)
+    # We need the asset return, not the equity return, because we are reconstructing the equity
+    # based on a different leverage ratio (since assets shrink but loan doesn't).
+    asset_returns = port_series.pct_change().fillna(0)
+    
+    # Daily interest rate
+    daily_rate = (1 + rate_annual/100)**(1/365.25) - 1
     
     adj_equity = [base_equity_series.iloc[0]]
     current_equity = base_equity_series.iloc[0]
     
     adj_tax_payments = {}
     
-    # Align tax series
-    # We assume tax_payment_series is aligned with base_equity_series index
-    
     for i in range(1, len(base_equity_series)):
         date = base_equity_series.index[i]
-        r = returns.iloc[i]
+        r_asset = asset_returns.iloc[i]
         
-        # Apply return
-        current_equity *= (1 + r)
+        # Current Loan (remains constant regardless of our tax payments, 
+        # because we are paying tax from CASH/ASSETS, not adding to loan)
+        current_loan = loan_series.iloc[i]
         
-        # Subtract tax if any
+        # Current Assets = Our Adjusted Equity + The Loan
+        current_assets = current_equity + current_loan
+        
+        # 1. Apply Asset Return (Gain/Loss on Assets)
+        dollar_gain = current_assets * r_asset
+        
+        # 2. Subtract Interest Cost (on the full loan)
+        dollar_interest = current_loan * daily_rate
+        
+        # Update Equity
+        current_equity = current_equity + dollar_gain - dollar_interest
+        
+        # 3. Subtract Tax if any
         tax = tax_payment_series.iloc[i] if i < len(tax_payment_series) else 0
         if tax > 0:
-            # Scale tax based on portfolio shrinkage if port_series is provided
-            if port_series is not None:
-                # Theoretical full value at this date
-                full_val = port_series.at[date]
-                if full_val > 0:
-                    scaling_factor = current_equity / full_val
-                    # Clamp scaling factor to max 1.0 (can't pay MORE tax)
-                    scaling_factor = min(1.0, max(0.0, scaling_factor))
-                    tax *= scaling_factor
+            # Scale tax based on portfolio shrinkage
+            full_val = port_series.at[date]
+            if full_val > 0:
+                scaling_factor = current_assets / full_val
+                scaling_factor = min(1.0, max(0.0, scaling_factor))
+                tax *= scaling_factor
             
             current_equity -= tax
             adj_tax_payments[date] = tax
@@ -102,7 +117,6 @@ def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_s
         
     adj_equity_series = pd.Series(adj_equity, index=base_equity_series.index)
     adj_tax_series = pd.Series(adj_tax_payments)
-    # Reindex tax series to match full index (filling with 0)
     adj_tax_series = adj_tax_series.reindex(base_equity_series.index, fill_value=0.0)
     
     return adj_equity_series, adj_tax_series
@@ -735,20 +749,6 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-
-def calculate_cagr(series):
-    if series.empty: return 0.0
-    start_val = series.iloc[0]
-    end_val = series.iloc[-1]
-    years = (series.index[-1] - series.index[0]).days / 365.25
-    if years <= 0: return 0.0
-    return (end_val / start_val) ** (1 / years) - 1
-
-def calculate_max_drawdown(series):
-    if series.empty: return 0.0
-    rolling_max = series.cummax()
-    drawdown = (series - rolling_max) / rolling_max
-    return drawdown.min()
 
 def color_return(val):
     color = '#00CC96' if val >= 0 else '#EF553B'
@@ -1676,7 +1676,16 @@ with tab_margin:
         rate_annual = num_input("Interest % per year", "rate_annual", 8.0, 0.5)
         draw_monthly = num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
         default_maint = num_input("Default Maint %", "default_maint", 25.0, 1.0)
-        pay_tax_margin = st.checkbox("Pay Taxes with Margin", value=False, help="If checked, estimated annual taxes will be paid using the margin loan on April 15th of the following year.")
+        tax_sim_mode = st.radio(
+        "Tax Payment Simulation",
+        ["None (Gross)", "Pay from Cash", "Pay with Margin"],
+        index=0,
+        help="**None (Gross)**: Show raw pre-tax returns.\n**Pay from Cash**: Simulate selling shares to pay taxes (reduces equity).\n**Pay with Margin**: Simulate borrowing to pay taxes (increases loan)."
+    )
+    
+    # Map selection to flags
+    pay_tax_margin = (tax_sim_mode == "Pay with Margin")
+    pay_tax_cash = (tax_sim_mode == "Pay from Cash")
 
 with tab_settings:
     c1, c2 = st.columns(2)
@@ -1871,38 +1880,6 @@ else:
         )
                 
         
-        ohlc_data = resample_data(port_series, timeframe, method="ohlc")
-        equity_resampled = resample_data(equity_series, timeframe, method="last")
-        loan_resampled = resample_data(loan_series, timeframe, method="last")
-        usage_resampled = resample_data(usage_series, timeframe, method="max")
-        equity_pct_resampled = resample_data(equity_pct_series, timeframe, method="last")
-
-        m1, m2, m3, m4, m5 = st.columns(5)
-
-        total_return = (port_series.iloc[-1] / start_val - 1) * 100
-        
-        cagr = stats.get("cagr")
-        if cagr is None:
-            cagr = calculate_cagr(port_series)
-            
-        max_dd = stats.get("max_drawdown")
-        if max_dd is None:
-            max_dd = calculate_max_drawdown(port_series)
-            
-        sharpe = stats.get("sharpe_ratio")
-        if sharpe is None or sharpe == 0:
-            sharpe = calculate_sharpe_ratio(port_series)
-            
-        m1.metric("Final Balance", f"${port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{cagr:.2f}%")
-        m3.metric("Sharpe", f"{sharpe:.2f}")
-        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
-        m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
-        
-        # --- New Metrics Row: Tax & Date Range ---
-        st.markdown("---")
-        tm1, tm2, tm3, tm4, tm5 = st.columns(5)
-        
         # Calculate Tax-Adjusted Equity Curve (Global for Tabs)
         final_adj_series = pd.Series(dtype=float)
         final_tax_series = pd.Series(dtype=float) # Series of ACTUAL taxes paid (scaled if needed)
@@ -1912,14 +1889,77 @@ else:
                 final_adj_series = equity_series
                 # If paying with margin, we pay the FULL tax amount (no scaling down)
                 final_tax_series = tax_payment_series if tax_payment_series is not None else pd.Series(0.0, index=equity_series.index)
-            else:
+            elif pay_tax_cash:
                 if tax_payment_series is not None and tax_payment_series.sum() > 0:
-                    final_adj_series, final_tax_series = calculate_tax_adjusted_equity(equity_series, tax_payment_series, port_series)
+                    final_adj_series, final_tax_series = calculate_tax_adjusted_equity(
+                        equity_series, tax_payment_series, port_series, loan_series, rate_annual
+                    )
                 else:
                     final_adj_series = equity_series
                     final_tax_series = pd.Series(0.0, index=equity_series.index)
-        
+            else: # None (Gross)
+                final_adj_series = equity_series
+                final_tax_series = pd.Series(0.0, index=equity_series.index)
 
+        # --- Prepare Tax-Adjusted Data for Charts ---
+        # We want the charts to reflect the "Net" reality.
+        # Portfolio Value = Net Equity + Loan
+        tax_adj_port_series = final_adj_series + loan_series
+        
+        # Recalculate Leverage Metrics based on Tax-Adjusted Equity
+        # Equity % = Net Equity / Portfolio Value
+        tax_adj_equity_pct_series = pd.Series(0.0, index=tax_adj_port_series.index)
+        valid_idx = tax_adj_port_series > 0
+        tax_adj_equity_pct_series[valid_idx] = final_adj_series[valid_idx] / tax_adj_port_series[valid_idx]
+        
+        # Margin Usage % = Loan / (Net Equity * Max_Leverage) ?? 
+        # Or just Loan / (Net Equity + Loan)? 
+        # The API returns 'usage_series' which is Loan / (Equity * Max_Loan_to_Equity_Ratio).
+        # Let's approximate it or recalculate if we know the formula.
+        # Usage = Loan / (Equity * (1/maint_pct - 1))  <-- Standard Reg T formula approximation
+        # Let's just use the ratio of Loan / Net Equity for now, or stick to the original usage if it's too complex to replicate perfectly.
+        # Actually, let's recalculate usage properly if possible.
+        # usage = loan / (equity * (1/maint - 1))
+        # if maint is 0.25, max leverage is 4x. max loan is 3x equity.
+        # usage = loan / (equity * 3)
+        
+        # Let's just use a simple leverage ratio for the chart if usage is hard: Leverage = Debt / Equity
+        # But the chart expects "Margin usage %".
+        # Let's try to replicate the API's usage calc:
+        # max_loan = equity * (1 - wmaint) / wmaint  <-- This is max loan value
+        # usage = loan / max_loan
+        
+        tax_adj_usage_series = pd.Series(0.0, index=tax_adj_port_series.index)
+        if wmaint > 0:
+            max_loan_series = final_adj_series * (1 - wmaint) / wmaint
+            valid_loan = max_loan_series > 0
+            tax_adj_usage_series[valid_loan] = loan_series[valid_loan] / max_loan_series[valid_loan]
+        
+        
+        ohlc_data = resample_data(tax_adj_port_series, timeframe, method="ohlc")
+        equity_resampled = resample_data(final_adj_series, timeframe, method="last")
+        loan_resampled = resample_data(loan_series, timeframe, method="last")
+        usage_resampled = resample_data(tax_adj_usage_series, timeframe, method="max")
+        equity_pct_resampled = resample_data(tax_adj_equity_pct_series, timeframe, method="last")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+
+        total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
+        
+        # Recalculate stats for the tax-adjusted series
+        cagr = calculate_cagr(tax_adj_port_series)
+        max_dd = calculate_max_drawdown(tax_adj_port_series)
+        sharpe = calculate_sharpe_ratio(tax_adj_port_series)
+            
+        m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("CAGR", f"{cagr:.2f}%")
+        m3.metric("Sharpe", f"{sharpe:.2f}")
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+        m5.metric("Final Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+        
+        # --- New Metrics Row: Tax & Date Range ---
+        st.markdown("---")
+        tm1, tm2, tm3, tm4, tm5 = st.columns(5)
         
         # Calculate Total Tax (Already calculated above)
         tax_label = "Total Tax Paid" if pay_tax_margin else "Total Estimated Tax Owed"
@@ -1935,30 +1975,35 @@ else:
             tm1.metric(tax_label, "$0.00")
             
         # Post-Tax Balance & CAGR & Sharpe
+        # Since we updated the main metrics to be tax-adjusted, these are somewhat redundant, 
+        # BUT "Post-Tax Final Balance" usually refers to NET EQUITY, whereas "Final Balance" is PORTFOLIO VALUE (Gross Assets).
+        # In Margin case: Final Balance = High, Post-Tax Balance (Equity) = Low.
+        # In Cash case: Final Balance = Low (same as Equity), Post-Tax Balance (Equity) = Low.
+        
         if start_val > 0 and not port_series.empty:
             
             # Use global final_adj_series calculated above
             final_adj_val = final_adj_series.iloc[-1]
             
-            tm2.metric("Post-Tax Final Balance", f"${final_adj_val:,.0f}")
+            tm2.metric("Post-Tax Net Equity", f"${final_adj_val:,.0f}")
             
             days = (final_adj_series.index[-1] - final_adj_series.index[0]).days
             if days > 0:
                 years = days / 365.25
                 # CAGR based on the adjusted final value
                 tax_adj_cagr = (final_adj_val / start_val) ** (1 / years) - 1
-                tm3.metric("Tax Adjusted CAGR", f"{tax_adj_cagr * 100:.2f}%")
+                tm3.metric("Net Equity CAGR", f"{tax_adj_cagr * 100:.2f}%")
             else:
-                tm3.metric("Tax Adjusted CAGR", "N/A")
+                tm3.metric("Net Equity CAGR", "N/A")
                 
             # Tax Adjusted Sharpe
             tax_adj_sharpe = calculate_sharpe_ratio(final_adj_series)
-            tm4.metric("Tax Adjusted Sharpe", f"{tax_adj_sharpe:.2f}")
+            tm4.metric("Net Equity Sharpe", f"{tax_adj_sharpe:.2f}")
 
         else:
-             tm2.metric("Post-Tax Final Balance", "$0")
-             tm3.metric("Tax Adjusted CAGR", "N/A")
-             tm4.metric("Tax Adjusted Sharpe", "N/A")
+             tm2.metric("Post-Tax Net Equity", "$0")
+             tm3.metric("Net Equity CAGR", "N/A")
+             tm4.metric("Net Equity Sharpe", "N/A")
 
         # Date Range
         if not trades_df.empty:
@@ -1986,9 +2031,6 @@ else:
              
         st.markdown("---")
 
-        # Calculate Tax-Adjusted Equity Curve (Global for Tabs)
-
-
         res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔧 Debug"])
         
         with res_tab_tax:
@@ -1997,11 +2039,12 @@ else:
             st.info("""
             **Methodology: Tax-Adjusted Returns**
             
-            *   **Pay with Margin (Checked):** Taxes are paid by increasing your margin loan. Your portfolio assets remain fully invested and continue to compound. The "cost" of taxes is the interest paid on the additional loan balance.
-            *   **Pay from Cash (Unchecked):** Taxes are simulated as withdrawals from your portfolio. This permanently reduces your capital base, resulting in "lost compounding" (opportunity cost). Future taxes are also proportionally reduced to reflect the smaller portfolio size.
+            *   **None (Gross):** No tax simulation. Showing raw pre-tax returns.
+            *   **Pay with Margin:** Taxes paid via loan. Assets preserved. Cost = Interest.
+            *   **Pay from Cash:** Taxes paid via asset sales. Assets reduced. Cost = Lost Compounding.
             """)
             
-            if not final_adj_series.empty and not pl_by_year.empty:
+            if (pay_tax_margin or pay_tax_cash) and not final_adj_series.empty and not pl_by_year.empty:
                 # Prepare Data
                 # 1. Annual Ending Balance (Tax Adjusted)
                 annual_bal = final_adj_series.resample("YE").last()
@@ -2078,6 +2121,8 @@ else:
                 
                 st.markdown("### Detailed Data")
                 st.dataframe(tax_impact_df.style.format("${:,.2f}"), use_container_width=True)
+            elif not (pay_tax_margin or pay_tax_cash):
+                st.warning("Tax Simulation is set to **None (Gross)**. Enable 'Pay from Cash' or 'Pay with Margin' to see tax impact analysis.")
             else:
                 st.info("No data available for tax analysis.")
 
@@ -2096,8 +2141,8 @@ else:
                 # Default series options for classic view
                 series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
                 render_classic_chart(
-                    port_series, equity_series, loan_series, 
-                    equity_pct_series, usage_series, 
+                    tax_adj_port_series, final_adj_series, loan_series, 
+                    tax_adj_equity_pct_series, tax_adj_usage_series, 
                     series_opts, log_scale
                 )
             elif chart_style == "Classic (Dashboard)":
@@ -2107,8 +2152,8 @@ else:
                     "margin": st.session_state.get("log_margin", False)
                 }
                 render_dashboard_view(
-                    port_series, equity_series, loan_series, 
-                    equity_pct_series, usage_series, 
+                    tax_adj_port_series, final_adj_series, loan_series, 
+                    tax_adj_equity_pct_series, tax_adj_usage_series, 
                     st.session_state.get("maint_pct", 0.25), # Fallback if not in state
                     stats, log_opts
                 )
@@ -2139,9 +2184,16 @@ else:
                     st.dataframe(breaches, use_container_width=True)
         
         with res_tab_returns:
-            render_returns_analysis(port_series)
+            if pay_tax_cash:
+                st.info("ℹ️ **Note:** Returns are **Net of Tax** (simulated as cash withdrawals).")
+            elif pay_tax_margin:
+                st.info("ℹ️ **Note:** Returns are **Gross** (taxes paid via margin loan).")
+            else:
+                st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
+            render_returns_analysis(tax_adj_port_series)
             
         with res_tab_rebal:
+            st.warning("⚠️ **Note:** These trade calculations assume **Gross** portfolio values. Tax payments are NOT deducted by selling shares in this view (assumes taxes paid via margin or external cash).")
             render_rebalancing_analysis(
                 trades_df, pl_by_year, composition_df,
                 tax_method, other_income, filing_status, state_tax_rate,
