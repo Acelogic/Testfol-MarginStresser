@@ -271,7 +271,7 @@ def get_standard_deduction(year, filing_status, income=0):
         latest_year = max(_STANDARD_DEDUCTIONS.keys())
         return _STANDARD_DEDUCTIONS[latest_year].get(filing_status, 0)
 
-def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=2024, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx", short_term_gain=0.0, long_term_gain=0.0, use_standard_deduction=True):
+def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=2024, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx", short_term_gain=0.0, long_term_gain=0.0, long_term_gain_collectible=0.0, use_standard_deduction=True):
     """
     Calculates tax on realized gains using the specified method.
     
@@ -279,19 +279,14 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
     - realized_gain: Total realized gain (legacy support, treated as LT if st/lt not provided)
     - short_term_gain: Short-term capital gains (taxed as ordinary income)
     - long_term_gain: Long-term capital gains (preferential rates)
+    - long_term_gain_collectible: Long-term gains on collectibles (taxed as ordinary, capped at 28%)
     - use_standard_deduction: If True, subtracts standard deduction from ordinary income.
-    
-    Methods:
-    - "2024_fixed": Uses 2024 Long-Term Capital Gains brackets (0%, 15%, 20% + NIIT).
-    - "historical_max_rate": Uses the flat maximum rate from the Excel file.
-    - "historical_smart": Calculates tax using historical inclusion rates and ordinary brackets, 
-                          capped by the historical maximum rate (Alternative Tax).
     """
     # Legacy support: if st/lt not specified, assume all is realized_gain (treated as LT)
-    if short_term_gain == 0 and long_term_gain == 0:
+    if short_term_gain == 0 and long_term_gain == 0 and long_term_gain_collectible == 0:
         long_term_gain = realized_gain
         
-    total_gain = short_term_gain + long_term_gain
+    total_gain = short_term_gain + long_term_gain + long_term_gain_collectible
     if total_gain <= 0:
         return 0.0
         
@@ -302,7 +297,6 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
         std_deduction = get_standard_deduction(year, filing_status, income=other_income)
     
     # 2. Apply to Ordinary Income (other_income) first
-    # This reduces the base "stacking" level
     effective_other_income = max(0, other_income - std_deduction)
     unused_deduction = max(0, std_deduction - other_income)
     
@@ -310,32 +304,68 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
     effective_st_gain = max(0, short_term_gain - unused_deduction)
     unused_deduction = max(0, unused_deduction - short_term_gain)
     
-    # 4. Apply remaining unused deduction to Long-Term Gains
+    # 4. Apply unused deduction to Collectible Gains (28% Group)
+    effective_collectible_gain = max(0, long_term_gain_collectible - unused_deduction)
+    unused_deduction = max(0, unused_deduction - long_term_gain_collectible)
+    
+    # 5. Apply remaining unused deduction to Long-Term Gains (0/15/20% Group)
     effective_lt_gain = max(0, long_term_gain - unused_deduction)
     
-    # Update variables for calculation
-    # We use 'effective_other_income' as the base for stacking
-    # We use 'effective_st_gain' and 'effective_lt_gain' as the taxable amounts
+    # --- Tax Calculation ---
     
-    # 1. Calculate Tax on Short-Term Gains (Ordinary Income)
-    # ST gains are stacked on top of effective_other_income
+    # 1. Tax on Short-Term Gains (Ordinary Income)
+    # Stacked on top of effective_other_income
     st_tax = 0.0
-    if effective_st_gain > 0:
-        # We need to calculate the marginal tax increase from adding ST gain to other income
-        base_tax = calculate_historical_tax(year, effective_other_income, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
-        total_ordinary_income = effective_other_income + effective_st_gain
-        total_ordinary_tax = calculate_historical_tax(year, total_ordinary_income, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
-        st_tax = total_ordinary_tax - base_tax
-
-    # 2. Calculate Tax on Long-Term Gains (Preferential Rates)
-    # LT gains are stacked on top of (effective_other_income + effective_st_gain)
-    lt_tax = 0.0
+    current_stack = effective_other_income
     
-    # Effective ordinary income for stacking purposes
-    stacking_income = effective_other_income + effective_st_gain
+    if effective_st_gain > 0:
+        base_tax = calculate_historical_tax(year, current_stack, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        current_stack += effective_st_gain
+        total_ordinary_tax = calculate_historical_tax(year, current_stack, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        st_tax = total_ordinary_tax - base_tax
+        
+    # 2. Tax on Collectible Gains (Ordinary Rate, Capped at 28%)
+    # Stacked on top of (Other Income + ST Gain)
+    collectible_tax = 0.0
+    if effective_collectible_gain > 0:
+        base_tax = calculate_historical_tax(year, current_stack, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        
+        # Calculate tax as if it were ordinary
+        temp_stack = current_stack + effective_collectible_gain
+        full_ordinary_tax = calculate_historical_tax(year, temp_stack, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        marginal_tax = full_ordinary_tax - base_tax
+        
+        # Calculate tax with 28% cap
+        # We need to check if the marginal rate exceeds 28%.
+        # Since calculate_historical_tax is progressive, we can't just multiply.
+        # But we can compare the total tax amount.
+        # Max tax is 28% of the gain.
+        max_tax = effective_collectible_gain * 0.28
+        
+        # Wait, the rule is: Tax is calculated at ordinary rates, but the rate applied to this income cannot exceed 28%.
+        # So if you are in 10%, 12%, 22%, 24% brackets, you pay that rate.
+        # If you are in 32%, 35%, 37%, you pay 28%.
+        # My logic `min(marginal_tax, max_tax)` is roughly correct for the aggregate, 
+        # assuming the "marginal_tax" calculation reflects the progressive rates.
+        # However, if the gain spans across the 24% and 32% brackets, 
+        # the part in 24% is taxed at 24%, the part in 32% is taxed at 28%.
+        # `min(total_marginal, total_max)` might under-tax if the average rate is < 28% but some part is > 28%?
+        # No, `max_tax` is flat 28%. If average ordinary rate is < 28%, `marginal_tax` is lower.
+        # If average ordinary rate is > 28%, `max_tax` is lower.
+        # This simplification holds: You pay the lesser of (Ordinary Tax) or (28% Flat).
+        # Actually, strictly speaking, you pay ordinary rates until they exceed 28%.
+        # So `min` works.
+        
+        collectible_tax = min(marginal_tax, max_tax)
+        current_stack += effective_collectible_gain
 
+    # 3. Tax on Long-Term Gains (Preferential Rates)
+    # Stacked on top of (Other + ST + Collectible)
+    lt_tax = 0.0
+    stacking_income = current_stack
+    
     if effective_lt_gain > 0:
-        long_term_gain = effective_lt_gain # Use effective gain for calculation
+        long_term_gain = effective_lt_gain
         if method == "historical_max_rate":
             load_capital_gains_rates(excel_path)
             # Fallback to closest year
@@ -519,18 +549,20 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
         # Extract ST and LT gains/losses
         if isinstance(pl_series, pd.DataFrame):
             st_pl = row.get("Realized ST P&L", 0.0)
-            lt_pl = row.get("Realized LT P&L", 0.0)
+            lt_pl = row.get("Realized LT P&L", 0.0) # Standard LT
+            lt_col_pl = row.get("Realized LT (Collectible)", 0.0) # Collectible LT
+            
             # If columns missing, assume all LT (legacy)
             if "Realized ST P&L" not in row and "Realized LT P&L" not in row:
-                 # If it's a DF but missing specific columns, maybe it has just one column?
-                 # Fallback to treating single value as LT
                  pass 
         else:
             # Series input: Assume all Long-Term (Legacy behavior)
             st_pl = 0.0
             lt_pl = row
+            lt_col_pl = 0.0
             
         # --- Netting Rules ---
+        
         # 1. Net Current Year ST
         net_st = st_pl - st_loss_carryforward
         if net_st < 0:
@@ -539,40 +571,107 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
         else:
             st_loss_carryforward = 0.0
             
-        # 2. Net Current Year LT
-        net_lt = lt_pl - lt_loss_carryforward
-        if net_lt < 0:
-            lt_loss_carryforward = abs(net_lt)
-            net_lt = 0.0
-        else:
-            lt_loss_carryforward = 0.0
-            
-        # 3. Cross-Netting
-        # If one is positive and other is negative, net them
-        final_st = net_st
-        final_lt = net_lt
+        # 2. Net Current Year LT (Buckets)
+        # Apply LT Loss Carryforward to Collectibles (28%) FIRST (Taxpayer favorable)
+        net_lt_col = lt_col_pl
+        if lt_loss_carryforward > 0:
+            if net_lt_col > 0:
+                used = min(net_lt_col, lt_loss_carryforward)
+                net_lt_col -= used
+                lt_loss_carryforward -= used
         
-        if st_loss_carryforward > 0 and net_lt > 0:
-            # Use ST loss to offset LT gain
-            remaining_lt = net_lt - st_loss_carryforward
-            if remaining_lt < 0:
-                st_loss_carryforward = abs(remaining_lt)
-                final_lt = 0.0
-            else:
-                final_lt = remaining_lt
-                st_loss_carryforward = 0.0
+        # Apply remaining LT Loss Carryforward to Standard LT (15%/20%)
+        net_lt_std = lt_pl
+        if lt_loss_carryforward > 0:
+            # Note: net_lt_std can be negative (current year loss). 
+            # If negative, we just add to the loss? No, carryforward is separate.
+            # We net CF against GAINS.
+            if net_lt_std > 0:
+                used = min(net_lt_std, lt_loss_carryforward)
+                net_lt_std -= used
+                lt_loss_carryforward -= used
                 
-        elif lt_loss_carryforward > 0 and net_st > 0:
-            # Use LT loss to offset ST gain
-            remaining_st = net_st - lt_loss_carryforward
-            if remaining_st < 0:
-                lt_loss_carryforward = abs(remaining_st)
-                final_st = 0.0
+        # 3. Internal LT Netting (Current Year + Remaining CF)
+        # We now have net_lt_col and net_lt_std. One or both could be negative (current year loss).
+        # Also we might still have lt_loss_carryforward if it wiped out all gains.
+        
+        # If we have remaining CF, it means both net_lt_col and net_lt_std are <= 0 (or fully offset).
+        # So we just treat them as losses to be added to CF?
+        # Let's simplify: Combine all LT components to find Net LT Position.
+        # But we need to preserve character if positive.
+        
+        final_lt_col = 0.0
+        final_lt_std = 0.0
+        net_lt_loss = 0.0
+        
+        # Case A: Both Positive (or 0)
+        if net_lt_col >= 0 and net_lt_std >= 0:
+            final_lt_col = net_lt_col
+            final_lt_std = net_lt_std
+            # lt_loss_carryforward remains if any
+            
+        # Case B: Col Negative, Std Positive
+        elif net_lt_col < 0 and net_lt_std >= 0:
+            # Offset Std Gain with Col Loss
+            combined = net_lt_std + net_lt_col
+            if combined >= 0:
+                final_lt_std = combined
+                final_lt_col = 0.0
             else:
-                final_st = remaining_st
-                lt_loss_carryforward = 0.0
+                final_lt_std = 0.0
+                final_lt_col = 0.0
+                net_lt_loss = abs(combined)
                 
-        # 4. Calculate Tax
+        # Case C: Std Negative, Col Positive
+        elif net_lt_std < 0 and net_lt_col >= 0:
+            # Offset Col Gain with Std Loss
+            combined = net_lt_col + net_lt_std
+            if combined >= 0:
+                final_lt_col = combined
+                final_lt_std = 0.0
+            else:
+                final_lt_col = 0.0
+                final_lt_std = 0.0
+                net_lt_loss = abs(combined)
+                
+        # Case D: Both Negative
+        else:
+            net_lt_loss = abs(net_lt_col) + abs(net_lt_std)
+            
+        # Add any remaining carryforward to the net loss
+        net_lt_loss += lt_loss_carryforward
+        lt_loss_carryforward = 0.0 # Reset, will be rebuilt from net_lt_loss
+        
+        # 4. Cross-Netting (ST vs LT)
+        final_st = net_st # Initialize final_st
+        
+        # If Net ST is Loss
+        if st_loss_carryforward > 0: # This means net_st was < 0
+            # Offset LT Gains (High Tax First? No, usually 28% then 15%)
+            # Offset Collectible First
+            if final_lt_col > 0:
+                used = min(final_lt_col, st_loss_carryforward)
+                final_lt_col -= used
+                st_loss_carryforward -= used
+                
+            # Offset Standard Next
+            if final_lt_std > 0 and st_loss_carryforward > 0:
+                used = min(final_lt_std, st_loss_carryforward)
+                final_lt_std -= used
+                st_loss_carryforward -= used
+                
+        # If Net LT is Loss
+        if net_lt_loss > 0:
+            # Offset ST Gain
+            if final_st > 0:
+                used = min(final_st, net_lt_loss)
+                final_st -= used
+                net_lt_loss -= used
+                
+            # Remaining becomes LT Carryforward
+            lt_loss_carryforward = net_lt_loss
+            
+        # 5. Calculate Tax
         
         # Check for Net Capital Loss to deduct from Ordinary Income (Max $3,000)
         deduction_amount = 0.0
@@ -598,14 +697,7 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
                 remaining_deduction -= used_lt
             
             # Calculate Tax Savings from this deduction
-            # Savings = (Tax on Base Income) - (Tax on Reduced Income)
-            # We return this as a NEGATIVE tax value
             if deduction_amount > 0:
-                # Note: Tax savings calc should also respect the standard deduction setting
-                # If standard deduction is ON, both base and reduced tax should use it.
-                # But calculate_historical_tax doesn't know about standard deduction.
-                # We handle standard deduction by reducing the input income to calculate_historical_tax.
-                
                 std_ded = 0.0
                 if use_standard_deduction:
                     std_ded = get_standard_deduction(year, filing_status, income=other_income)
@@ -619,13 +711,14 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
         
         tax = calculate_tax_on_realized_gains(
             realized_gain=0, # Not used when st/lt provided
-            other_income=other_income, 
+            other_income=max(0, other_income - deduction_amount), 
             year=year, 
             filing_status=filing_status, 
             method=method, 
             excel_path=excel_path,
             short_term_gain=final_st,
-            long_term_gain=final_lt,
+            long_term_gain=final_lt_std,
+            long_term_gain_collectible=final_lt_col,
             use_standard_deduction=use_standard_deduction
         )
         
