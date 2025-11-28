@@ -1450,11 +1450,7 @@ with st.sidebar:
             delete_portfolio_from_disk(selected_port)
             st.rerun()
     
-    st.markdown("---")
-    st.markdown("---")
     run_placeholder = st.empty()
-    st.markdown("---")
-    st.markdown("---")
     st.info("Configure your strategy, then click Run.")
 
 # --- Main Area ---
