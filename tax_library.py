@@ -189,9 +189,97 @@ def get_capital_gains_inclusion_rate(year):
     else:
         return 1.0 # 100% included (1987-Present)
 
-def calculate_tax_on_realized_gains(realized_gain, other_income, year, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx"):
+# Standard Deduction Data (1970-2024)
+# Source: Tax Policy Center, IRS
+_STANDARD_DEDUCTIONS = {
+    1970: {"Single": 1100, "Married Filing Jointly": 1100, "Head of Household": 1100},
+    1971: {"Single": 1050, "Married Filing Jointly": 1050, "Head of Household": 1050},
+    1972: {"Single": 1300, "Married Filing Jointly": 1300, "Head of Household": 1300},
+    1973: {"Single": 1300, "Married Filing Jointly": 1300, "Head of Household": 1300},
+    1974: {"Single": 1300, "Married Filing Jointly": 1300, "Head of Household": 1300},
+    1975: {"Single": 1600, "Married Filing Jointly": 1900, "Head of Household": 1900},
+    1976: {"Single": 1700, "Married Filing Jointly": 2100, "Head of Household": 2100},
+    1977: {"Single": 2200, "Married Filing Jointly": 3200, "Head of Household": 3200},
+    1978: {"Single": 2200, "Married Filing Jointly": 3200, "Head of Household": 3200},
+    1979: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1980: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1981: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1982: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1983: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1984: {"Single": 2300, "Married Filing Jointly": 3400, "Head of Household": 3400},
+    1985: {"Single": 2400, "Married Filing Jointly": 3550, "Head of Household": 3550},
+    1986: {"Single": 2480, "Married Filing Jointly": 3670, "Head of Household": 3670},
+    1987: {"Single": 2540, "Married Filing Jointly": 3760, "Head of Household": 3760},
+    1988: {"Single": 3000, "Married Filing Jointly": 5000, "Head of Household": 4400},
+    1989: {"Single": 3100, "Married Filing Jointly": 5200, "Head of Household": 4550},
+    1990: {"Single": 3250, "Married Filing Jointly": 5450, "Head of Household": 4750},
+    1991: {"Single": 3400, "Married Filing Jointly": 5700, "Head of Household": 5000},
+    1992: {"Single": 3600, "Married Filing Jointly": 6000, "Head of Household": 5250},
+    1993: {"Single": 3700, "Married Filing Jointly": 6200, "Head of Household": 5450},
+    1994: {"Single": 3800, "Married Filing Jointly": 6350, "Head of Household": 5600},
+    1995: {"Single": 3900, "Married Filing Jointly": 6550, "Head of Household": 5750},
+    1996: {"Single": 4000, "Married Filing Jointly": 6700, "Head of Household": 5900},
+    1997: {"Single": 4150, "Married Filing Jointly": 6900, "Head of Household": 6050},
+    1998: {"Single": 4250, "Married Filing Jointly": 7100, "Head of Household": 6250},
+    1999: {"Single": 4300, "Married Filing Jointly": 7200, "Head of Household": 6350},
+    2000: {"Single": 4400, "Married Filing Jointly": 7350, "Head of Household": 6450},
+    2001: {"Single": 4550, "Married Filing Jointly": 7600, "Head of Household": 6650},
+    2002: {"Single": 4700, "Married Filing Jointly": 7850, "Head of Household": 6900},
+    2003: {"Single": 4750, "Married Filing Jointly": 9500, "Head of Household": 7000},
+    2004: {"Single": 4850, "Married Filing Jointly": 9700, "Head of Household": 7150},
+    2005: {"Single": 5000, "Married Filing Jointly": 10000, "Head of Household": 7300},
+    2006: {"Single": 5150, "Married Filing Jointly": 10300, "Head of Household": 7550},
+    2007: {"Single": 5350, "Married Filing Jointly": 10700, "Head of Household": 7850},
+    2008: {"Single": 5450, "Married Filing Jointly": 10900, "Head of Household": 8000},
+    2009: {"Single": 5700, "Married Filing Jointly": 11400, "Head of Household": 8350},
+    2010: {"Single": 5700, "Married Filing Jointly": 11400, "Head of Household": 8400},
+    2011: {"Single": 5800, "Married Filing Jointly": 11600, "Head of Household": 8500},
+    2012: {"Single": 5950, "Married Filing Jointly": 11900, "Head of Household": 8700},
+    2013: {"Single": 6100, "Married Filing Jointly": 12200, "Head of Household": 8950},
+    2014: {"Single": 6200, "Married Filing Jointly": 12400, "Head of Household": 9100},
+    2015: {"Single": 6300, "Married Filing Jointly": 12600, "Head of Household": 9250},
+    2016: {"Single": 6300, "Married Filing Jointly": 12600, "Head of Household": 9300},
+    2017: {"Single": 6350, "Married Filing Jointly": 12700, "Head of Household": 9350},
+    2018: {"Single": 12000, "Married Filing Jointly": 24000, "Head of Household": 18000},
+    2019: {"Single": 12200, "Married Filing Jointly": 24400, "Head of Household": 18350},
+    2020: {"Single": 12400, "Married Filing Jointly": 24800, "Head of Household": 18650},
+    2021: {"Single": 12550, "Married Filing Jointly": 25100, "Head of Household": 18800},
+    2022: {"Single": 12950, "Married Filing Jointly": 25900, "Head of Household": 19400},
+    2023: {"Single": 13850, "Married Filing Jointly": 27700, "Head of Household": 20800},
+    2024: {"Single": 14600, "Married Filing Jointly": 29200, "Head of Household": 21900},
+    2025: {"Single": 15000, "Married Filing Jointly": 30000, "Head of Household": 23625}, # Projected/Estimated
+}
+
+def get_standard_deduction(year, filing_status, income=0):
+    """
+    Returns the standard deduction for the given year and filing status.
+    Handles pre-1970 logic (10% of income capped at $1,000).
+    """
+    # Normalize filing status
+    if filing_status not in ["Single", "Married Filing Jointly", "Head of Household"]:
+        filing_status = "Single" # Fallback
+        
+    if year in _STANDARD_DEDUCTIONS:
+        return _STANDARD_DEDUCTIONS[year].get(filing_status, 0)
+    elif year < 1970:
+        # Pre-1970 Rule: 10% of AGI, capped at $1,000
+        # (Simplified, actual history is complex but this is a reasonable proxy)
+        deduction = income * 0.10
+        return min(deduction, 1000.0)
+    else:
+        # Future years: Use latest known
+        latest_year = max(_STANDARD_DEDUCTIONS.keys())
+        return _STANDARD_DEDUCTIONS[latest_year].get(filing_status, 0)
+
+def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=2024, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx", short_term_gain=0.0, long_term_gain=0.0, use_standard_deduction=True):
     """
     Calculates tax on realized gains using the specified method.
+    
+    Parameters:
+    - realized_gain: Total realized gain (legacy support, treated as LT if st/lt not provided)
+    - short_term_gain: Short-term capital gains (taxed as ordinary income)
+    - long_term_gain: Long-term capital gains (preferential rates)
+    - use_standard_deduction: If True, subtracts standard deduction from ordinary income.
     
     Methods:
     - "2024_fixed": Uses 2024 Long-Term Capital Gains brackets (0%, 15%, 20% + NIIT).
@@ -199,89 +287,172 @@ def calculate_tax_on_realized_gains(realized_gain, other_income, year, filing_st
     - "historical_smart": Calculates tax using historical inclusion rates and ordinary brackets, 
                           capped by the historical maximum rate (Alternative Tax).
     """
-    if realized_gain <= 0:
+    # Legacy support: if st/lt not specified, assume all is realized_gain (treated as LT)
+    if short_term_gain == 0 and long_term_gain == 0:
+        long_term_gain = realized_gain
+        
+    total_gain = short_term_gain + long_term_gain
+    if total_gain <= 0:
         return 0.0
         
-    if method == "historical_max_rate":
-        load_capital_gains_rates(excel_path)
-        # Fallback to closest year
-        if year not in _CAP_GAINS_RATES:
-             if _CAP_GAINS_RATES:
-                 year = max(_CAP_GAINS_RATES.keys())
-             else:
-                 return 0.0
-        rate = _CAP_GAINS_RATES.get(year, 0.0)
-        return realized_gain * rate
-        
-    elif method == "historical_smart":
-        # 1. Calculate Regular Tax with Inclusion Rate
-        inclusion_rate = get_capital_gains_inclusion_rate(year)
-        taxable_gain = realized_gain * inclusion_rate
-        
-        # Marginal tax on the included gain
-        total_income_regular = other_income + taxable_gain
-        tax_total_regular = calculate_historical_tax(year, total_income_regular, filing_status)
-        tax_base_regular = calculate_historical_tax(year, other_income, filing_status)
-        regular_tax_liability = max(0, tax_total_regular - tax_base_regular)
-        
-        # 2. Calculate Alternative Tax (Max Rate Cap)
-        # This acts as a ceiling. If the regular calculation exceeds the max cap rate, pay the max cap.
-        # Note: The Excel file contains the "Maximum Effective Rate".
-        load_capital_gains_rates(excel_path)
-        max_rate = _CAP_GAINS_RATES.get(year, 0.35) # Default to 35% if missing, though load should handle it
-        alternative_tax_liability = realized_gain * max_rate
-        
-        # 3. NIIT (2013-Present)
-        # NIIT applies on top of everything else for high earners
-        niit = 0.0
-        if year >= 2013:
-            niit_threshold = 250000 if filing_status == "Married Filing Jointly" else 200000
-            magi = other_income + realized_gain # NIIT uses full gain
-            if magi > niit_threshold:
-                excess = magi - niit_threshold
-                subject_to_niit = min(realized_gain, excess)
-                niit = subject_to_niit * 0.038
-        
-        # The tax is the lesser of Regular (with exclusion) or Alternative (Max Rate), plus NIIT
-        # Note: For 1988-1990, there was no exclusion and no special max rate (taxed as ordinary), 
-        # so regular_tax_liability will naturally be the result.
-        # For 2003+, the "Max Rate" in Excel (15%) is the preferential rate. 
-        # Our "Regular Tax" calculation (100% inclusion) would be high, so "Alternative" (15%) wins.
-        
-        return min(regular_tax_liability, alternative_tax_liability) + niit
+    # --- Apply Standard Deduction ---
+    std_deduction = 0.0
+    if use_standard_deduction:
+        # 1. Get Deduction Amount
+        std_deduction = get_standard_deduction(year, filing_status, income=other_income)
+    
+    # 2. Apply to Ordinary Income (other_income) first
+    # This reduces the base "stacking" level
+    effective_other_income = max(0, other_income - std_deduction)
+    unused_deduction = max(0, std_deduction - other_income)
+    
+    # 3. Apply unused deduction to Short-Term Gains (Ordinary)
+    effective_st_gain = max(0, short_term_gain - unused_deduction)
+    unused_deduction = max(0, unused_deduction - short_term_gain)
+    
+    # 4. Apply remaining unused deduction to Long-Term Gains
+    effective_lt_gain = max(0, long_term_gain - unused_deduction)
+    
+    # Update variables for calculation
+    # We use 'effective_other_income' as the base for stacking
+    # We use 'effective_st_gain' and 'effective_lt_gain' as the taxable amounts
+    
+    # 1. Calculate Tax on Short-Term Gains (Ordinary Income)
+    # ST gains are stacked on top of effective_other_income
+    st_tax = 0.0
+    if effective_st_gain > 0:
+        # We need to calculate the marginal tax increase from adding ST gain to other income
+        base_tax = calculate_historical_tax(year, effective_other_income, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        total_ordinary_income = effective_other_income + effective_st_gain
+        total_ordinary_tax = calculate_historical_tax(year, total_ordinary_income, filing_status, csv_path="Historical Income Tax Rates and Brackets, 1862-2025.csv")
+        st_tax = total_ordinary_tax - base_tax
 
-    else:
-        # Default: 2024 Fixed Brackets
-        return calculate_federal_tax(realized_gain, other_income, filing_status)
+    # 2. Calculate Tax on Long-Term Gains (Preferential Rates)
+    # LT gains are stacked on top of (effective_other_income + effective_st_gain)
+    lt_tax = 0.0
+    
+    # Effective ordinary income for stacking purposes
+    stacking_income = effective_other_income + effective_st_gain
 
-def calculate_federal_tax(realized_gain, other_income, filing_status="Single"):
+    if effective_lt_gain > 0:
+        long_term_gain = effective_lt_gain # Use effective gain for calculation
+        if method == "historical_max_rate":
+            load_capital_gains_rates(excel_path)
+            # Fallback to closest year
+            if year not in _CAP_GAINS_RATES:
+                 if _CAP_GAINS_RATES:
+                     year = max(_CAP_GAINS_RATES.keys())
+                 else:
+                     return 0.0
+            rate = _CAP_GAINS_RATES.get(year, 0.0)
+            lt_tax = long_term_gain * rate
+            
+        elif method == "historical_smart":
+            # For modern years (2024+), use the specific fixed brackets
+            if year >= 2024:
+                lt_tax = calculate_federal_tax(long_term_gain, stacking_income, filing_status, year=year)
+            else:
+                # Historical Logic (Pre-2024)
+                # 1. Calculate Regular Tax with Inclusion Rate
+                inclusion_rate = get_capital_gains_inclusion_rate(year)
+                taxable_lt_gain = long_term_gain * inclusion_rate
+                
+                # Marginal tax on the included gain
+                # Stacked on top of stacking_income
+                total_income_regular = stacking_income + taxable_lt_gain
+                tax_total_regular = calculate_historical_tax(year, total_income_regular, filing_status)
+                tax_base_regular = calculate_historical_tax(year, stacking_income, filing_status)
+                regular_tax_liability = max(0, tax_total_regular - tax_base_regular)
+                
+                # 2. Calculate Alternative Tax (Max Rate Cap)
+                load_capital_gains_rates(excel_path)
+                max_rate = _CAP_GAINS_RATES.get(year, 0.35) 
+                alternative_tax_liability = long_term_gain * max_rate
+                
+                lt_tax = min(regular_tax_liability, alternative_tax_liability)
+    
+        else:
+            # Default: 2024 Fixed Brackets
+            lt_tax = calculate_federal_tax(long_term_gain, stacking_income, filing_status)
+
+    # 3. NIIT (2013-Present)
+    # NIIT applies on top of everything else for high earners
+    niit = 0.0
+    if year >= 2013:
+        niit_threshold = 250000 if filing_status == "Married Filing Jointly" else 200000
+        magi = other_income + short_term_gain + long_term_gain
+        if magi > niit_threshold:
+            excess = magi - niit_threshold
+            # NIIT applies to the lesser of (Net Investment Income) or (Excess MAGI)
+            # NII = ST Gain + LT Gain
+            investment_income = short_term_gain + long_term_gain
+            subject_to_niit = min(investment_income, excess)
+            niit = subject_to_niit * 0.038
+            
+    return st_tax + lt_tax + niit
+
+def calculate_federal_tax(realized_gain, other_income, filing_status="Single", year=2025):
     """
-    Calculates estimated federal tax on long-term capital gains using 2024 brackets.
+    Calculates estimated federal tax on long-term capital gains using specific year brackets.
     Includes Net Investment Income Tax (NIIT).
     """
     if realized_gain <= 0:
         return 0.0
         
-    # 2024 Long-Term Capital Gains Brackets
+    # Define Brackets
     # Format: (Threshold, Rate)
     # 0% up to Threshold 1
     # 15% up to Threshold 2
     # 20% above Threshold 2
     
-    if filing_status == "Married Filing Jointly":
-        brackets = [
-            (94050, 0.00),
-            (583750, 0.15),
-            (float("inf"), 0.20)
-        ]
-        niit_threshold = 250000
-    else: # Single (and others mapped to Single for simplicity)
-        brackets = [
-            (47025, 0.00),
-            (518900, 0.15),
-            (float("inf"), 0.20)
-        ]
-        niit_threshold = 200000
+    brackets = []
+    niit_threshold = 200000
+    
+    if year == 2024:
+        if filing_status == "Married Filing Jointly":
+            brackets = [
+                (94050, 0.00),
+                (583750, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 250000
+        elif filing_status == "Head of Household":
+            brackets = [
+                (63000, 0.00),
+                (551350, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 200000
+        else: # Single
+            brackets = [
+                (47025, 0.00),
+                (518900, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 200000
+            
+    else: # Default to 2025 (and future)
+        if filing_status == "Married Filing Jointly":
+            brackets = [
+                (98900, 0.00),
+                (613700, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 250000
+        elif filing_status == "Head of Household":
+            brackets = [
+                (64750, 0.00),
+                (566700, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 200000
+        else: # Single
+            brackets = [
+                (49450, 0.00),
+                (545500, 0.15),
+                (float("inf"), 0.20)
+            ]
+            niit_threshold = 200000
         
     # Calculate Capital Gains Tax
     # The capital gains "stack" on top of other income.
@@ -328,41 +499,137 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single"):
         
     return total_tax
 
-def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx"):
+def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path="Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx", use_standard_deduction=True):
     """
     Calculates tax for a series of P&L (indexed by Year), handling loss carryforwards.
+    Accepts either a Series (Total P&L) or a DataFrame (with 'Realized ST P&L' and 'Realized LT P&L').
     Returns a Series of Tax Owed.
     """
     tax_owed_series = pd.Series(index=pl_series.index, dtype=float)
-    loss_carryforward = 0.0
+    
+    # Carryforwards
+    st_loss_carryforward = 0.0
+    lt_loss_carryforward = 0.0
     
     # Ensure sorted by year
     sorted_pl = pl_series.sort_index()
     
-    for year, realized_pl in sorted_pl.items():
-        # Net against carryforward
-        net_pl = realized_pl - loss_carryforward
+    for year, row in sorted_pl.iterrows() if isinstance(pl_series, pd.DataFrame) else sorted_pl.items():
         
-        if net_pl > 0:
-            # We have a taxable gain after using up carryforward
-            taxable_gain = net_pl
-            loss_carryforward = 0.0 # Used up
-            
-            # Calculate Tax
-            tax = calculate_tax_on_realized_gains(
-                taxable_gain, 
-                other_income, 
-                year, 
-                filing_status, 
-                method=method, 
-                excel_path=excel_path
-            )
-            tax_owed_series[year] = tax
-            
+        # Extract ST and LT gains/losses
+        if isinstance(pl_series, pd.DataFrame):
+            st_pl = row.get("Realized ST P&L", 0.0)
+            lt_pl = row.get("Realized LT P&L", 0.0)
+            # If columns missing, assume all LT (legacy)
+            if "Realized ST P&L" not in row and "Realized LT P&L" not in row:
+                 # If it's a DF but missing specific columns, maybe it has just one column?
+                 # Fallback to treating single value as LT
+                 pass 
         else:
-            # We have a loss (or 0) after netting
-            # net_pl is negative or zero. This becomes the new carryforward.
-            loss_carryforward = abs(net_pl)
-            tax_owed_series[year] = 0.0
+            # Series input: Assume all Long-Term (Legacy behavior)
+            st_pl = 0.0
+            lt_pl = row
+            
+        # --- Netting Rules ---
+        # 1. Net Current Year ST
+        net_st = st_pl - st_loss_carryforward
+        if net_st < 0:
+            st_loss_carryforward = abs(net_st)
+            net_st = 0.0
+        else:
+            st_loss_carryforward = 0.0
+            
+        # 2. Net Current Year LT
+        net_lt = lt_pl - lt_loss_carryforward
+        if net_lt < 0:
+            lt_loss_carryforward = abs(net_lt)
+            net_lt = 0.0
+        else:
+            lt_loss_carryforward = 0.0
+            
+        # 3. Cross-Netting
+        # If one is positive and other is negative, net them
+        final_st = net_st
+        final_lt = net_lt
+        
+        if st_loss_carryforward > 0 and net_lt > 0:
+            # Use ST loss to offset LT gain
+            remaining_lt = net_lt - st_loss_carryforward
+            if remaining_lt < 0:
+                st_loss_carryforward = abs(remaining_lt)
+                final_lt = 0.0
+            else:
+                final_lt = remaining_lt
+                st_loss_carryforward = 0.0
+                
+        elif lt_loss_carryforward > 0 and net_st > 0:
+            # Use LT loss to offset ST gain
+            remaining_st = net_st - lt_loss_carryforward
+            if remaining_st < 0:
+                lt_loss_carryforward = abs(remaining_st)
+                final_st = 0.0
+            else:
+                final_st = remaining_st
+                lt_loss_carryforward = 0.0
+                
+        # 4. Calculate Tax
+        
+        # Check for Net Capital Loss to deduct from Ordinary Income (Max $3,000)
+        deduction_amount = 0.0
+        tax_savings = 0.0
+        
+        # If we have remaining losses after cross-netting
+        if st_loss_carryforward > 0 or lt_loss_carryforward > 0:
+            total_loss = st_loss_carryforward + lt_loss_carryforward
+            deduction_amount = min(total_loss, 3000.0)
+            
+            # Reduce carryforwards by the used deduction
+            # ST losses are used first, then LT
+            remaining_deduction = deduction_amount
+            
+            if st_loss_carryforward > 0:
+                used_st = min(st_loss_carryforward, remaining_deduction)
+                st_loss_carryforward -= used_st
+                remaining_deduction -= used_st
+                
+            if remaining_deduction > 0 and lt_loss_carryforward > 0:
+                used_lt = min(lt_loss_carryforward, remaining_deduction)
+                lt_loss_carryforward -= used_lt
+                remaining_deduction -= used_lt
+            
+            # Calculate Tax Savings from this deduction
+            # Savings = (Tax on Base Income) - (Tax on Reduced Income)
+            # We return this as a NEGATIVE tax value
+            if deduction_amount > 0:
+                # Note: Tax savings calc should also respect the standard deduction setting
+                # If standard deduction is ON, both base and reduced tax should use it.
+                # But calculate_historical_tax doesn't know about standard deduction.
+                # We handle standard deduction by reducing the input income to calculate_historical_tax.
+                
+                std_ded = 0.0
+                if use_standard_deduction:
+                    std_ded = get_standard_deduction(year, filing_status, income=other_income)
+                
+                base_taxable = max(0, other_income - std_ded)
+                reduced_taxable = max(0, other_income - deduction_amount - std_ded)
+                
+                base_ordinary_tax = calculate_historical_tax(year, base_taxable, filing_status)
+                reduced_ordinary_tax = calculate_historical_tax(year, reduced_taxable, filing_status)
+                tax_savings = base_ordinary_tax - reduced_ordinary_tax
+        
+        tax = calculate_tax_on_realized_gains(
+            realized_gain=0, # Not used when st/lt provided
+            other_income=other_income, 
+            year=year, 
+            filing_status=filing_status, 
+            method=method, 
+            excel_path=excel_path,
+            short_term_gain=final_st,
+            long_term_gain=final_lt,
+            use_standard_deduction=use_standard_deduction
+        )
+        
+        # Apply tax savings (refund)
+        tax_owed_series[year] = tax - tax_savings
             
     return tax_owed_series
