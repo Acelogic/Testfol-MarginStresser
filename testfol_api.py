@@ -62,28 +62,68 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
     Simulates margin loan and calculates equity/usage metrics.
     """
     rate_daily = (rate_annual / 100) / 252
-    loan_vals, loan = [], starting_loan
-    prev_m = port.index[0].month
     
-    # Ensure tax_series is aligned or reindexed if provided
-    # We assume tax_series is indexed by Date and contains 0.0 for non-payment days
+    # 1. Create Cashflow Series (Draws + Taxes)
+    # Initialize with zeros
+    cashflows = pd.Series(0.0, index=port.index)
     
-    for d in port.index:
-        loan *= 1 + rate_daily
-        if draw_monthly and d.month != prev_m:
-            loan += draw_monthly
-            prev_m = d.month
-            
-        # Add tax payment if applicable
-        if tax_series is not None:
-            # Check if there's a tax payment for this day
-            # We use .get() which is safe if d is not in index
-            payment = tax_series.get(d, 0.0)
-            if payment > 0:
-                loan += payment
-                
-        loan_vals.append(loan)
-    loan_series = pd.Series(loan_vals, index=port.index, name="Loan")
+    # Add Monthly Draws
+    if draw_monthly > 0:
+        # Identify month start/changes
+        # We want to add draw at the first available date of each new month
+        # Shift month to find changes
+        months = port.index.month
+        month_changes = months != pd.Series(months, index=port.index).shift(1)
+        # The first date is the start, but do we draw immediately? 
+        # Original logic: `if draw_monthly and d.month != prev_m:`
+        # `prev_m` initialized to `port.index[0].month`.
+        # So it skips the first month's first day?
+        # Let's match original logic: `prev_m = port.index[0].month`. Loop starts at index 0.
+        # Iteration 0: d.month == prev_m. No draw.
+        # Iteration k: d.month != prev_m. Draw. Update prev_m.
+        # So we draw on month *changes*, not the first month.
+        month_changes.iloc[0] = False # Explicitly ignore first day
+        cashflows[month_changes] += draw_monthly
+
+    # Add Tax Payments
+    if tax_series is not None:
+        # Align tax_series to port.index, filling missing with 0
+        aligned_taxes = tax_series.reindex(port.index, fill_value=0.0)
+        cashflows += aligned_taxes
+        
+    # 2. Calculate Loan Balance (Vectorized)
+    # Recurrence: L_t = L_{t-1} * (1 + r) + C_t
+    # Solution: L_t = L_0 * (1+r)^t + Sum(C_i * (1+r)^(t-i))
+    #               = (1+r)^t * [ L_0 + Sum(C_i / (1+r)^i) ]
+    # Note: The C_i term usually assumes cashflow happens at end of period?
+    # Original loop:
+    #   loan *= 1 + rate_daily
+    #   loan += cashflow
+    # This means interest is applied to previous balance, THEN cashflow is added.
+    # So L_t = L_{t-1} * (1+r) + C_t
+    
+    # Cumulative Interest Factor (1+r)^t
+    # We use cumprod.
+    # However, for constant rate, (1+r)^t is cleaner.
+    # But let's use cumprod to be generic (if we ever want variable rates).
+    rate_factor = 1 + rate_daily
+    # cum_rate[t] = (1+r)^(t+1) if we just do cumprod?
+    # We want factor[t] such that L_t part 1 = L_0 * factor[t]
+    # Loop 0: L_0 -> L_0 * (1+r) + C_0.
+    # So factor at t=0 should be (1+r).
+    cum_rate = pd.Series(rate_factor, index=port.index).cumprod()
+    
+    # Discounted Cashflows: C_i / (1+r)^(i+1) ?
+    # Let's trace t=0: L = L_0*(1+r) + C_0.
+    # Formula: L_t = (1+r)^(t+1) * [ L_0 + Sum( C_i / (1+r)^(i+1) ) ]
+    # Let's check t=0: (1+r)^1 * [ L_0 + C_0 / (1+r)^1 ] = L_0(1+r) + C_0. Correct.
+    
+    discounted_cashflows = cashflows / cum_rate
+    cum_discounted_cashflows = discounted_cashflows.cumsum()
+    
+    loan_series = cum_rate * (starting_loan + cum_discounted_cashflows)
+    loan_series.name = "Loan"
+    
     equity = port - loan_series
     equity_pct = (equity / port).rename("Equity %")
     usage_pct = (loan_series / (port * (1 - maint_pct))).rename("Margin usage %")
