@@ -189,3 +189,5 @@ $RECYCLE.BIN/
 
 # Project specific
 saved_portfolios.json
+debug_tools/*.json
+debug_tools/*.csv

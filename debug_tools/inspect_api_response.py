@@ -1,3 +1,5 @@
+import sys
+sys.path.append("..")
 import testfol_api as api
 import datetime as dt
 import json

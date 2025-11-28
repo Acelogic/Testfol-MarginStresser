@@ -13,7 +13,7 @@ def table_to_dicts(df: pd.DataFrame):
     return alloc, maint
 
 def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
-                   invest_div, rebalance, allocation, return_raw=False):
+                   invest_div, rebalance, allocation, return_raw=False, include_raw=False):
     """
     Fetches backtest data from testfol.io API.
     """
@@ -51,6 +51,9 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         "rebalancing_events": resp.get("rebalancing_events", []),
         "rebalancing_stats": resp.get("rebalancing_stats", [])
     }
+    
+    if include_raw:
+        extra_data["raw_response"] = resp
     
     return pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data
 
