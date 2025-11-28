@@ -921,21 +921,40 @@ def process_rebalancing_data(rebal_events, port_series, allocation):
     
     return trades_df, pl_by_year.to_frame(name="Realized P&L"), composition_df
 
-def render_rebalance_sankey(trades_df):
+def render_rebalance_sankey(trades_df, view_freq="Yearly"):
     if trades_df.empty:
         return
 
     st.subheader("Flow Visualization")
     
-    # Year Selection
-    years = sorted(trades_df["Year"].unique(), reverse=True)
-    selected_year = st.selectbox("Select Year for Flow", years, index=0, key="rebal_year_selector")
+    df = trades_df.copy()
     
-    # Filter data
-    df_year = trades_df[trades_df["Year"] == selected_year]
+    # Filter out current incomplete year ONLY if viewing Yearly
+    current_year = dt.date.today().year
+    if view_freq == "Yearly":
+        df = df[df["Date"].dt.year < current_year]
     
-    # Calculate Net Flow per ticker
-    net_flows = df_year.groupby("Ticker")["Trade Amount"].sum().sort_values()
+    if df.empty:
+        st.info(f"No rebalancing data available ({view_freq}).")
+        return
+
+    # Create Period column based on view_freq
+    if view_freq == "Yearly":
+        df["Period"] = df["Date"].dt.year.astype(str)
+    elif view_freq == "Quarterly":
+        df["Period"] = df["Date"].dt.to_period("Q").astype(str)
+    elif view_freq == "Monthly":
+        df["Period"] = df["Date"].dt.to_period("M").astype(str)
+        
+    # Period Selection
+    periods = sorted(df["Period"].unique(), reverse=True)
+    selected_period = st.selectbox("Select Period for Flow", periods, index=0, key="rebal_period_selector")
+    
+    # Filter data for selected period
+    df_period = df[df["Period"] == selected_period]
+    
+    # Calculate Net Flow per ticker for this period
+    net_flows = df_period.groupby("Ticker")["Trade Amount"].sum().sort_values()
     
     sources = net_flows[net_flows < 0].abs() # Sold
     targets = net_flows[net_flows > 0]       # Bought
@@ -1001,7 +1020,7 @@ def render_rebalance_sankey(trades_df):
           color = ["rgba(239, 85, 59, 0.4)"] * len(sources) + ["rgba(0, 204, 150, 0.4)"] * len(targets)
         ))])
 
-    fig.update_layout(title_text=f"Rebalancing Flow {selected_year}", font_size=12, height=500)
+    fig.update_layout(title_text=f"Rebalancing Flow {selected_period}", font_size=12, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
 def render_portfolio_composition(composition_df):
@@ -1040,121 +1059,244 @@ def render_portfolio_composition(composition_df):
     
     st.plotly_chart(fig, use_container_width=True)
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
         
+    # Determine default index based on rebalance_freq
+    freq_options = ["Yearly", "Quarterly", "Monthly"]
+    try:
+        default_idx = freq_options.index(rebalance_freq)
+    except ValueError:
+        default_idx = 0
+        
+    # View Frequency Selector
+    view_freq = st.selectbox(
+        "View Frequency", 
+        freq_options, 
+        index=default_idx,
+        key="rebal_view_freq"
+    )
+    
+    # Aggregate Data based on Frequency
+    df_chart = trades_df.copy()
+    
+    if view_freq == "Yearly":
+        # Already have pl_by_year, but let's re-aggregate from trades_df to be consistent
+        # Group by Year
+        agg_df = df_chart.groupby("Year")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        
+        # Merge Unrealized P&L if available
+        if unrealized_pl_df is not None and not unrealized_pl_df.empty:
+            # Resample to Year End (taking the last value of the year)
+            unrealized_yearly = unrealized_pl_df.resample("Y").last()
+            unrealized_yearly.index = unrealized_yearly.index.year
+            agg_df = agg_df.join(unrealized_yearly[["Unrealized P&L"]], how="outer").fillna(0.0)
+            
+        x_axis = agg_df.index
+        
+    elif view_freq == "Quarterly":
+        # Group by Year-Quarter
+        df_chart["Quarter"] = df_chart["Date"].dt.to_period("Q")
+        agg_df = df_chart.groupby("Quarter")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        
+        # Merge Unrealized P&L
+        if unrealized_pl_df is not None and not unrealized_pl_df.empty:
+            # Resample to Quarter End
+            unrealized_q = unrealized_pl_df.resample("Q").last()
+            unrealized_q.index = unrealized_q.index.to_period("Q")
+            agg_df = agg_df.join(unrealized_q[["Unrealized P&L"]], how="outer").fillna(0.0)
+            
+        x_axis = agg_df.index.astype(str)
+        
+    elif view_freq == "Monthly":
+        # Group by Year-Month
+        df_chart["Month"] = df_chart["Date"].dt.to_period("M")
+        agg_df = df_chart.groupby("Month")[["Realized P&L", "Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        
+        # Merge Unrealized P&L
+        if unrealized_pl_df is not None and not unrealized_pl_df.empty:
+            # Resample to Month End (should match index mostly)
+            unrealized_m = unrealized_pl_df.resample("M").last()
+            unrealized_m.index = unrealized_m.index.to_period("M")
+            agg_df = agg_df.join(unrealized_m[["Unrealized P&L"]], how="outer").fillna(0.0)
+            
+        x_axis = agg_df.index.astype(str)
+        
     c1, c2 = st.columns([2, 1])
     
     with c1:
-        st.subheader("Realized P&L by Year")
+        st.subheader(f"Realized P&L ({view_freq})")
         
-        colors = ["#00CC96" if x >= 0 else "#EF553B" for x in pl_by_year["Realized P&L"]]
-        fig = go.Figure(go.Bar(
-            x=pl_by_year.index,
-            y=pl_by_year["Realized P&L"],
-            marker_color=colors,
-            text=pl_by_year["Realized P&L"].apply(lambda x: f"${x:,.0f}"),
-            textposition="auto"
-        ))
+        # Use simple color coding for total P&L
+        colors = ["#00CC96" if x >= 0 else "#EF553B" for x in agg_df["Realized P&L"]]
+        
+        # Create stacked bar chart for ST/LT split?
+        # Or just total P&L?
+        # Let's show Total P&L for simplicity, but maybe add hover details
+        
+        fig = go.Figure()
+        
+        # Stacked Bar for ST and LT?
+        # If we have ST and LT columns (which we should from shadow_backtest)
+        if "Realized ST P&L" in agg_df.columns:
+            fig.add_trace(go.Bar(
+                x=x_axis, 
+                y=agg_df["Realized ST P&L"], 
+                name="Realized ST (Ordinary)",
+                marker_color="#EF553B", # Red/Orange
+                hovertemplate="%{y:$,.0f}"
+            ))
+            fig.add_trace(go.Bar(
+                x=x_axis, 
+                y=agg_df["Realized LT P&L"], 
+                name="Realized LT (Preferential)",
+                marker_color="#00CC96", # Green/Teal
+                hovertemplate="%{y:$,.0f}"
+            ))
+            
+            # Add Unrealized P&L Trace
+            if "Unrealized P&L" in agg_df.columns and agg_df["Unrealized P&L"].abs().sum() > 0:
+                 fig.add_trace(go.Bar(
+                    x=x_axis, 
+                    y=agg_df["Unrealized P&L"], 
+                    name="Unrealized P&L (Deferred)",
+                    marker_color="#636EFA", # Blue/Purple
+                    opacity=0.6, # Slightly transparent to distinguish from realized
+                    hovertemplate="%{y:$,.0f}"
+                ))
+                
+            
+            fig.update_layout(
+                barmode='relative', # Stacked (Relative handles mixed signs better than 'stack')
+                title="P&L Composition",
+                xaxis_title="Period",
+                yaxis_title="Amount ($)",
+                legend_title="Type",
+                hovermode="x unified"
+            )
+             
+        else:
+            # Fallback to simple bar
+            fig.add_trace(go.Bar(
+                x=x_axis,
+                y=agg_df["Realized P&L"],
+                marker_color=colors,
+                text=agg_df["Realized P&L"].apply(lambda x: f"${x:,.0f}"),
+                textposition="auto"
+            ))
+            
         fig.update_layout(
             yaxis_title="Realized P&L ($)",
-            xaxis_title="Year",
+            xaxis_title=view_freq[:-2], # Year/Quarter/Month
             template="plotly_dark",
-            showlegend=False,
-            height=400
+            showlegend=True,
+            height=400,
+            hovermode="x unified"
         )
         st.plotly_chart(fig, use_container_width=True)
         
         # Estimated Tax Owed Chart
         if not pl_by_year.empty:
-            st.subheader(f"Estimated Federal Tax Owed ({tax_method_selection})")
+            st.subheader(f"Estimated Federal Tax Owed ({view_freq} - {tax_method})")
             
-            # Calculate Federal Tax using tax_library with Loss Carryforward
-            # We pass the entire Series of Realized P&L
-            federal_tax_owed = tax_library.calculate_tax_series_with_carryforward(
-                pl_by_year["Realized P&L"],
+            # 1. Calculate Annual Federal Tax (Base)
+            federal_tax_annual = tax_library.calculate_tax_series_with_carryforward(
+                pl_by_year, 
                 other_income,
                 filing_status,
-                method=tax_method
+                method=tax_method,
+                use_standard_deduction=use_standard_deduction
             )
             
-            # Calculate State Tax (Flat Rate on positive gains, simplified)
-            # State tax usually allows loss carryforwards too, but rules vary wildly.
-            # We'll apply the same carryforward logic implicitly by using the same net P&L logic?
-            # Actually, let's just apply the rate to the taxable gain calculated by the federal logic
-            # as a reasonable proxy for "Net Taxable Gain".
-            # Or simpler: Apply flat rate to positive realized P&L? No, that ignores carryforwards.
-            # Let's assume State Taxable Income ~= Federal Taxable Capital Gain.
-            
-            # We can't easily get the "Taxable Gain" from the library function as it returns Tax.
-            # But we can approximate: State Tax = Federal Taxable Gain * State Rate.
-            # Since we don't have Federal Taxable Gain exposed, let's just re-implement a simple
-            # carryforward loop here for State Tax or just accept the limitation.
-            
-            # BETTER: Just add State Tax to the library function?
-            # No, let's keep it simple. We will just calculate State Tax on the *same* taxable base
-            # implied by the federal calculation.
-            
-            # Actually, let's just use the federal_tax_owed series to infer where we had taxable gains?
-            # No, that depends on rates.
-            
-            # Let's just run a simple carryforward loop for State Tax here.
-            state_tax_owed = pd.Series(0.0, index=federal_tax_owed.index)
+            # 2. Calculate Annual State Tax (Base)
+            state_tax_annual = pd.Series(0.0, index=federal_tax_annual.index)
             loss_cf = 0.0
-            for y, pl in pl_by_year["Realized P&L"].sort_index().items():
+            total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
+            
+            for y, pl in total_pl_series.sort_index().items():
                 net = pl - loss_cf
                 if net > 0:
-                    state_tax_owed[y] = net * state_tax_rate
+                    state_tax_annual[y] = net * state_tax_rate
                     loss_cf = 0.0
                 else:
                     loss_cf = abs(net)
             
-            total_tax_owed = federal_tax_owed + state_tax_owed
+            total_tax_annual = federal_tax_annual + state_tax_annual
             
-            if total_tax_owed.sum() > 0:
+            # 3. Allocate to Periods if needed
+            if view_freq == "Yearly":
+                tax_to_plot = total_tax_annual
+                x_axis_tax = tax_to_plot.index
+            else:
+                # Allocate annual tax to periods based on realized gains
+                # We need the period data (agg_df) which we calculated above
+                
+                # Create a Series to hold allocated tax
+                tax_to_plot = pd.Series(0.0, index=agg_df.index)
+                
+                # Iterate through each year
+                for year in total_tax_annual.index:
+                    annual_tax = total_tax_annual.get(year, 0.0)
+                    if annual_tax <= 0:
+                        continue
+                        
+                    # Get periods for this year
+                    if view_freq == "Quarterly":
+                        # Filter agg_df for this year (Quarter index)
+                        # Period index is like "2021Q1"
+                        periods_in_year = [p for p in agg_df.index if p.year == year]
+                    elif view_freq == "Monthly":
+                        periods_in_year = [p for p in agg_df.index if p.year == year]
+                    
+                    # Calculate total POSITIVE realized P&L for this year from the periods
+                    # We only allocate tax to periods that had gains
+                    year_gains = 0.0
+                    period_gains = {}
+                    
+                    for p in periods_in_year:
+                        gain = agg_df.loc[p, "Realized P&L"]
+                        if gain > 0:
+                            year_gains += gain
+                            period_gains[p] = gain
+                        else:
+                            period_gains[p] = 0.0
+                            
+                    # Allocate
+                    if year_gains > 0:
+                        for p in periods_in_year:
+                            if period_gains[p] > 0:
+                                allocation_ratio = period_gains[p] / year_gains
+                                tax_to_plot[p] = annual_tax * allocation_ratio
+                
+                x_axis_tax = tax_to_plot.index.astype(str)
+
+            if tax_to_plot.sum() > 0:
                 fig_tax = go.Figure(go.Bar(
-                    x=total_tax_owed.index,
-                    y=total_tax_owed,
+                    x=x_axis_tax,
+                    y=tax_to_plot,
                     marker_color="#EF553B", # Red for taxes
-                    text=total_tax_owed.apply(lambda x: f"${x:,.0f}"),
-                    textposition="auto"
+                    text=tax_to_plot.apply(lambda x: f"${x:,.0f}"),
+                    textposition="auto",
+                    name="Estimated Tax"
                 ))
                 fig_tax.update_layout(
                     yaxis_title="Tax Owed ($)",
-                    xaxis_title="Year",
+                    xaxis_title=view_freq[:-2], # Year/Quarter/Month
                     template="plotly_dark",
                     showlegend=False,
-                    height=400
+                    height=400,
+                    hovermode="x unified"
                 )
                 st.plotly_chart(fig_tax, use_container_width=True)
                 
-                total_tax = total_tax_owed.sum()
+                total_tax = tax_to_plot.sum()
                 st.metric("Total Estimated Tax Owed", f"${total_tax:,.2f}")
             else:
                 st.info("No taxable gains realized.")
         
-        # Unrealized P&L Chart
-        unrealized_pl_df = results.get("unrealized_pl_df", pd.DataFrame())
-        if not unrealized_pl_df.empty:
-            st.subheader("Unrealized P&L by Year (Year End)")
-            colors_unrealized = ["#00CC96" if x >= 0 else "#EF553B" for x in unrealized_pl_df["Unrealized P&L"]]
-            fig_unrealized = go.Figure(go.Bar(
-                x=unrealized_pl_df.index,
-                y=unrealized_pl_df["Unrealized P&L"],
-                marker_color=colors_unrealized,
-                text=unrealized_pl_df["Unrealized P&L"].apply(lambda x: f"${x:,.0f}"),
-                textposition="auto"
-            ))
-            fig_unrealized.update_layout(
-                yaxis_title="Unrealized P&L ($)",
-                xaxis_title="Year",
-                template="plotly_dark",
-                showlegend=False,
-                height=400
-            )
-            st.plotly_chart(fig_unrealized, use_container_width=True)
+
         
     with c2:
         st.subheader("Total Turnover")
@@ -1176,29 +1318,51 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df):
     render_portfolio_composition(composition_df)
         
     # Sankey Diagram
-    render_rebalance_sankey(trades_df)
+    # Sankey Diagram
+    render_rebalance_sankey(trades_df, view_freq=view_freq)
     
-    with st.expander("Yearly Rebalancing Details (Net Flow)", expanded=True):
-        st.caption("Positive values indicate Net Buy, Negative values indicate Net Sell.")
+    with st.expander(f"Rebalancing Details ({view_freq} - Net Flow)", expanded=True):
+        current_year = dt.date.today().year
+        if view_freq == "Yearly":
+            st.caption(f"Positive values indicate Net Buy, Negative values indicate Net Sell. (Excluding {current_year})")
+        else:
+            st.caption("Positive values indicate Net Buy, Negative values indicate Net Sell.")
         
-        # Create Pivot Table: Year vs Ticker (Net Flow)
-        pivot_df = trades_df.pivot_table(
-            index="Year", 
-            columns="Ticker", 
-            values="Trade Amount", 
-            aggfunc="sum"
-        ).fillna(0)
+        df_details = trades_df.copy()
         
-        # Sort index descending (newest first)
-        pivot_df = pivot_df.sort_index(ascending=False)
+        # Filter out current incomplete year ONLY if viewing Yearly
+        if view_freq == "Yearly":
+            df_details = df_details[df_details["Date"].dt.year < current_year]
         
-        # Add Total column
-        pivot_df["Total Net Flow"] = pivot_df.sum(axis=1)
-        
-        st.dataframe(
-            pivot_df.style.format("${:,.0f}").map(color_return),
-            use_container_width=True
-        )
+        if df_details.empty:
+            st.info(f"No data available for details ({view_freq}).")
+        else:
+            # Create Period column
+            if view_freq == "Yearly":
+                df_details["Period"] = df_details["Date"].dt.year.astype(str)
+            elif view_freq == "Quarterly":
+                df_details["Period"] = df_details["Date"].dt.to_period("Q").astype(str)
+            elif view_freq == "Monthly":
+                df_details["Period"] = df_details["Date"].dt.to_period("M").astype(str)
+
+            # Create Pivot Table: Period vs Ticker (Net Flow)
+            pivot_df = df_details.pivot_table(
+                index="Period", 
+                columns="Ticker", 
+                values="Trade Amount", 
+                aggfunc="sum"
+            ).fillna(0)
+            
+            # Sort index descending (newest first)
+            pivot_df = pivot_df.sort_index(ascending=False)
+            
+            # Add Total column
+            pivot_df["Total Net Flow"] = pivot_df.sum(axis=1)
+            
+            st.dataframe(
+                pivot_df.style.format("${:,.0f}").map(color_return),
+                use_container_width=True
+            )
         
     with st.expander("Detailed Trade Log"):
         display_trades = trades_df.copy()
@@ -1352,49 +1516,49 @@ with tab_port:
     st.subheader("Tax Simulation")
     c_tax1, c_tax2 = st.columns(2)
     with c_tax1:
-        filing_status = st.selectbox("Filing Status", ["Single", "Married Filing Jointly", "Married Filing Separately", "Head of Household"])
+        filing_status = st.selectbox(
+        "Filing Status",
+        ["Single", "Married Filing Jointly", "Head of Household"],
+        index=0,
+        help="Determines tax brackets and standard deduction."
+    )
     with c_tax2:
         other_income = st.number_input("Other Annual Income ($)", 0.0, 10000000.0, 100000.0, 5000.0, help="Used to determine tax bracket base.")
         
     tax_method_selection = st.radio(
         "Tax Calculation Method",
-        ["2024 Fixed Brackets (Default)", "Historical Max Capital Gains Rate (Excel)", "Historical Smart Calculation (Recommended)"],
+        ["Historical Smart Calculation (Default)", "Historical Max Capital Gains Rate (Excel)", "2025 Fixed Brackets"],
         index=0,
-        help="Choose the method for calculating federal taxes on realized gains.\n\n- **2024 Fixed**: Uses current 0%/15%/20% brackets for all years.\n- **Historical Max**: Applies the historical maximum capital gains rate for each year.\n- **Historical Smart**: Uses historical inclusion rates (e.g. 50% exclusion) and ordinary brackets, capped by the alternative max rate."
+        help="Choose the method for calculating federal taxes on realized gains.\n\n- **Historical Smart (Default)**: Most accurate. Uses historical inclusion rates (e.g. 50% exclusion) and ordinary brackets, capped by the historical Alternative Tax (max rate).\n- **Historical Max**: Applies the flat historical maximum capital gains rate for each year.\n- **2025 Fixed**: Uses modern 0%/15%/20% brackets for all years (anachronistic)."
     )
     
     # Add detailed explanation for Historical Smart Calculation
     if "Smart" in tax_method_selection:
         with st.expander("ℹ️ How Historical Smart Calculation Works", expanded=False):
             st.markdown("""
-            This method provides **the most historically accurate tax simulation** by combining three key elements:
+            This method simulates the historical "Alternative Tax" system for older years **AND** applies modern preferential brackets for recent years.
+
+            **1. Historical Era (Pre-1987)**
+            You paid the **lower** of:
+            - **Regular Tax**: Tax on the included portion (e.g., 50%) at ordinary rates.
+            - **Alternative Tax**: A flat maximum rate (e.g., 25%) on the total gain.
+
+            **2. Modern Era (1987 – Present)**
+            The simulation automatically switches to modern rules (100% inclusion) and applies the specific brackets for each year.
             
-            **1. Historical Inclusion Rates (Exclusions)**
-            - **1922-1933**: 100% included (12.5% cap rate)
-            - **1934-1937**: ~40% included (sliding scale based on holding period)
-            - **1938-1978**: 50% included (50% exclusion for long-term gains)
-            - **1979-1986**: 40% included (60% exclusion)
-            - **1987-Present**: 100% included (no exclusion)
+            **Current 2025 Brackets (Used in Simulation):**
+            | Rate | Single Filers | Married Jointly |
+            | :--- | :--- | :--- |
+            | **0%** | Up to $49,450 | Up to $98,900 |
+            | **15%** | $49,451 – $545,500 | $98,901 – $613,700 |
+            | **20%** | Over $545,500 | Over $613,700 |
             
-            **2. Progressive Ordinary Income Tax Calculation**
-            - The included portion is taxed using the historical ordinary income brackets from your CSV file
-            - This reflects the marginal tax approach that applied when gains were partially excluded
-            
-            **3. Alternative Tax Cap (Maximum Rate)**
-            - The calculation compares the progressive tax (from step 2) against the historical maximum capital gains rate (from your Excel file)
-            - You pay the **lower** of these two amounts
-            - This mirrors the "Alternative Tax" mechanism that existed throughout much of U.S. tax history
-            
-            **4. Modern Additions**
-            - **NIIT (2013+)**: Net Investment Income Tax (3.8%) applies for high earners
-            - **Loss Carryforwards**: Capital losses from prior years offset future gains
-            
-            **Example (1975):**
-            - $100,000 capital gain
-            - 50% included → $50,000 taxable
-            - Progressive tax on $50,000 @ 70% top rate = ~$35,000
-            - Alternative max rate: 25% × $100,000 = $25,000
-            - **You pay: $25,000** (the lower amount)
+            *(Plus 3.8% NIIT if income exceeds $200k/$250k)*
+
+            **Key Historical Rates:**
+            - **1938 – 1978**: 50% included (Alternative Cap ~25%)
+            - **1979 – 1986**: 40% included (Alternative Cap ~20%)
+            - **1987 – Present**: Modern Brackets (15%/20% + NIIT)
             """)
     
     if "Smart" in tax_method_selection:
@@ -1402,9 +1566,11 @@ with tab_port:
     elif "Max" in tax_method_selection:
         tax_method = "historical_max_rate"
     else:
-        tax_method = "2024_fixed"
+        tax_method = "2025_fixed"
         
     state_tax_rate = st.number_input("State Tax Rate (%)", 0.0, 20.0, 0.0, 0.1, help="Flat state tax rate applied to all realized gains.") / 100.0
+    
+    use_std_deduction = st.checkbox("Apply Standard Deduction", value=True, help="Subtracts historical standard deduction from income before calculating tax.")
 
 with tab_margin:
     c1, c2 = st.columns(2)
@@ -1527,7 +1693,9 @@ else:
                             start_date, 
                             end_date, 
                             api_port_series=port_series, 
-                            rebalance_freq=rebalance
+                            rebalance_freq=rebalance,
+                            cashflow=cashflow,
+                            cashflow_freq=cashfreq
                         )
                         
                         # Update results
@@ -1574,11 +1742,63 @@ else:
 
         total_return = (port_series.iloc[-1] / start_val - 1) * 100
         
+        cagr = stats.get("cagr")
+        if cagr is None:
+            cagr = calculate_cagr(port_series)
+            
+        max_dd = stats.get("max_drawdown")
+        if max_dd is None:
+            max_dd = calculate_max_drawdown(port_series)
+            
         m1.metric("Final Balance", f"${port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{calculate_cagr(port_series)*100:.2f}%")
+        m2.metric("CAGR", f"{cagr:.2f}%")
         m3.metric("Sharpe", f"{stats.get('sharpe_ratio', 0):.2f}")
-        m4.metric("Max Drawdown", f"{calculate_max_drawdown(port_series)*100:.2f}%", delta_color="inverse")
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
         m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
+        
+        # --- New Metrics Row: Tax & Date Range ---
+        st.markdown("---")
+        tm1, tm2 = st.columns(2)
+        
+        # Calculate Total Tax
+        if not pl_by_year.empty:
+            # Federal Tax
+            fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
+                pl_by_year, 
+                other_income,
+                filing_status,
+                method=tax_method,
+                use_standard_deduction=use_std_deduction
+            )
+            
+            # State Tax
+            state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
+            loss_cf_state = 0.0
+            total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
+            
+            for y, pl in total_pl_series.sort_index().items():
+                net = pl - loss_cf_state
+                if net > 0:
+                    state_tax_series[y] = net * state_tax_rate
+                    loss_cf_state = 0.0
+                else:
+                    loss_cf_state = abs(net)
+            
+            total_tax_owed = fed_tax_series.sum() + state_tax_series.sum()
+            tm1.metric("Total Estimated Tax Owed", f"${total_tax_owed:,.2f}")
+        else:
+            tm1.metric("Total Estimated Tax Owed", "$0.00")
+            
+        # Date Range
+        if not trades_df.empty:
+            tax_start = trades_df["Date"].min().date()
+            tax_end = trades_df["Date"].max().date()
+            date_range_str = f"{tax_start} to {tax_end}"
+        else:
+            date_range_str = "No Taxable Events"
+            
+        tm2.metric("Tax Calculation Date Range", date_range_str)
+        st.markdown("---")
 
         res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "🔧 Debug"])
         
@@ -1643,7 +1863,13 @@ else:
             render_returns_analysis(port_series)
             
         with res_tab_rebal:
-            render_rebalancing_analysis(trades_df, pl_by_year, composition_df)
+            render_rebalancing_analysis(
+                trades_df, pl_by_year, composition_df,
+                tax_method, other_income, filing_status, state_tax_rate,
+                rebalance_freq=rebalance,
+                use_standard_deduction=use_std_deduction,
+                unrealized_pl_df=st.session_state.bt_results.get("unrealized_pl_df", pd.DataFrame())
+            )
         
         with res_tab_debug:
             st.subheader("Raw API Response")
