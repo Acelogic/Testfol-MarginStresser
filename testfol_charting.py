@@ -11,6 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 import testfol_api as api
 import shadow_backtest
+import tax_library
 import json
 import os
 
@@ -1066,6 +1067,74 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df):
         )
         st.plotly_chart(fig, use_container_width=True)
         
+        # Estimated Tax Owed Chart
+        if not pl_by_year.empty:
+            st.subheader(f"Estimated Federal Tax Owed ({tax_method_selection})")
+            
+            # Calculate Federal Tax using tax_library with Loss Carryforward
+            # We pass the entire Series of Realized P&L
+            federal_tax_owed = tax_library.calculate_tax_series_with_carryforward(
+                pl_by_year["Realized P&L"],
+                other_income,
+                filing_status,
+                method=tax_method
+            )
+            
+            # Calculate State Tax (Flat Rate on positive gains, simplified)
+            # State tax usually allows loss carryforwards too, but rules vary wildly.
+            # We'll apply the same carryforward logic implicitly by using the same net P&L logic?
+            # Actually, let's just apply the rate to the taxable gain calculated by the federal logic
+            # as a reasonable proxy for "Net Taxable Gain".
+            # Or simpler: Apply flat rate to positive realized P&L? No, that ignores carryforwards.
+            # Let's assume State Taxable Income ~= Federal Taxable Capital Gain.
+            
+            # We can't easily get the "Taxable Gain" from the library function as it returns Tax.
+            # But we can approximate: State Tax = Federal Taxable Gain * State Rate.
+            # Since we don't have Federal Taxable Gain exposed, let's just re-implement a simple
+            # carryforward loop here for State Tax or just accept the limitation.
+            
+            # BETTER: Just add State Tax to the library function?
+            # No, let's keep it simple. We will just calculate State Tax on the *same* taxable base
+            # implied by the federal calculation.
+            
+            # Actually, let's just use the federal_tax_owed series to infer where we had taxable gains?
+            # No, that depends on rates.
+            
+            # Let's just run a simple carryforward loop for State Tax here.
+            state_tax_owed = pd.Series(0.0, index=federal_tax_owed.index)
+            loss_cf = 0.0
+            for y, pl in pl_by_year["Realized P&L"].sort_index().items():
+                net = pl - loss_cf
+                if net > 0:
+                    state_tax_owed[y] = net * state_tax_rate
+                    loss_cf = 0.0
+                else:
+                    loss_cf = abs(net)
+            
+            total_tax_owed = federal_tax_owed + state_tax_owed
+            
+            if total_tax_owed.sum() > 0:
+                fig_tax = go.Figure(go.Bar(
+                    x=total_tax_owed.index,
+                    y=total_tax_owed,
+                    marker_color="#EF553B", # Red for taxes
+                    text=total_tax_owed.apply(lambda x: f"${x:,.0f}"),
+                    textposition="auto"
+                ))
+                fig_tax.update_layout(
+                    yaxis_title="Tax Owed ($)",
+                    xaxis_title="Year",
+                    template="plotly_dark",
+                    showlegend=False,
+                    height=400
+                )
+                st.plotly_chart(fig_tax, use_container_width=True)
+                
+                total_tax = total_tax_owed.sum()
+                st.metric("Total Estimated Tax Owed", f"${total_tax:,.2f}")
+            else:
+                st.info("No taxable gains realized.")
+        
         # Unrealized P&L Chart
         unrealized_pl_df = results.get("unrealized_pl_df", pd.DataFrame())
         if not unrealized_pl_df.empty:
@@ -1274,9 +1343,68 @@ with tab_port:
         st.markdown("##### Capital & Cashflow")
         start_val = num_input("Start Value ($)", "start_val", 10000.0, 1000.0, on_change=sync_equity)
         cashflow = num_input("Cashflow ($)", "cashflow", 0.0, 100.0)
-        cashfreq = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=2)
         invest_div = st.checkbox("Re-invest Dividends", value=True)
         rebalance = st.selectbox("Rebalance", ["Yearly", "Quarterly", "Monthly"], index=0)
+        cashfreq = st.selectbox("Cashflow Frequency", ["Monthly", "Quarterly", "Yearly"], index=0)
+        
+    st.divider()
+    
+    st.subheader("Tax Simulation")
+    c_tax1, c_tax2 = st.columns(2)
+    with c_tax1:
+        filing_status = st.selectbox("Filing Status", ["Single", "Married Filing Jointly", "Married Filing Separately", "Head of Household"])
+    with c_tax2:
+        other_income = st.number_input("Other Annual Income ($)", 0.0, 10000000.0, 100000.0, 5000.0, help="Used to determine tax bracket base.")
+        
+    tax_method_selection = st.radio(
+        "Tax Calculation Method",
+        ["2024 Fixed Brackets (Default)", "Historical Max Capital Gains Rate (Excel)", "Historical Smart Calculation (Recommended)"],
+        index=0,
+        help="Choose the method for calculating federal taxes on realized gains.\n\n- **2024 Fixed**: Uses current 0%/15%/20% brackets for all years.\n- **Historical Max**: Applies the historical maximum capital gains rate for each year.\n- **Historical Smart**: Uses historical inclusion rates (e.g. 50% exclusion) and ordinary brackets, capped by the alternative max rate."
+    )
+    
+    # Add detailed explanation for Historical Smart Calculation
+    if "Smart" in tax_method_selection:
+        with st.expander("ℹ️ How Historical Smart Calculation Works", expanded=False):
+            st.markdown("""
+            This method provides **the most historically accurate tax simulation** by combining three key elements:
+            
+            **1. Historical Inclusion Rates (Exclusions)**
+            - **1922-1933**: 100% included (12.5% cap rate)
+            - **1934-1937**: ~40% included (sliding scale based on holding period)
+            - **1938-1978**: 50% included (50% exclusion for long-term gains)
+            - **1979-1986**: 40% included (60% exclusion)
+            - **1987-Present**: 100% included (no exclusion)
+            
+            **2. Progressive Ordinary Income Tax Calculation**
+            - The included portion is taxed using the historical ordinary income brackets from your CSV file
+            - This reflects the marginal tax approach that applied when gains were partially excluded
+            
+            **3. Alternative Tax Cap (Maximum Rate)**
+            - The calculation compares the progressive tax (from step 2) against the historical maximum capital gains rate (from your Excel file)
+            - You pay the **lower** of these two amounts
+            - This mirrors the "Alternative Tax" mechanism that existed throughout much of U.S. tax history
+            
+            **4. Modern Additions**
+            - **NIIT (2013+)**: Net Investment Income Tax (3.8%) applies for high earners
+            - **Loss Carryforwards**: Capital losses from prior years offset future gains
+            
+            **Example (1975):**
+            - $100,000 capital gain
+            - 50% included → $50,000 taxable
+            - Progressive tax on $50,000 @ 70% top rate = ~$35,000
+            - Alternative max rate: 25% × $100,000 = $25,000
+            - **You pay: $25,000** (the lower amount)
+            """)
+    
+    if "Smart" in tax_method_selection:
+        tax_method = "historical_smart"
+    elif "Max" in tax_method_selection:
+        tax_method = "historical_max_rate"
+    else:
+        tax_method = "2024_fixed"
+        
+    state_tax_rate = st.number_input("State Tax Rate (%)", 0.0, 20.0, 0.0, 0.1, help="Flat state tax rate applied to all realized gains.") / 100.0
 
 with tab_margin:
     c1, c2 = st.columns(2)
