@@ -1134,7 +1134,7 @@ def render_portfolio_composition(composition_df):
         template="plotly_dark"
     )
     
-    fig.update_traces(hovertemplate="%{x:$,.0f}<extra></extra>")
+    fig.update_traces(hovertemplate="<b>%{fullData.name}</b><br>%{x:$,.0f}<extra></extra>")
     
     fig.update_layout(
         xaxis_title="Value ($)",
