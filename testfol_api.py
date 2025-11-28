@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import numpy as np
 
 API_URL = "https://testfol.io/api/backtest"
 
@@ -71,19 +72,23 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
     if draw_monthly > 0:
         # Identify month start/changes
         # We want to add draw at the first available date of each new month
-        # Shift month to find changes
-        months = port.index.month
-        month_changes = months != pd.Series(months, index=port.index).shift(1)
-        # The first date is the start, but do we draw immediately? 
-        # Original logic: `if draw_monthly and d.month != prev_m:`
-        # `prev_m` initialized to `port.index[0].month`.
-        # So it skips the first month's first day?
-        # Let's match original logic: `prev_m = port.index[0].month`. Loop starts at index 0.
-        # Iteration 0: d.month == prev_m. No draw.
-        # Iteration k: d.month != prev_m. Draw. Update prev_m.
-        # So we draw on month *changes*, not the first month.
-        month_changes.iloc[0] = False # Explicitly ignore first day
-        cashflows[month_changes] += draw_monthly
+        # Use numpy for speed and to avoid index alignment issues
+        months = port.index.month.values
+        # Compare with shifted version (roll)
+        # np.roll shifts elements. element at 0 moves to 1.
+        # We want to compare i with i-1.
+        # shifted = np.roll(months, 1)
+        # changes = months != shifted
+        # changes[0] = False # First element is boundary condition, ignore or handle.
+        # Original logic: prev_m initialized to first month. Loop starts at 0.
+        # So first day: month == prev_m. No draw.
+        # So changes[0] should be False.
+        
+        month_changes = months != np.roll(months, 1)
+        month_changes[0] = False # Explicitly ignore first day (start of sim)
+        
+        # cashflows is a Series. We can index it with a boolean array.
+        cashflows.values[month_changes] += draw_monthly
 
     # Add Tax Payments
     if tax_series is not None:

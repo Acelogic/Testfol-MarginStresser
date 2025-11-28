@@ -17,6 +17,22 @@ import os
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Caching Wrappers
+# ─────────────────────────────────────────────────────────────────────────────
+
+@st.cache_data(show_spinner="Fetching data from Testfol API...", ttl=3600)
+def cached_fetch_backtest(*args, **kwargs):
+    """Cached wrapper for api.fetch_backtest"""
+    return api.fetch_backtest(*args, **kwargs)
+
+@st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
+def cached_run_shadow_backtest(*args, **kwargs):
+    """Cached wrapper for shadow_backtest.run_shadow_backtest"""
+    return shadow_backtest.run_shadow_backtest(*args, **kwargs)
+
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Helper Functions
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -1271,7 +1287,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             unrealized_q.index = unrealized_q.index.to_period("Q")
             agg_df = agg_df.join(unrealized_q[["Unrealized P&L"]], how="outer").fillna(0.0)
             
-        x_axis = agg_df.index.astype(str)
+        x_axis = agg_df.index.to_timestamp()
         
     elif view_freq == "Monthly":
         # Group by Year-Month
@@ -1285,7 +1301,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             unrealized_m.index = unrealized_m.index.to_period("M")
             agg_df = agg_df.join(unrealized_m[["Unrealized P&L"]], how="outer").fillna(0.0)
             
-        x_axis = agg_df.index.astype(str)
+        x_axis = agg_df.index.to_timestamp()
         
     c1, c2 = st.columns([2, 1])
     
@@ -1848,16 +1864,48 @@ if total_weight != 100:
 else:
     if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True):
         st.divider()
-        with st.spinner("Crunching numbers..."):
+        with st.spinner("Fetching Backtest Data..."):
             try:
-                # Fetch backtest data
-                port_series, stats, extra_data = api.fetch_backtest(
-                    start_date, end_date, start_val,
-                    cashflow, cashfreq, 60,
-                    invest_div, rebalance, alloc_preview,
+                # 1. Fetch Standard Backtest (Total Return)
+                # Use cached wrapper
+                port_series, stats, extra_data = cached_fetch_backtest(
+                    start_date=start_date,
+                    end_date=end_date,
+                    start_val=start_val,
+                    cashflow=0, # Cashflow handled in shadow sim? Or here? 
+                    # Wait, shadow sim handles cashflow. API just gets price data basically if we ignore its stats.
+                    # Actually, API backtest is used for "Buy & Hold" comparison maybe?
+                    # Or just to get the price series?
+                    # The shadow backtest uses yfinance internally.
+                    # But we pass `api_port_series` to shadow backtest for "Hybrid Mode".
+                    # So we need this.
+                    cashfreq="Monthly",
+                    rolling=60, # Assuming 60 from original code
+                    invest_div=invest_div,
+                    rebalance=rebalance, # Corrected from rebalance_freq
+                    allocation=alloc_preview, # Corrected from allocation_table
+                    return_raw=False,
                     include_raw=True
                 )
                 
+                # 2. Run Shadow Backtest (Tax Lots & Realized Gains)
+                # Use cached wrapper
+                # Note: We pass the *result* of the API call (port_series) to the shadow backtest.
+                # This means if API call changes, shadow backtest inputs change, so it re-runs. Correct.
+                if not port_series.empty:
+                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs = cached_run_shadow_backtest(
+                        allocation=alloc_preview, # Mapping to existing variable
+                        start_val=start_val,
+                        start_date=start_date,
+                        end_date=end_date,
+                        api_port_series=port_series,
+                        rebalance_freq=rebalance, # Mapping to existing variable
+                        cashflow=cashflow,
+                        cashflow_freq=cashfreq
+                    )
+                else:
+                    st.error("API returned empty portfolio data.")
+                    st.stop()
                 
                 # Initialize results with API data
                 st.session_state.bt_results = {
@@ -1867,38 +1915,13 @@ else:
                     "raw_response": extra_data.get("raw_response", {}),
                     "wmaint": wmaint,
                     "start_val": start_val,
-                    # Placeholders for shadow backtest results
-                    "trades_df": pd.DataFrame(),
-                    "pl_by_year": pd.DataFrame(),
-                    "composition_df": pd.DataFrame()
+                    # Shadow Backtest Results
+                    "trades_df": trades_df,
+                    "pl_by_year": pl_by_year,
+                    "composition_df": composition_df,
+                    "unrealized_pl_df": unrealized_pl_df,
+                    "logs": logs
                 }
-
-                # Run Shadow Backtest for accurate P&L and Composition
-                with st.spinner("Running Shadow Backtest (Local Simulation)..."):
-                    try:
-                        start_date = port_series.index[0]
-                        end_date = port_series.index[-1]
-                        
-                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs = shadow_backtest.run_shadow_backtest(
-                            alloc_preview, 
-                            start_val, 
-                            start_date, 
-                            end_date, 
-                            api_port_series=port_series, 
-                            rebalance_freq=rebalance,
-                            cashflow=cashflow,
-                            cashflow_freq=cashfreq
-                        )
-                        
-                        # Update results
-                        st.session_state.bt_results["trades_df"] = trades_df
-                        st.session_state.bt_results["pl_by_year"] = pl_by_year
-                        st.session_state.bt_results["composition_df"] = composition_df
-                        st.session_state.bt_results["unrealized_pl_df"] = unrealized_pl_df
-                        st.session_state.bt_results["logs"] = logs
-                        
-                    except Exception as e:
-                        st.error(f"Shadow Backtest Failed: {e}")
                 
             except Exception as e:
                 st.error(f"Error running backtest: {e}")
