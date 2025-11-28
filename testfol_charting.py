@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import testfol_api as api
+import shadow_backtest
 import json
 import os
 
@@ -1022,7 +1023,7 @@ def render_portfolio_composition(composition_df):
         y="Year", 
         x="Value", 
         color="Ticker", 
-        title="Portfolio Value by Asset (Post-Rebalance)",
+        title="Portfolio Value by Asset (Pre-Rebalance)",
         text_auto=".2s",
         orientation='h',
         template="plotly_dark"
@@ -1346,36 +1347,48 @@ else:
                 port_series, stats, extra_data = api.fetch_backtest(
                     start_date, end_date, start_val,
                     cashflow, cashfreq, 60,
-                    invest_div, rebalance, alloc_preview
-                )
-                
-                # Process rebalancing data
-                trades_df, pl_by_year, composition_df = process_rebalancing_data(
-                    extra_data.get("rebalancing_events", []),
-                    port_series,
-                    alloc_preview
-                )
-                
-                # Also get raw response for debugging
-                raw_response = api.fetch_backtest(
-                    start_date, end_date, start_val,
-                    cashflow, cashfreq, 60,
                     invest_div, rebalance, alloc_preview,
-                    return_raw=True
+                    include_raw=True
                 )
                 
-                # Store in session state
+                
+                # Initialize results with API data
                 st.session_state.bt_results = {
                     "port_series": port_series,
                     "stats": stats,
                     "extra_data": extra_data,
-                    "trades_df": trades_df,
-                    "pl_by_year": pl_by_year,
-                    "composition_df": composition_df,
-                    "raw_response": raw_response,
-                    "wmaint": wmaint, # Need this for margin sim
-                    "start_val": start_val # Need this for metrics
+                    "raw_response": extra_data.get("raw_response", {}),
+                    "wmaint": wmaint,
+                    "start_val": start_val,
+                    # Placeholders for shadow backtest results
+                    "trades_df": pd.DataFrame(),
+                    "pl_by_year": pd.DataFrame(),
+                    "composition_df": pd.DataFrame()
                 }
+
+                # Run Shadow Backtest for accurate P&L and Composition
+                with st.spinner("Running Shadow Backtest (Local Simulation)..."):
+                    try:
+                        start_date = port_series.index[0]
+                        end_date = port_series.index[-1]
+                        
+                        trades_df, pl_by_year, composition_df, logs = shadow_backtest.run_shadow_backtest(
+                            alloc_preview, # Use alloc_preview which matches the keys
+                            start_val, 
+                            start_date, 
+                            end_date, 
+                            api_port_series=port_series, # Pass API series for hybrid mode
+                            rebalance_freq=rebalance
+                        )
+                        
+                        # Update results
+                        st.session_state.bt_results["trades_df"] = trades_df
+                        st.session_state.bt_results["pl_by_year"] = pl_by_year
+                        st.session_state.bt_results["composition_df"] = composition_df
+                        st.session_state.bt_results["logs"] = logs
+                        
+                    except Exception as e:
+                        st.error(f"Shadow Backtest Failed: {e}")
                 
             except Exception as e:
                 st.error(f"Error running backtest: {e}")
@@ -1392,6 +1405,7 @@ else:
         raw_response = results["raw_response"]
         wmaint = results["wmaint"]
         start_val = results["start_val"]
+        logs = results.get("logs", [])
         
         # Re-run margin sim (fast enough to run every time, or could cache too)
         loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
@@ -1417,6 +1431,16 @@ else:
         m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
 
         res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "🔧 Debug"])
+        
+        with res_tab_debug:
+            st.markdown("### Shadow Backtest Logs")
+            if logs:
+                st.code("\n".join(logs), language="text")
+            else:
+                st.info("No logs available.")
+                
+            st.markdown("### Raw API Response")
+            st.json(raw_response)
         
         with res_tab_chart:
             if chart_style == "Classic (Combined)":
