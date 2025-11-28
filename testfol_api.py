@@ -46,7 +46,13 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         stats = stats[0] if stats else {}
     ts, vals = resp["charts"]["history"]
     dates = pd.to_datetime(ts, unit="s")
-    return pd.Series(vals, index=dates, name="Portfolio"), stats
+    
+    extra_data = {
+        "rebalancing_events": resp.get("rebalancing_events", []),
+        "rebalancing_stats": resp.get("rebalancing_stats", [])
+    }
+    
+    return pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data
 
 def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct):
     """
