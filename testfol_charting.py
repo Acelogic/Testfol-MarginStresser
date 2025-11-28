@@ -796,6 +796,331 @@ def render_returns_analysis(port_series):
         )
 
 
+
+def process_rebalancing_data(rebal_events, port_series, allocation):
+    """
+    Process rebalancing events to calculate trade amounts and realized P&L.
+    """
+    if not rebal_events:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        
+    trades = []
+    composition = []
+    
+    # Initialize cost basis with initial allocation
+    # Assuming initial portfolio value is the first value in port_series
+    initial_val = port_series.iloc[0]
+    cost_basis = {}
+    
+    # Normalize allocation to 100% just in case
+    total_alloc = sum(allocation.values())
+    if total_alloc > 0:
+        for ticker, weight in allocation.items():
+            cost_basis[ticker] = initial_val * (weight / total_alloc)
+    
+    # Process each event group
+    for group in rebal_events:
+        tickers = group.get("tickers", [])
+        events = group.get("events", [])
+        
+        for event in events:
+            date_str = event[0]
+            date = pd.to_datetime(date_str)
+            
+            # Find portfolio value at rebalance date
+            # Use asof to find the closest value on or before the date
+            try:
+                port_val = port_series.asof(date)
+            except:
+                continue
+                
+            if pd.isna(port_val):
+                continue
+            
+            # Event structure: [date, drift_t1, drift_t2, ..., weight_t1, weight_t2, ...]
+            # Number of tickers = len(tickers)
+            # Drift indices: 1 to len(tickers)
+            # Weight indices: len(tickers)+1 to 2*len(tickers)
+            
+            n_tickers = len(tickers)
+            
+            for i, ticker in enumerate(tickers):
+                drift_idx = 1 + i
+                weight_idx = 1 + n_tickers + i
+                trade_idx = 1 + 2*n_tickers + i
+                
+                if trade_idx >= len(event):
+                    break
+                    
+                drift_pct = event[drift_idx]
+                # weight_pct = event[weight_idx] # Unreliable for leveraged assets
+                trade_pct = event[trade_idx] # This is the actual trade % executed
+                
+                # Calculate Pre-Rebalance Weight
+                # The API returns corrupted data for some assets (e.g. -388% weight), likely due to leverage/splits.
+                # We cannot reliably reconstruct the Pre-Rebalance state.
+                # Reverting to Target Weight (Post-Rebalance) to ensure sane visualization.
+                target_weight = allocation.get(ticker, 0)
+                
+                trade_amt = port_val * (trade_pct / 100)
+                
+                # Current Value (Post-Rebalance)
+                curr_val = port_val * (target_weight / 100)
+                
+                # Record composition snapshot
+                composition.append({
+                    "Date": date,
+                    "Ticker": ticker,
+                    "Value": curr_val
+                })
+                
+                # Update Cost Basis and Calculate P&L
+                realized_pl = 0
+                
+                if ticker not in cost_basis:
+                    cost_basis[ticker] = 0
+                    
+                if trade_amt > 0: # BUY
+                    cost_basis[ticker] += trade_amt
+                elif trade_amt < 0: # SELL
+                    sell_amt = -trade_amt
+                    if curr_val > 0:
+                        fraction_sold = sell_amt / curr_val
+                        # Cap fraction at 1.0
+                        fraction_sold = min(fraction_sold, 1.0)
+                        
+                        basis_reduction = cost_basis[ticker] * fraction_sold
+                        realized_pl = sell_amt - basis_reduction
+                        cost_basis[ticker] -= basis_reduction
+                    else:
+                        # Selling something with 0 value? Should not happen normally
+                        realized_pl = sell_amt
+                        
+                trades.append({
+                    "Date": date,
+                    "Ticker": ticker,
+                    "Trade Amount": trade_amt,
+                    "Realized P&L": realized_pl,
+                    "Price (Est)": curr_val # Just for reference
+                })
+                
+    trades_df = pd.DataFrame(trades)
+    composition_df = pd.DataFrame(composition)
+    
+    if trades_df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        
+    trades_df["Year"] = trades_df["Date"].dt.year
+    if not composition_df.empty:
+        composition_df["Year"] = composition_df["Date"].dt.year
+    
+    # Aggregate P&L by Year
+    pl_by_year = trades_df.groupby("Year")["Realized P&L"].sum().sort_index()
+    
+    return trades_df, pl_by_year.to_frame(name="Realized P&L"), composition_df
+
+def render_rebalance_sankey(trades_df):
+    if trades_df.empty:
+        return
+
+    st.subheader("Flow Visualization")
+    
+    # Year Selection
+    years = sorted(trades_df["Year"].unique(), reverse=True)
+    selected_year = st.selectbox("Select Year for Flow", years, index=0, key="rebal_year_selector")
+    
+    # Filter data
+    df_year = trades_df[trades_df["Year"] == selected_year]
+    
+    # Calculate Net Flow per ticker
+    net_flows = df_year.groupby("Ticker")["Trade Amount"].sum().sort_values()
+    
+    sources = net_flows[net_flows < 0].abs() # Sold
+    targets = net_flows[net_flows > 0]       # Bought
+    
+    if sources.empty and targets.empty:
+        st.info("No rebalancing flow for this year.")
+        return
+
+    # Create Nodes
+    # Sources -> Rebalancing -> Targets
+    
+    label_list = []
+    color_list = []
+    
+    # Source Nodes
+    source_indices = {}
+    for i, (ticker, val) in enumerate(sources.items()):
+        label_list.append(f"{ticker} (Sold)")
+        color_list.append("#EF553B") # Red
+        source_indices[ticker] = i
+        
+    # Center Node
+    center_idx = len(label_list)
+    label_list.append("Rebalancing")
+    color_list.append("#888888") # Grey
+    
+    # Target Nodes
+    target_indices = {}
+    for i, (ticker, val) in enumerate(targets.items()):
+        label_list.append(f"{ticker} (Bought)")
+        color_list.append("#00CC96") # Green
+        target_indices[ticker] = center_idx + 1 + i
+        
+    # Create Links
+    source_links = [] # Indices
+    target_links = [] # Indices
+    values = []
+    
+    # Links: Source -> Center
+    for ticker, val in sources.items():
+        source_links.append(source_indices[ticker])
+        target_links.append(center_idx)
+        values.append(val)
+        
+    # Links: Center -> Target
+    for ticker, val in targets.items():
+        source_links.append(center_idx)
+        target_links.append(target_indices[ticker])
+        values.append(val)
+        
+    fig = go.Figure(data=[go.Sankey(
+        node = dict(
+          pad = 15,
+          thickness = 20,
+          line = dict(color = "black", width = 0.5),
+          label = label_list,
+          color = color_list
+        ),
+        link = dict(
+          source = source_links,
+          target = target_links,
+          value = values,
+          color = ["rgba(239, 85, 59, 0.4)"] * len(sources) + ["rgba(0, 204, 150, 0.4)"] * len(targets)
+        ))])
+
+    fig.update_layout(title_text=f"Rebalancing Flow {selected_year}", font_size=12, height=500)
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_portfolio_composition(composition_df):
+    if composition_df.empty:
+        return
+
+    st.subheader("Portfolio Composition")
+    
+    # Create Stacked Bar Chart (Horizontal)
+    # Y: Year, X: Value, Color: Ticker
+    
+    # Pivot for easier plotting if needed, or just use px
+    import plotly.express as px
+    
+    # Ensure sorted by date
+    df_sorted = composition_df.sort_values(["Date", "Ticker"])
+    
+    fig = px.bar(
+        df_sorted, 
+        y="Year", 
+        x="Value", 
+        color="Ticker", 
+        title="Portfolio Value by Asset (Post-Rebalance)",
+        text_auto=".2s",
+        orientation='h',
+        template="plotly_dark"
+    )
+    
+    fig.update_layout(
+        xaxis_title="Value ($)",
+        yaxis_title="Year",
+        legend_title="Asset",
+        height=500,
+        yaxis=dict(type='category') # Treat year as category for better spacing
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df):
+    if trades_df.empty:
+        st.info("No rebalancing events found.")
+        return
+        
+    c1, c2 = st.columns([2, 1])
+    
+    with c1:
+        st.subheader("Realized P&L by Year")
+        
+        colors = ["#00CC96" if x >= 0 else "#EF553B" for x in pl_by_year["Realized P&L"]]
+        fig = go.Figure(go.Bar(
+            x=pl_by_year.index,
+            y=pl_by_year["Realized P&L"],
+            marker_color=colors,
+            text=pl_by_year["Realized P&L"].apply(lambda x: f"${x:,.0f}"),
+            textposition="auto"
+        ))
+        fig.update_layout(
+            yaxis_title="Realized P&L ($)",
+            xaxis_title="Year",
+            template="plotly_dark",
+            showlegend=False,
+            height=400
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+    with c2:
+        st.subheader("Total Turnover")
+        
+        # Total Bought/Sold per ticker
+        buys = trades_df[trades_df["Trade Amount"] > 0].groupby("Ticker")["Trade Amount"].sum()
+        sells = trades_df[trades_df["Trade Amount"] < 0].groupby("Ticker")["Trade Amount"].sum().abs()
+        
+        summary = pd.DataFrame({"Bought": buys, "Sold": sells}).fillna(0)
+        summary["Net Flow"] = summary["Bought"] - summary["Sold"]
+        summary = summary.sort_values("Bought", ascending=False)
+        
+        st.dataframe(
+            summary.style.format("${:,.0f}"),
+            use_container_width=True
+        )
+        
+    # Portfolio Composition
+    render_portfolio_composition(composition_df)
+        
+    # Sankey Diagram
+    render_rebalance_sankey(trades_df)
+    
+    with st.expander("Yearly Rebalancing Details (Net Flow)", expanded=True):
+        st.caption("Positive values indicate Net Buy, Negative values indicate Net Sell.")
+        
+        # Create Pivot Table: Year vs Ticker (Net Flow)
+        pivot_df = trades_df.pivot_table(
+            index="Year", 
+            columns="Ticker", 
+            values="Trade Amount", 
+            aggfunc="sum"
+        ).fillna(0)
+        
+        # Sort index descending (newest first)
+        pivot_df = pivot_df.sort_index(ascending=False)
+        
+        # Add Total column
+        pivot_df["Total Net Flow"] = pivot_df.sum(axis=1)
+        
+        st.dataframe(
+            pivot_df.style.format("${:,.0f}").map(color_return),
+            use_container_width=True
+        )
+        
+    with st.expander("Detailed Trade Log"):
+        display_trades = trades_df.copy()
+        display_trades["Date"] = display_trades["Date"].dt.date
+        display_trades = display_trades[["Date", "Ticker", "Trade Amount", "Realized P&L"]]
+        st.dataframe(
+            display_trades.style.format({
+                "Trade Amount": "${:,.2f}",
+                "Realized P&L": "${:,.2f}"
+            }).map(color_return, subset=["Trade Amount", "Realized P&L"]),
+            use_container_width=True
+        )
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Layout
 # ─────────────────────────────────────────────────────────────────────────────
@@ -871,7 +1196,9 @@ with st.sidebar:
             st.rerun()
     
     st.markdown("---")
+    st.markdown("---")
     run_placeholder = st.empty()
+    st.markdown("---")
     st.markdown("---")
     st.info("Configure your strategy, then click Run.")
 
@@ -1016,10 +1343,17 @@ else:
         with st.spinner("Crunching numbers..."):
             try:
                 # Fetch backtest data
-                port_series, stats = api.fetch_backtest(
+                port_series, stats, extra_data = api.fetch_backtest(
                     start_date, end_date, start_val,
                     cashflow, cashfreq, 60,
                     invest_div, rebalance, alloc_preview
+                )
+                
+                # Process rebalancing data
+                trades_df, pl_by_year, composition_df = process_rebalancing_data(
+                    extra_data.get("rebalancing_events", []),
+                    port_series,
+                    alloc_preview
                 )
                 
                 # Also get raw response for debugging
@@ -1030,94 +1364,127 @@ else:
                     return_raw=True
                 )
                 
-                loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
-                    port_series, st.session_state.starting_loan,
-                    rate_annual, draw_monthly, wmaint
-                )
-                
-                ohlc_data = resample_data(port_series, timeframe, method="ohlc")
-                equity_resampled = resample_data(equity_series, timeframe, method="last")
-                loan_resampled = resample_data(loan_series, timeframe, method="last")
-                usage_resampled = resample_data(usage_series, timeframe, method="max")
-                equity_pct_resampled = resample_data(equity_pct_series, timeframe, method="last")
-                
-                m1, m2, m3, m4, m5 = st.columns(5)
-                
-                total_return = (port_series.iloc[-1] / start_val - 1) * 100
-                
-                m1.metric("Final Balance", f"${port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-                m2.metric("CAGR", f"{calculate_cagr(port_series)*100:.2f}%")
-                m3.metric("Sharpe", f"{stats.get('sharpe_ratio', 0):.2f}")
-                m4.metric("Max Drawdown", f"{calculate_max_drawdown(port_series)*100:.2f}%", delta_color="inverse")
-                m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
-
-                res_tab_chart, res_tab_returns, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "🔧 Debug"])
-                
-                with res_tab_chart:
-                    if chart_style == "Classic (Combined)":
-                        # Default series options for classic view
-                        series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
-                        render_classic_chart(
-                            port_series, equity_series, loan_series, 
-                            equity_pct_series, usage_series, 
-                            series_opts, log_scale
-                        )
-                    elif chart_style == "Classic (Dashboard)":
-                        log_opts = {
-                            "portfolio": st.session_state.get("log_portfolio", False),
-                            "leverage": st.session_state.get("log_leverage", False),
-                            "margin": st.session_state.get("log_margin", False)
-                        }
-                        render_dashboard_view(
-                            port_series, equity_series, loan_series, 
-                            equity_pct_series, usage_series, 
-                            wmaint, stats, log_opts
-                        )
-                    else:
-                        render_candlestick_chart(
-                            ohlc_data, equity_resampled, loan_resampled, 
-                            usage_resampled, equity_pct_resampled, 
-                            timeframe, log_scale, show_range_slider, show_volume
-                        )
-                    
-                    with st.expander("Detailed Margin Statistics", expanded=True):
-                        c1, c2, c3 = st.columns(3)
-                        c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
-                        c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
-                        c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
-                        
-                        breaches = pd.DataFrame({
-                            "Date": usage_series[usage_series >= 1].index.date,
-                            "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
-                            "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2)
-                        })
-                        
-                        st.markdown("##### Margin Breaches")
-                        if breaches.empty:
-                            st.success("No margin calls triggered! 🎉")
-                        else:
-                            st.error(f"⚠️ {len(breaches)} margin call(s) triggered.")
-                            st.dataframe(breaches, use_container_width=True)
-                
-                with res_tab_returns:
-                    render_returns_analysis(port_series)
-                
-                with res_tab_debug:
-                    st.subheader("Raw API Response")
-                    st.caption("This shows the complete JSON response from the Testfol API backtest endpoint.")
-                    
-                    # Display raw response as JSON
-                    st.json(raw_response)
-                    
-                    # Also provide download button
-                    import json as json_lib
-                    json_str = json_lib.dumps(raw_response, indent=2)
-                    st.download_button(
-                        label="Download Raw Response",
-                        data=json_str,
-                        file_name="testfol_api_response.json",
-                        mime="application/json"
-                    )
+                # Store in session state
+                st.session_state.bt_results = {
+                    "port_series": port_series,
+                    "stats": stats,
+                    "extra_data": extra_data,
+                    "trades_df": trades_df,
+                    "pl_by_year": pl_by_year,
+                    "composition_df": composition_df,
+                    "raw_response": raw_response,
+                    "wmaint": wmaint, # Need this for margin sim
+                    "start_val": start_val # Need this for metrics
+                }
                 
             except Exception as e:
-                st.error(f"Error running backtest: {str(e)}")
+                st.error(f"Error running backtest: {e}")
+                st.stop()
+
+    # Check if we have results to display
+    if "bt_results" in st.session_state:
+        results = st.session_state.bt_results
+        port_series = results["port_series"]
+        stats = results["stats"]
+        trades_df = results["trades_df"]
+        pl_by_year = results["pl_by_year"]
+        composition_df = results.get("composition_df", pd.DataFrame())
+        raw_response = results["raw_response"]
+        wmaint = results["wmaint"]
+        start_val = results["start_val"]
+        
+        # Re-run margin sim (fast enough to run every time, or could cache too)
+        loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
+            port_series, st.session_state.starting_loan,
+            rate_annual, draw_monthly, wmaint
+        )
+                
+        
+        ohlc_data = resample_data(port_series, timeframe, method="ohlc")
+        equity_resampled = resample_data(equity_series, timeframe, method="last")
+        loan_resampled = resample_data(loan_series, timeframe, method="last")
+        usage_resampled = resample_data(usage_series, timeframe, method="max")
+        equity_pct_resampled = resample_data(equity_pct_series, timeframe, method="last")
+
+        m1, m2, m3, m4, m5 = st.columns(5)
+
+        total_return = (port_series.iloc[-1] / start_val - 1) * 100
+        
+        m1.metric("Final Balance", f"${port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("CAGR", f"{calculate_cagr(port_series)*100:.2f}%")
+        m3.metric("Sharpe", f"{stats.get('sharpe_ratio', 0):.2f}")
+        m4.metric("Max Drawdown", f"{calculate_max_drawdown(port_series)*100:.2f}%", delta_color="inverse")
+        m5.metric("Final Leverage", f"{(port_series.iloc[-1]/equity_series.iloc[-1]):.2f}x")
+
+        res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "🔧 Debug"])
+        
+        with res_tab_chart:
+            if chart_style == "Classic (Combined)":
+                # Default series options for classic view
+                series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
+                render_classic_chart(
+                    port_series, equity_series, loan_series, 
+                    equity_pct_series, usage_series, 
+                    series_opts, log_scale
+                )
+            elif chart_style == "Classic (Dashboard)":
+                log_opts = {
+                    "portfolio": st.session_state.get("log_portfolio", False),
+                    "leverage": st.session_state.get("log_leverage", False),
+                    "margin": st.session_state.get("log_margin", False)
+                }
+                render_dashboard_view(
+                    port_series, equity_series, loan_series, 
+                    equity_pct_series, usage_series, 
+                    st.session_state.get("maint_pct", 0.25), # Fallback if not in state
+                    stats, log_opts
+                )
+            else:
+                render_candlestick_chart(
+                    ohlc_data, equity_resampled, loan_resampled, 
+                    usage_resampled, equity_pct_resampled, 
+                    timeframe, log_scale, show_range_slider, show_volume
+                )
+            
+            with st.expander("Detailed Margin Statistics", expanded=True):
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
+                c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
+                c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
+                
+                breaches = pd.DataFrame({
+                    "Date": usage_series[usage_series >= 1].index.date,
+                    "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
+                    "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2)
+                })
+                
+                st.markdown("##### Margin Breaches")
+                if breaches.empty:
+                    st.success("No margin calls triggered! 🎉")
+                else:
+                    st.error(f"⚠️ {len(breaches)} margin call(s) triggered.")
+                    st.dataframe(breaches, use_container_width=True)
+        
+        with res_tab_returns:
+            render_returns_analysis(port_series)
+            
+        with res_tab_rebal:
+            render_rebalancing_analysis(trades_df, pl_by_year, composition_df)
+        
+        with res_tab_debug:
+            st.subheader("Raw API Response")
+            st.caption("This shows the complete JSON response from the Testfol API backtest endpoint.")
+            
+            # Display raw response as JSON
+            st.json(raw_response)
+            
+            # Also provide download button
+            import json as json_lib
+            json_str = json_lib.dumps(raw_response, indent=2)
+            st.download_button(
+                label="Download Raw Response",
+                data=json_str,
+                file_name="testfol_api_response.json",
+                mime="application/json"
+            )
+
