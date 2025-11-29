@@ -8,10 +8,12 @@
 import datetime as dt
 import pandas as pd
 import plotly.graph_objects as go
+import plotly.express as px
 import streamlit as st
 import testfol_api as api
 import shadow_backtest
 import tax_library
+import report_generator
 import json
 import os
 
@@ -1516,7 +1518,8 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             summary.style.format("${:,.0f}"),
             use_container_width=True
         )
-        
+
+
     # Portfolio Composition
     render_portfolio_composition(composition_df)
         
@@ -1578,6 +1581,103 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             }).map(color_return, subset=["Trade Amount", "Realized P&L"]),
             use_container_width=True
         )
+
+def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False):
+    """
+    Renders the Tax Analysis tab.
+    """
+    st.markdown("### 🏛️ Tax Analysis")
+    
+    # 1. Configuration Summary
+    with st.expander("Tax Configuration", expanded=False):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Filing Status", filing_status)
+        c2.metric("Other Income", f"${other_income:,.0f}")
+        c3.metric("State Tax Rate", f"{state_tax_rate*100:.1f}%")
+        
+        c4, c5, c6 = st.columns(3)
+        c4.metric("Tax Method", tax_method)
+        c5.metric("Std Deduction", "Yes" if use_standard_deduction else "No")
+        
+        payment_source = "External Cash" if pay_tax_cash else ("Margin Loan" if pay_tax_margin else "None (Gross)")
+        c6.metric("Payment Source", payment_source)
+
+    if pl_by_year.empty:
+        st.info("No realized P&L to analyze.")
+        return
+
+    # 2. Calculate Detailed Tax Series
+    # We recalculate here to show the breakdown (Fed vs State)
+    fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
+        pl_by_year, 
+        other_income,
+        filing_status,
+        method=tax_method,
+        use_standard_deduction=use_standard_deduction
+    )
+    
+    # State Tax
+    state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
+    loss_cf_state = 0.0
+    total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
+    
+    for y, pl in total_pl_series.sort_index().items():
+        net = pl - loss_cf_state
+        if net > 0:
+            state_tax_series[y] = net * state_tax_rate
+            loss_cf_state = 0.0
+        else:
+            loss_cf_state = abs(net)
+            
+    total_tax_series = fed_tax_series + state_tax_series
+    
+    # 3. Summary Metrics
+    total_tax_paid = total_tax_series.sum()
+    total_realized_pl = total_pl_series.sum()
+    effective_tax_rate = total_tax_paid / total_realized_pl if total_realized_pl > 0 else 0.0
+    
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Total Tax Liability", f"${total_tax_paid:,.0f}")
+    m2.metric("Total Realized Gains", f"${total_realized_pl:,.0f}")
+    m3.metric("Effective Tax Rate", f"{effective_tax_rate*100:.1f}%", help="Total Tax / Total Realized Gains")
+    
+    # 4. Tax Breakdown Chart
+    st.subheader("Tax Liability by Year")
+    
+    tax_df = pd.DataFrame({
+        "Federal Tax": fed_tax_series,
+        "State Tax": state_tax_series
+    })
+    
+    fig = px.bar(
+        tax_df, 
+        x=tax_df.index, 
+        y=["Federal Tax", "State Tax"],
+        title="Annual Tax Liability",
+        labels={"value": "Tax Amount ($)", "index": "Year", "variable": "Type"},
+        color_discrete_map={"Federal Tax": "#EF553B", "State Tax": "#636EFA"}
+    )
+    fig.update_layout(barmode='stack', hovermode="x unified")
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # 5. Detailed Table
+    st.subheader("Detailed Tax Log")
+    
+    # Combine P&L and Tax
+    detail_df = pl_by_year.copy()
+    if isinstance(detail_df, pd.Series):
+        detail_df = detail_df.to_frame(name="Realized P&L")
+        
+    detail_df["Federal Tax"] = fed_tax_series
+    detail_df["State Tax"] = state_tax_series
+    detail_df["Total Tax"] = total_tax_series
+    detail_df["Net P&L"] = detail_df["Realized P&L"] - detail_df["Total Tax"]
+    
+    # Format for display
+    st.dataframe(
+        detail_df.style.format("${:,.2f}"),
+        use_container_width=True
+    )
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Layout
@@ -2037,6 +2137,14 @@ else:
             eff_rate, eff_draw, wmaint,
             tax_series=sim_tax_series
         )
+        
+        # Update session state with latest margin results for reporting
+        st.session_state.bt_results.update({
+            "loan_series": loan_series,
+            "equity_series": equity_series,
+            "usage_series": usage_series,
+            "equity_pct_series": equity_pct_series
+        })
                 
         
         # Calculate Tax-Adjusted Equity Curve (Global for Tabs)
@@ -2512,12 +2620,22 @@ else:
                 unrealized_pl_df=st.session_state.bt_results.get("unrealized_pl_df", pd.DataFrame())
             )
         
-        with res_tab_debug:
-            st.subheader("Raw API Response")
-            st.caption("This shows the complete JSON response from the Testfol API backtest endpoint.")
+        with res_tab_tax:
+            render_tax_analysis(
+                pl_by_year, other_income, filing_status, state_tax_rate,
+                tax_method=tax_method,
+                use_standard_deduction=use_std_deduction,
+                unrealized_pl_df=st.session_state.bt_results.get("unrealized_pl_df", pd.DataFrame()),
+                trades_df=trades_df,
+                pay_tax_cash=pay_tax_cash,
+                pay_tax_margin=pay_tax_margin
+            )
             
-            # Display raw response as JSON
-            st.json(raw_response)
+        with res_tab_debug:
+            st.subheader("Debug Info")
+            st.json(logs)
+            st.write("Raw API Response (First 5 items):")
+            st.write(str(raw_response)[:1000])
             
             # Also provide download button
             import json as json_lib
@@ -2529,3 +2647,24 @@ else:
                 mime="application/json"
             )
 
+
+# -----------------------------------------------------------------------------
+# Report Generation (Sidebar)
+# -----------------------------------------------------------------------------
+if "bt_results" in st.session_state:
+    st.sidebar.markdown("---")
+    st.sidebar.subheader("📄 Report")
+    
+    # Generate report on the fly
+    try:
+        report_html = report_generator.generate_html_report(st.session_state.bt_results)
+        
+        st.sidebar.download_button(
+            label="Download HTML Report",
+            data=report_html,
+            file_name=f"testfol_report_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            mime="text/html",
+            help="Download a standalone HTML report with charts and stats."
+        )
+    except Exception as e:
+        st.sidebar.error(f"Report Gen Failed: {e}")
