@@ -58,7 +58,7 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     
     return pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data
 
-def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, tax_series=None):
+def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, tax_series=None, repayment_series=None):
     """
     Simulates margin loan and calculates equity/usage metrics.
     """
@@ -95,6 +95,11 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
         # Align tax_series to port.index, filling missing with 0
         aligned_taxes = tax_series.reindex(port.index, fill_value=0.0)
         cashflows += aligned_taxes
+        
+    # Add Repayments (Reduce Loan)
+    if repayment_series is not None:
+        aligned_repayments = repayment_series.reindex(port.index, fill_value=0.0)
+        cashflows -= aligned_repayments
         
     # 2. Calculate Loan Balance (Vectorized)
     # Recurrence: L_t = L_{t-1} * (1 + r) + C_t

@@ -7,6 +7,7 @@
 
 import datetime as dt
 import pandas as pd
+import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
@@ -118,7 +119,7 @@ def calculate_tax_adjusted_equity(base_equity_series, tax_payment_series, port_s
     if draw_monthly > 0:
         months = base_equity_series.index.month
         month_changes = months != pd.Series(months, index=base_equity_series.index).shift(1)
-        month_changes.iloc[0] = False
+        month_changes[0] = False
         draws[month_changes] = draw_monthly
         
     # c. Taxes
@@ -1809,6 +1810,7 @@ with tab_port:
         invest_div = st.checkbox("Re-invest Dividends", value=True)
         rebalance = st.selectbox("Rebalance", ["Yearly", "Quarterly", "Monthly"], index=0)
         cashfreq = st.selectbox("Cashflow Frequency", ["Monthly", "Quarterly", "Yearly"], index=0)
+        pay_down_margin = st.checkbox("Pay Down Margin", value=False, help="Use cashflow to reduce margin loan instead of buying shares.")
         
     st.divider()
     
@@ -1989,13 +1991,17 @@ else:
         st.divider()
         with st.spinner("Fetching Backtest Data..."):
             try:
+                # Logic for Pay Down Margin
+                bt_cashflow = 0.0 if pay_down_margin else cashflow
+                shadow_cashflow = 0.0 if pay_down_margin else cashflow
+
                 # 1. Fetch Standard Backtest (Total Return)
                 # Use cached wrapper
                 port_series, stats, extra_data = cached_fetch_backtest(
                     start_date=start_date,
                     end_date=end_date,
                     start_val=start_val,
-                    cashflow=0, # Cashflow handled in shadow sim? Or here? 
+                    cashflow=bt_cashflow, 
                     # Wait, shadow sim handles cashflow. API just gets price data basically if we ignore its stats.
                     # Actually, API backtest is used for "Buy & Hold" comparison maybe?
                     # Or just to get the price series?
@@ -2023,7 +2029,7 @@ else:
                         end_date=end_date,
                         api_port_series=port_series,
                         rebalance_freq=rebalance, # Mapping to existing variable
-                        cashflow=cashflow,
+                        cashflow=shadow_cashflow,
                         cashflow_freq=cashfreq
                     )
                 else:
@@ -2121,6 +2127,31 @@ else:
                         actual_date = port_series.index[idx]
                         tax_payment_series[actual_date] += amount
 
+        # Prepare Repayment Series (if Pay Down Margin is enabled)
+        repayment_series = None
+        if pay_down_margin and cashflow > 0:
+            # Construct series based on cashfreq
+            dates = port_series.index
+            repayment_vals = pd.Series(0.0, index=dates)
+            
+            if cashfreq == "Monthly":
+                 months = dates.month
+                 changes = months != np.roll(months, 1)
+                 changes[0] = False
+                 repayment_vals[changes] = cashflow
+            elif cashfreq == "Quarterly":
+                 quarters = dates.quarter
+                 changes = quarters != np.roll(quarters, 1)
+                 changes[0] = False
+                 repayment_vals[changes] = cashflow
+            elif cashfreq == "Yearly":
+                 years = dates.year
+                 changes = years != np.roll(years, 1)
+                 changes[0] = False
+                 repayment_vals[changes] = cashflow
+            
+            repayment_series = repayment_vals
+
         # Re-run margin sim (fast enough to run every time, or could cache too)
         # Only pass tax_series if the user opted to pay with margin
         sim_tax_series = tax_payment_series if pay_tax_margin else None
@@ -2135,7 +2166,8 @@ else:
         loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
             port_series, eff_loan,
             eff_rate, eff_draw, wmaint,
-            tax_series=sim_tax_series
+            tax_series=sim_tax_series,
+            repayment_series=repayment_series
         )
         
         # Update session state with latest margin results for reporting
@@ -2224,13 +2256,14 @@ else:
 
         total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
         
-        # Recalculate stats for the tax-adjusted series
-        cagr = calculate_cagr(tax_adj_port_series)
-        max_dd = calculate_max_drawdown(tax_adj_port_series)
-        sharpe = calculate_sharpe_ratio(tax_adj_port_series)
+        # Use Stats reported by Testfol API (TWR) to match user request
+        # This ensures consistency regardless of cashflow method (DCA vs Pay Down)
+        cagr = stats.get("cagr", 0.0)
+        max_dd = stats.get("max_drawdown", 0.0)
+        sharpe = stats.get("sharpe_ratio", 0.0)
             
         m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{cagr:.2f}%")
+        m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
         m3.metric("Sharpe", f"{sharpe:.2f}")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
         m5.metric("Final Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
