@@ -1680,11 +1680,43 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate,
         use_container_width=True
     )
 
+def render_documentation():
+    st.sidebar.title("📚 Documentation")
+    st.sidebar.markdown("---")
+    
+    docs_dir = "docs"
+    available_docs = {
+        "User Guide": "user_guide.md",
+        "Methodology": "methodology.md",
+        "FAQ & Troubleshooting": "faq.md"
+    }
+    
+    doc_selection = st.sidebar.radio("Select Topic", list(available_docs.keys()))
+    
+    doc_file = available_docs[doc_selection]
+    doc_path = os.path.join(docs_dir, doc_file)
+    
+    if os.path.exists(doc_path):
+        with open(doc_path, "r") as f:
+            content = f.read()
+        st.markdown(content)
+    else:
+        st.error(f"Documentation file not found: {doc_path}")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Main Layout
 # ─────────────────────────────────────────────────────────────────────────────
 
 st.set_page_config(page_title="Testfol Charting", layout="wide", page_icon="📈")
+
+# --- Navigation ---
+mode = st.sidebar.radio("Navigation", ["Simulator", "Documentation"], horizontal=True)
+
+if mode == "Documentation":
+    render_documentation()
+    st.stop()
+
 
 # Initialize reload counter
 if "reload_counter" not in st.session_state:
