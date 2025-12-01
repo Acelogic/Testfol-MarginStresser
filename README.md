@@ -46,6 +46,8 @@ We have moved our detailed documentation to the app itself and the `docs/` folde
 
 ## License
 
+This project is licensed under the GPL V2 License - see the [LICENSE](LICENSE) file for details.
+
 This tool interfaces with the Testfol API. Please review Testfol's terms of service for usage guidelines.
 
 ## Disclaimer
