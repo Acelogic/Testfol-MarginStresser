@@ -928,10 +928,18 @@ def render_returns_analysis(port_series):
         
         st.subheader("Monthly Returns")
 
-        # Barchart Light Mode (Refined): More visible Red/Green -> White -> More visible Green
+        # Barchart Light Mode (Refined): Deep Red/Green (Mat 600) -> White -> Deep Green (Mat 600)
         # Forced as the only view per user request
-        colorscale_heatmap = [[0, '#E57373'], [0.5, '#FFFFFF'], [1, '#81C784']]
+        colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
         template_heatmap = "plotly_white"
+        
+        # Dynamic Intensity Scaling
+        # Clamp color range to +/- 3 Standard Deviations per user request
+        # z_combined is in decimal (e.g., 0.05), so multiply by 100 for percentage
+        std_dev = np.nanstd(z_combined * 100)
+        intensity_scale = 3 * std_dev
+        zmin_val = -intensity_scale
+        zmax_val = intensity_scale
 
         # Heatmap - enhanced color coding with clamped range for better visibility of small returns
         fig = go.Figure(data=go.Heatmap(
@@ -940,7 +948,7 @@ def render_returns_analysis(port_series):
             y=y_labels,
             colorscale=colorscale_heatmap,
             zmid=0,
-            zmin=-20, zmax=20,  # Widen clamp slightly for gradient breathing room
+            zmin=zmin_val, zmax=zmax_val,  # Dynamic clamping based on volatility
             texttemplate="%{z:+.2f}%",  # Two decimal places
             hovertemplate="%{z:+.2f}%<extra></extra>",
             xgap=1, ygap=1,
