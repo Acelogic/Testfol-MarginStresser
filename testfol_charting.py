@@ -889,7 +889,6 @@ def render_returns_analysis(port_series):
         )
 
     with tab_monthly:
-        st.subheader("Monthly Returns")
         
         m_ret = monthly_ret.to_frame(name="Return")
         m_ret["Year"] = m_ret.index.year
@@ -906,16 +905,42 @@ def render_returns_analysis(port_series):
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
         
-        # Round values for cleaner display
-        z_rounded = (pivot.values * 100).round(2)
         
-        # Heatmap - simple color coding with whole numbers
+        # Round values for cleaner display
+        # Calculate Monthly Averages
+        monthly_avgs = pivot.mean()
+        
+        # Prepare data for Heatmap
+        # We want "Average" at the top. Since yaxis is reversed (Top->Bottom), 
+        # "Average" should be the first entry in z and y.
+        
+        z_data = pivot.values
+        z_avgs = monthly_avgs.values.reshape(1, -1)
+        
+        # Create Spacer Row of NaNs
+        z_spacer = np.full((1, pivot.shape[1]), np.nan)
+        
+        # Combine: Average -> Spacer -> Data
+        z_combined = np.concatenate([z_avgs, z_spacer, z_data], axis=0)
+        
+        z_rounded = (z_combined * 100).round(2)
+        y_labels = ["Average", ""] + list(pivot.index)
+        
+        st.subheader("Monthly Returns")
+
+        # Barchart Light Mode (Refined): More visible Red/Green -> White -> More visible Green
+        # Forced as the only view per user request
+        colorscale_heatmap = [[0, '#E57373'], [0.5, '#FFFFFF'], [1, '#81C784']]
+        template_heatmap = "plotly_white"
+
+        # Heatmap - enhanced color coding with clamped range for better visibility of small returns
         fig = go.Figure(data=go.Heatmap(
             z=z_rounded,
             x=month_names,
-            y=pivot.index,
-            colorscale=[[0, '#ef5350'], [0.5, '#424242'], [1, '#26a69a']],  # Red-Gray-Green
+            y=y_labels,
+            colorscale=colorscale_heatmap,
             zmid=0,
+            zmin=-20, zmax=20,  # Widen clamp slightly for gradient breathing room
             texttemplate="%{z:+.2f}%",  # Two decimal places
             hovertemplate="%{z:+.2f}%<extra></extra>",
             xgap=1, ygap=1,
@@ -924,8 +949,8 @@ def render_returns_analysis(port_series):
         
         fig.update_layout(
             title="Monthly Returns Heatmap (%)",
-            template="plotly_dark",
-            height=max(400, len(pivot) * 30),
+            template=template_heatmap,
+            height=max(400, len(y_labels) * 30),
             yaxis=dict(autorange="reversed", type="category")
         )
         fig.update_yaxes(autorange=True, type='category') 
