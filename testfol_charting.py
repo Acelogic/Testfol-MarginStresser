@@ -901,58 +901,179 @@ def render_returns_analysis(port_series):
         for i in range(1, 5):
             if i not in pivot.columns:
                 pivot[i] = float("nan")
-        pivot = pivot.sort_index(ascending=False)
+        pivot = pivot.sort_index(ascending=True)
         
         quarter_names = ["Q1", "Q2", "Q3", "Q4"]
+        
+        
+        from plotly.subplots import make_subplots
         
         # Calculate Quarterly Averages
         quarterly_avgs = pivot.mean()
         
-        # Prepare data for Heatmap
+        # Prepare data for Main Heatmap
         z_data = pivot.values
         z_avgs = quarterly_avgs.values.reshape(1, -1)
-        z_spacer = np.full((1, pivot.shape[1]), np.nan)
-        z_combined = np.concatenate([z_avgs, z_spacer, z_data], axis=0)
+        z_combined_main = np.concatenate([z_data, z_avgs], axis=0) # Data rows + Average row
         
-        z_rounded = (z_combined * 100).round(2)
-        y_labels = ["Average", ""] + list(pivot.index)
+        # Prepare data for Yearly Column
+        years = pivot.index
+        yearly_col = []
+        for y in years:
+            val = annual_ret[annual_ret.index.year == y]
+            if not val.empty:
+                yearly_col.append(val.values[0])
+            else:
+                yearly_col.append(float("nan"))
+        
+        # Yearly "Average" -> Calculate Mean (Standard Annual Average)
+        yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
+        
+        yearly_combined = yearly_col + [yearly_avg]
+        z_combined_yearly = np.array(yearly_combined).reshape(-1, 1)
+
+        # Labels - Convert to string to ensure consistent categorical axis behavior
+        y_labels = [str(y) for y in pivot.index] + ["Average"]
+        
+        # Combined flat array for Std Dev calculation to ensure consistent coloring
+        all_values = np.concatenate([z_combined_main.flatten(), z_combined_yearly.flatten()])
+        
+        z_rounded_main = (z_combined_main * 100).round(2)
+        z_rounded_yearly = (z_combined_yearly * 100).round(2)
         
         st.subheader("Quarterly Returns")
 
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
-        template_heatmap = "plotly_white"
         
-        std_dev = np.nanstd(z_combined * 100)
+        std_dev = np.nanstd(all_values * 100)
         intensity_scale = 3 * std_dev if not np.isnan(std_dev) else 10 # Default fallback
         zmin_val = -intensity_scale
         zmax_val = intensity_scale
+        
+        
+        # Build Custom Hovertext Arrays
+        # Main Heatmap Hovertext
+        hovertext_main = []
+        for i, row_label in enumerate(y_labels):
+            row_txt = []
+            for j, col_label in enumerate(quarter_names):
+                val = z_rounded_main[i][j]
+                if np.isnan(val):
+                    row_txt.append("")
+                else:
+                    if row_label == "Average":
+                        row_txt.append(f"Average<br>{col_label}: {val:+.2f}%")
+                    else:
+                        row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.2f}%")
+            hovertext_main.append(row_txt)
+            
+        # Yearly Heatmap Hovertext
+        hovertext_yearly = []
+        for i, row_label in enumerate(y_labels):
+            val = z_rounded_yearly[i][0]
+            if np.isnan(val):
+                hovertext_yearly.append([""])
+            else:
+                if row_label == "Average":
+                    hovertext_yearly.append([f"Average<br>Annual: {val:+.2f}%"])
+                else:
+                    hovertext_yearly.append([f"Year: {row_label}<br>Annual: {val:+.2f}%"])
+        
+        
+        # --- SPLIT Data for 2x2 Grid (Padding for Average Row) ---
+        # Top-Left: Main Data (Years x Quarters)
+        z_tl = pivot.values
+        hover_tl = hovertext_main[:-1] # All except last (Mean)
+        y_labels_top = [str(y) for y in pivot.index]
 
-        fig = go.Figure(data=go.Heatmap(
-            z=z_rounded,
-            x=quarter_names,
-            y=y_labels,
-            colorscale=colorscale_heatmap,
-            zmid=0,
-            zmin=zmin_val, zmax=zmax_val,
-            texttemplate="%{z:+.2f}%",
-            hovertemplate="%{z:+.2f}%<extra></extra>",
-            xgap=1, ygap=1,
-            showscale=False
-        ))
+        # Top-Right: Yearly Data (Years x 1)
+        z_tr = np.array(yearly_col).reshape(-1, 1)
+        hover_tr = hovertext_yearly[:-1]
+
+        # Bottom-Left: Average Row (1 x Quarters)
+        z_bl = quarterly_avgs.values.reshape(1, -1)
+        hover_bl = [hovertext_main[-1]] # Last row only
+        y_labels_bottom = ["Average"]
+
+        # Bottom-Right: Average Cell (1 x 1)
+        z_br = np.array([yearly_avg]).reshape(1, 1)
+        hover_br = [hovertext_yearly[-1]]
+        
+        # Rounding
+        z_tl = (z_tl * 100).round(2)
+        z_tr = (z_tr * 100).round(2)
+        z_bl = (z_bl * 100).round(2)
+        z_br = (z_br * 100).round(2)
+        
+        # Calculate Row Heights
+        n_years = len(pivot)
+        total_height_units = n_years + 1 # Years + 1 Avg Row
+        # We want the bottom row to be exactly 1/total_height_units relative to data
+        # But subplot row_heights are proportions.
+        # Let's say we want visual gap size.
+        # row_heights list sums to 1.
+        
+        # Create Subplots
+        fig = make_subplots(
+            rows=2, cols=2,
+            shared_xaxes=True, # Share X cols (Top/Bottom share Q1..Q4)
+            shared_yaxes=True, # Share Y rows (Left/Right share Years)
+            horizontal_spacing=0.03, 
+            vertical_spacing=0.02, # The GAP for Average Row
+            column_widths=[0.85, 0.15],
+            row_heights=[n_years/(n_years+1), 1/(n_years+1)],
+            subplot_titles=("", "", "", "")
+        )
+        
+        # 1. Top-Left: Main Data
+        fig.add_trace(go.Heatmap(
+            z=z_tl, x=quarter_names, y=y_labels_top,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tl,
+            xgap=1, ygap=1, showscale=False
+        ), row=1, col=1)
+        
+        # 2. Top-Right: Yearly Data
+        fig.add_trace(go.Heatmap(
+            z=z_tr, x=["Yearly"], y=y_labels_top,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tr,
+            xgap=1, ygap=1, showscale=False
+        ), row=1, col=2)
+        
+        # 3. Bottom-Left: Average Row
+        fig.add_trace(go.Heatmap(
+            z=z_bl, x=quarter_names, y=y_labels_bottom,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_bl,
+            xgap=1, ygap=1, showscale=False
+        ), row=2, col=1)
+
+        # 4. Bottom-Right: Average Cell
+        fig.add_trace(go.Heatmap(
+            z=z_br, x=["Yearly"], y=y_labels_bottom,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_br,
+            xgap=1, ygap=1, showscale=False
+        ), row=2, col=2)
         
         fig.update_layout(
             title="Quarterly Returns Heatmap (%)",
-            template=template_heatmap,
-            height=max(300, len(y_labels) * 40),
-            yaxis=dict(autorange="reversed", type="category")
+            template="plotly_white",
+            height=max(300, (n_years + 2) * 40), # Adjust height calculation
+            yaxis=dict(autorange="reversed", type="category"), # Y-axis for Top Row
+            yaxis3=dict(autorange="reversed", type="category"), # Y-axis for Bottom Row (Avg)
         )
-        fig.update_yaxes(autorange=True, type='category') 
+        # Hide Y-axis for right columns (Yearly)
+        fig.update_yaxes(showticklabels=False, col=2) 
+        # Ensure Bottom Row shows X-axis labels, Top row hides them (handled by shared_xxaxes=True)
+        
         st.plotly_chart(fig, use_container_width=True)
         
         st.subheader("Quarterly Returns List")
         df_quarterly_list = q_ret.copy()
         df_quarterly_list["Period"] = df_quarterly_list.index.to_period("Q").astype(str)
-        df_quarterly_list = df_quarterly_list[["Period", "Return"]].sort_index(ascending=False)
+        df_quarterly_list = df_quarterly_list[["Period", "Return"]].sort_index(ascending=True)
         
         st.dataframe(
             df_quarterly_list.style.format({"Return": "{:+.2%}"}).map(color_return, subset=["Return"]),
@@ -972,7 +1093,7 @@ def render_returns_analysis(port_series):
         for i in range(1, 13):
             if i not in pivot.columns:
                 pivot[i] = float("nan")
-        pivot = pivot.sort_index(ascending=False)
+        pivot = pivot.sort_index(ascending=True)
         
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", 
                        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -982,58 +1103,154 @@ def render_returns_analysis(port_series):
         # Calculate Monthly Averages
         monthly_avgs = pivot.mean()
         
-        # Prepare data for Heatmap
-        # We want "Average" at the top. Since yaxis is reversed (Top->Bottom), 
-        # "Average" should be the first entry in z and y.
-        
+        # Prepare data for Main Heatmap
         z_data = pivot.values
         z_avgs = monthly_avgs.values.reshape(1, -1)
+        z_combined_main = np.concatenate([z_data, z_avgs], axis=0) # Data rows + Average row
         
-        # Create Spacer Row of NaNs
-        z_spacer = np.full((1, pivot.shape[1]), np.nan)
+        # Prepare data for Yearly Column
+        years = pivot.index
+        yearly_col = []
+        for y in years:
+            val = annual_ret[annual_ret.index.year == y]
+            if not val.empty:
+                yearly_col.append(val.values[0])
+            else:
+                yearly_col.append(float("nan"))
         
-        # Combine: Average -> Spacer -> Data
-        z_combined = np.concatenate([z_avgs, z_spacer, z_data], axis=0)
+        # Yearly "Average" -> Calculate Mean (Standard Annual Average)
+        yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
+        yearly_combined = yearly_col + [yearly_avg]
+        z_combined_yearly = np.array(yearly_combined).reshape(-1, 1)
+
+        # Labels
+        y_labels = [str(y) for y in pivot.index] + ["Average"]
         
-        z_rounded = (z_combined * 100).round(2)
-        y_labels = ["Average", ""] + list(pivot.index)
+        # Combined flat array for Std Dev calculation
+        all_values = np.concatenate([z_combined_main.flatten(), z_combined_yearly.flatten()])
+        
+        z_rounded_main = (z_combined_main * 100).round(2)
+        z_rounded_yearly = (z_combined_yearly * 100).round(2)
         
         st.subheader("Monthly Returns")
 
-        # Barchart Light Mode (Refined): Deep Red/Green (Mat 600) -> White -> Deep Green (Mat 600)
-        # Forced as the only view per user request
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
-        template_heatmap = "plotly_white"
         
-        # Dynamic Intensity Scaling
-        # Clamp color range to +/- 3 Standard Deviations per user request
-        # z_combined is in decimal (e.g., 0.05), so multiply by 100 for percentage
-        std_dev = np.nanstd(z_combined * 100)
-        intensity_scale = 3 * std_dev
+        std_dev = np.nanstd(all_values * 100)
+        intensity_scale = 3 * std_dev if not np.isnan(std_dev) else 10
         zmin_val = -intensity_scale
         zmax_val = intensity_scale
 
-        # Heatmap - enhanced color coding with clamped range for better visibility of small returns
-        fig = go.Figure(data=go.Heatmap(
-            z=z_rounded,
-            x=month_names,
-            y=y_labels,
-            colorscale=colorscale_heatmap,
-            zmid=0,
-            zmin=zmin_val, zmax=zmax_val,  # Dynamic clamping based on volatility
-            texttemplate="%{z:+.2f}%",  # Two decimal places
-            hovertemplate="%{z:+.2f}%<extra></extra>",
-            xgap=1, ygap=1,
-            showscale=False  # Hide color scale for cleaner look
-        ))
+        
+        # Build Custom Hovertext Arrays
+        # Main Heatmap
+        hovertext_main = []
+        for i, row_label in enumerate(y_labels):
+            row_txt = []
+            for j, col_label in enumerate(month_names):
+                val = z_rounded_main[i][j]
+                if np.isnan(val):
+                    row_txt.append("")
+                else:
+                    if row_label == "Average":
+                        row_txt.append(f"Average<br>{col_label}: {val:+.2f}%")
+                    else:
+                        row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.2f}%")
+            hovertext_main.append(row_txt)
+
+        # Yearly Heatmap
+        hovertext_yearly = []
+        for i, row_label in enumerate(y_labels):
+            val = z_rounded_yearly[i][0]
+            if np.isnan(val):
+                hovertext_yearly.append([""])
+            else:
+                if row_label == "Average":
+                    hovertext_yearly.append([f"Average<br>Annual: {val:+.2f}%"])
+                else:
+                    hovertext_yearly.append([f"Year: {row_label}<br>Annual: {val:+.2f}%"])
+
+        
+        # --- SPLIT Data for 2x2 Grid (Padding for Average Row) ---
+        # Top-Left: Main Data (Years x Months)
+        z_tl = pivot.values
+        hover_tl = hovertext_main[:-1]
+        y_labels_top = [str(y) for y in pivot.index]
+        
+        # Top-Right: Yearly Data (Years x 1)
+        z_tr = np.array(yearly_col).reshape(-1, 1)
+        hover_tr = hovertext_yearly[:-1]
+        
+        # Bottom-Left: Average Row (1 x Months)
+        z_bl = monthly_avgs.values.reshape(1, -1)
+        hover_bl = [hovertext_main[-1]]
+        y_labels_bottom = ["Average"]
+        
+        # Bottom-Right: Average Cell (1 x 1)
+        z_br = np.array([yearly_avg]).reshape(1, 1)
+        hover_br = [hovertext_yearly[-1]]
+
+        # Rounding
+        z_tl = (z_tl * 100).round(2)
+        z_tr = (z_tr * 100).round(2)
+        z_bl = (z_bl * 100).round(2)
+        z_br = (z_br * 100).round(2)
+        
+        n_years = len(pivot)
+
+        # Create Subplots
+        fig = make_subplots(
+            rows=2, cols=2,
+            shared_xaxes=True,
+            shared_yaxes=True,
+            horizontal_spacing=0.03, # The gap
+            vertical_spacing=0.02, # The GAP for Average Row
+            column_widths=[0.85, 0.15],
+            row_heights=[n_years/(n_years+1), 1/(n_years+1)],
+            subplot_titles=("", "", "", "")
+        )
+
+        # 1. Top-Left: Main Data
+        fig.add_trace(go.Heatmap(
+            z=z_tl, x=month_names, y=y_labels_top,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tl,
+            xgap=1, ygap=1, showscale=False
+        ), row=1, col=1)
+        
+        # 2. Top-Right: Yearly Data
+        fig.add_trace(go.Heatmap(
+            z=z_tr, x=["Yearly"], y=y_labels_top,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tr,
+            xgap=1, ygap=1, showscale=False
+        ), row=1, col=2)
+        
+        # 3. Bottom-Left: Average Row
+        fig.add_trace(go.Heatmap(
+            z=z_bl, x=month_names, y=y_labels_bottom,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_bl,
+            xgap=1, ygap=1, showscale=False
+        ), row=2, col=1)
+
+        # 4. Bottom-Right: Average Cell
+        fig.add_trace(go.Heatmap(
+            z=z_br, x=["Yearly"], y=y_labels_bottom,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_br,
+            xgap=1, ygap=1, showscale=False
+        ), row=2, col=2)
         
         fig.update_layout(
             title="Monthly Returns Heatmap (%)",
-            template=template_heatmap,
-            height=max(400, len(y_labels) * 30),
-            yaxis=dict(autorange="reversed", type="category")
+            template="plotly_white",
+            height=max(400, (len(y_labels)+1) * 30),
+            yaxis=dict(autorange="reversed", type="category"),
+            yaxis3=dict(autorange="reversed", type="category"),
         )
-        fig.update_yaxes(autorange=True, type='category') 
+        fig.update_yaxes(showticklabels=False, col=2)
+        
         st.plotly_chart(fig, use_container_width=True)
         
         st.subheader("Monthly Returns List")
