@@ -2639,7 +2639,7 @@ else:
         # This ensures consistency regardless of cashflow method (DCA vs Pay Down)
         cagr = stats.get("cagr", 0.0)
         max_dd = stats.get("max_drawdown", 0.0)
-        sharpe = stats.get("sharpe_ratio", 0.0)
+        sharpe = stats.get("sharpe", 0.0)
             
         m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
