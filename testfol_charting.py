@@ -940,15 +940,20 @@ def render_returns_analysis(port_series):
         
         z_rounded_main = (z_combined_main * 100).round(2)
         z_rounded_yearly = (z_combined_yearly * 100).round(2)
-        
-        st.subheader("Quarterly Returns")
-
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
         
-        std_dev = np.nanstd(all_values * 100)
-        intensity_scale = 3 * std_dev if not np.isnan(std_dev) else 10 # Default fallback
-        zmin_val = -intensity_scale
-        zmax_val = intensity_scale
+        # Calculate Dynamic Intensity Scales (Independent for Main vs Yearly)
+        # Main Heatmap Scale (Quarterly Data) - Using 2x Std Dev for tighter range
+        std_dev_main = np.nanstd(z_combined_main * 100)
+        scale_main = 2 * std_dev_main if not np.isnan(std_dev_main) else 10
+        zmin_main = -scale_main
+        zmax_main = scale_main
+
+        # Yearly Heatmap Scale - Using 2x Std Dev
+        std_dev_yearly = np.nanstd(z_combined_yearly * 100)
+        scale_yearly = 2 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        zmin_yearly = -scale_yearly
+        zmax_yearly = scale_yearly
         
         
         # Build Custom Hovertext Arrays
@@ -1025,34 +1030,40 @@ def render_returns_analysis(port_series):
             subplot_titles=("", "", "", "")
         )
         
-        # 1. Top-Left: Main Data
+        # Yearly Heatmap Scale - Using 1.0x Std Dev for TIGHTEST range (max visibility)
+        std_dev_yearly = np.nanstd(z_combined_yearly * 100)
+        scale_yearly = 1.0 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        zmin_yearly = -scale_yearly
+        zmax_yearly = scale_yearly
+        
+        # 1. Top-Left: Main Data (Use zmin_main/zmax_main)
         fig.add_trace(go.Heatmap(
             z=z_tl, x=quarter_names, y=y_labels_top,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_main, zmax=zmax_main,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tl,
             xgap=1, ygap=1, showscale=False
         ), row=1, col=1)
         
-        # 2. Top-Right: Yearly Data
+        # 2. Top-Right: Yearly Data (Linear scale with tighter range)
         fig.add_trace(go.Heatmap(
             z=z_tr, x=["Yearly"], y=y_labels_top,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_yearly, zmax=zmax_yearly,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tr,
             xgap=1, ygap=1, showscale=False
         ), row=1, col=2)
         
-        # 3. Bottom-Left: Average Row
+        # 3. Bottom-Left: Average Row (Use zmin_main/zmax_main)
         fig.add_trace(go.Heatmap(
             z=z_bl, x=quarter_names, y=y_labels_bottom,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_main, zmax=zmax_main,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_bl,
             xgap=1, ygap=1, showscale=False
         ), row=2, col=1)
 
-        # 4. Bottom-Right: Average Cell
+        # 4. Bottom-Right: Average Cell (Linear scale with tighter range)
         fig.add_trace(go.Heatmap(
             z=z_br, x=["Yearly"], y=y_labels_bottom,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_yearly, zmax=zmax_yearly,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_br,
             xgap=1, ygap=1, showscale=False
         ), row=2, col=2)
@@ -1136,11 +1147,19 @@ def render_returns_analysis(port_series):
 
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
         
-        std_dev = np.nanstd(all_values * 100)
-        intensity_scale = 3 * std_dev if not np.isnan(std_dev) else 10
-        zmin_val = -intensity_scale
-        zmax_val = intensity_scale
+        # Calculate Dynamic Intensity Scales (Independent for Main vs Yearly)
+        # Main Heatmap Scale (Monthly Data) - Using 2x Std Dev for tighter range
+        std_dev_main = np.nanstd(z_combined_main * 100)
+        scale_main = 2 * std_dev_main if not np.isnan(std_dev_main) else 10
+        zmin_main = -scale_main
+        zmax_main = scale_main
 
+        # Yearly Heatmap Scale - Using 2x Std Dev
+        std_dev_yearly = np.nanstd(z_combined_yearly * 100)
+        scale_yearly = 2 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        zmin_yearly = -scale_yearly
+        zmax_yearly = scale_yearly
+        
         
         # Build Custom Hovertext Arrays
         # Main Heatmap
@@ -1210,18 +1229,24 @@ def render_returns_analysis(port_series):
             subplot_titles=("", "", "", "")
         )
 
+        # Yearly Heatmap Scale - Using 1.0x Std Dev for TIGHTEST range (max visibility)
+        std_dev_yearly = np.nanstd(z_combined_yearly * 100)
+        scale_yearly = 1.0 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        zmin_yearly = -scale_yearly
+        zmax_yearly = scale_yearly
+
         # 1. Top-Left: Main Data
         fig.add_trace(go.Heatmap(
             z=z_tl, x=month_names, y=y_labels_top,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_main, zmax=zmax_main,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tl,
             xgap=1, ygap=1, showscale=False
         ), row=1, col=1)
         
-        # 2. Top-Right: Yearly Data
+        # 2. Top-Right: Yearly Data (Linear scale with tighter range)
         fig.add_trace(go.Heatmap(
             z=z_tr, x=["Yearly"], y=y_labels_top,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_yearly, zmax=zmax_yearly,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_tr,
             xgap=1, ygap=1, showscale=False
         ), row=1, col=2)
@@ -1229,15 +1254,15 @@ def render_returns_analysis(port_series):
         # 3. Bottom-Left: Average Row
         fig.add_trace(go.Heatmap(
             z=z_bl, x=month_names, y=y_labels_bottom,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_main, zmax=zmax_main,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_bl,
             xgap=1, ygap=1, showscale=False
         ), row=2, col=1)
 
-        # 4. Bottom-Right: Average Cell
+        # 4. Bottom-Right: Average Cell (Linear scale with tighter range)
         fig.add_trace(go.Heatmap(
             z=z_br, x=["Yearly"], y=y_labels_bottom,
-            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_val, zmax=zmax_val,
+            colorscale=colorscale_heatmap, zmid=0, zmin=zmin_yearly, zmax=zmax_yearly,
             texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_br,
             xgap=1, ygap=1, showscale=False
         ), row=2, col=2)
