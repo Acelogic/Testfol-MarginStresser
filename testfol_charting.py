@@ -852,9 +852,10 @@ def color_return(val):
 def render_returns_analysis(port_series):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
+    quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
     annual_ret = port_series.resample("YE").last().pct_change().dropna()
     
-    tab_annual, tab_monthly, tab_daily = st.tabs(["📅 Annual", "🗓️ Monthly", "📊 Daily"])
+    tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
     
     with tab_annual:
         st.subheader("Annual Returns")
@@ -884,6 +885,77 @@ def render_returns_analysis(port_series):
         
         st.dataframe(
             df_annual.style.format({"Return": "{:+.2%}"}).map(color_return, subset=["Return"]),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    with tab_quarterly:
+        q_ret = quarterly_ret.to_frame(name="Return")
+        q_ret["Year"] = q_ret.index.year
+        q_ret["Quarter"] = q_ret.index.quarter
+        q_ret["Quarter Name"] = "Q" + q_ret["Quarter"].astype(str)
+        
+        pivot = q_ret.pivot(index="Year", columns="Quarter", values="Return")
+        
+        # Ensure all quarters exist
+        for i in range(1, 5):
+            if i not in pivot.columns:
+                pivot[i] = float("nan")
+        pivot = pivot.sort_index(ascending=False)
+        
+        quarter_names = ["Q1", "Q2", "Q3", "Q4"]
+        
+        # Calculate Quarterly Averages
+        quarterly_avgs = pivot.mean()
+        
+        # Prepare data for Heatmap
+        z_data = pivot.values
+        z_avgs = quarterly_avgs.values.reshape(1, -1)
+        z_spacer = np.full((1, pivot.shape[1]), np.nan)
+        z_combined = np.concatenate([z_avgs, z_spacer, z_data], axis=0)
+        
+        z_rounded = (z_combined * 100).round(2)
+        y_labels = ["Average", ""] + list(pivot.index)
+        
+        st.subheader("Quarterly Returns")
+
+        colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
+        template_heatmap = "plotly_white"
+        
+        std_dev = np.nanstd(z_combined * 100)
+        intensity_scale = 3 * std_dev if not np.isnan(std_dev) else 10 # Default fallback
+        zmin_val = -intensity_scale
+        zmax_val = intensity_scale
+
+        fig = go.Figure(data=go.Heatmap(
+            z=z_rounded,
+            x=quarter_names,
+            y=y_labels,
+            colorscale=colorscale_heatmap,
+            zmid=0,
+            zmin=zmin_val, zmax=zmax_val,
+            texttemplate="%{z:+.2f}%",
+            hovertemplate="%{z:+.2f}%<extra></extra>",
+            xgap=1, ygap=1,
+            showscale=False
+        ))
+        
+        fig.update_layout(
+            title="Quarterly Returns Heatmap (%)",
+            template=template_heatmap,
+            height=max(300, len(y_labels) * 40),
+            yaxis=dict(autorange="reversed", type="category")
+        )
+        fig.update_yaxes(autorange=True, type='category') 
+        st.plotly_chart(fig, use_container_width=True)
+        
+        st.subheader("Quarterly Returns List")
+        df_quarterly_list = q_ret.copy()
+        df_quarterly_list["Period"] = df_quarterly_list.index.to_period("Q").astype(str)
+        df_quarterly_list = df_quarterly_list[["Period", "Return"]].sort_index(ascending=False)
+        
+        st.dataframe(
+            df_quarterly_list.style.format({"Return": "{:+.2%}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
             hide_index=True
         )
