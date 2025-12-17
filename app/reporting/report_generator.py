@@ -61,7 +61,7 @@ def generate_html_report(results):
     
     # 3. Annual Returns Bar Chart
     # Calculate Annual Returns
-    yearly_resampled = port_series.resample("Y").last()
+    yearly_resampled = port_series.resample("YE").last()
     yearly_returns = yearly_resampled.pct_change().dropna()
     yearly_returns.index = yearly_returns.index.year
     
