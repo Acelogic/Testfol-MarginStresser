@@ -21,6 +21,12 @@ def render(results, config):
     # Extract Data from Results
     port_series = results["port_series"]
     stats = results["stats"]
+    
+    # Validation: Ensure we have a valid DatetimeIndex series
+    if port_series.empty or not isinstance(port_series.index, pd.DatetimeIndex):
+        st.error("No valid simulation data generated. Check inputs or API connection.")
+        return
+        
     trades_df = results["trades_df"]
     pl_by_year = results["pl_by_year"]
     composition_df = results.get("composition_df", pd.DataFrame())
@@ -55,6 +61,11 @@ def render(results, config):
     show_volume = config.get('show_volume', True)
     
     pm_enabled = config.get('pm_enabled', False)
+    
+    pm_enabled = config.get('pm_enabled', False)
+    
+    # Extract Benchmark (Standard Comparison or Custom)
+    bench_series = results.get("bench_series", None)
     
     logs = results.get("logs", [])
 
@@ -221,7 +232,23 @@ def render(results, config):
     usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
     equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
 
+    usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
+    equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
+
     m1, m2, m3, m4, m5 = st.columns(5)
+    
+    # Comparison Logic Debug info (Temporary or Permanent?)
+    if bench_series is not None:
+         # Calculate Difference
+         try:
+             # Ensure alignment
+             aligned_pf = tax_adj_port_series.reindex(bench_series.index, method='ffill')
+             diff_val = aligned_pf.iloc[-1] - bench_series.iloc[-1]
+             diff_pct = (diff_val / bench_series.iloc[-1]) * 100
+             
+             st.info(f"**Comparison Active**: Strategy vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
+         except:
+             pass
 
     total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
     
@@ -231,10 +258,48 @@ def render(results, config):
     max_dd = stats.get("max_drawdown", 0.0)
     sharpe = stats.get("sharpe", 0.0)
         
-    m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-    m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
-    m3.metric("Sharpe", f"{sharpe:.2f}")
-    m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+    # Retrieve Benchmark Stats
+    bench_stats = results.get("bench_stats")
+    
+    # Calculate Differences if Benchmark Exists
+    if bench_stats:
+        b_cagr = bench_stats.get("cagr", 0.0)
+        b_sharpe = bench_stats.get("sharpe", 0.0)
+        b_dd = bench_stats.get("max_drawdown", 0.0)
+        
+        diff_cagr = cagr - b_cagr
+        diff_sharpe = sharpe - b_sharpe
+        diff_dd = max_dd - b_dd
+        
+        # Display Metrics with Delta
+        # Note: API returns cagr as percentage (55.19), not decimal (0.5519)
+        cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
+        b_cagr_display = b_cagr * 100 if abs(b_cagr) <= 1 else b_cagr
+        diff_cagr_display = cagr_display - b_cagr_display
+        
+        m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs Bench")
+        m3.metric("Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs Bench")
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs Bench", delta_color="inverse")
+        
+        # Add Detailed Comparison Table below metrics
+        comp_data = {
+            "Metric": ["CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
+            "Strategy": [f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
+            "Benchmark": [f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{bench_stats.get('volatility',0)*100:.2f}%"],
+            "Diff": [f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
+        }
+        comp_df = pd.DataFrame(comp_data)
+        with st.expander("Detailed Strategy vs Benchmark Statistics", expanded=True):
+            st.dataframe(comp_df, hide_index=True, use_container_width=True)
+            
+    else:
+        # Standard View (No Benchmark)
+        m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
+        m3.metric("Sharpe", f"{sharpe:.2f}")
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+
     m5.metric("Final Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
     
     # --- New Metrics Row: Tax & Date Range ---
@@ -644,6 +709,13 @@ def render(results, config):
             file_name="testfol_api_response.json",
             mime="application/json"
         )
+    
+    # -------------------------------------------------------------------------
+    # 5. Charts
+    # -------------------------------------------------------------------------
+    st.divider()
+    # Chart Controls
+    col_c1, col_c2, col_c3 = st.columns([2, 1, 1])
     
     # -----------------------------------------------------------------------------
     # Report Generation (Sidebar)

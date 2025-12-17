@@ -18,18 +18,17 @@ def render():
         with c1:
             st.markdown("##### Allocation")
             _default = [
-                {"Ticker":"AAPL?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"MSFT?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"AVGO?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"AMZN?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"META?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"NVDA?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"GOOGL?L=2","Weight %":5,"Maint %":50},
-                {"Ticker":"TSLA?L=2","Weight %":5,"Maint %":50},
+                {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
+                {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
                 {"Ticker":"GLD","Weight %":20,"Maint %":25},
                 {"Ticker":"VXUS","Weight %":15,"Maint %":25},
                 {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
-                {"Ticker":"UGL","Weight %":20,"Maint %":50},
             ]
 
             if "alloc_df" not in st.session_state:
@@ -60,8 +59,46 @@ def render():
             config['start_val'] = utils.num_input("Start Value ($)", "start_val", 10000.0, 1000.0, on_change=utils.sync_equity)
             config['cashflow'] = utils.num_input("Cashflow ($)", "cashflow", 0.0, 100.0)
             config['invest_div'] = st.checkbox("Re-invest Dividends", value=True)
-            config['rebalance'] = st.selectbox("Rebalance", ["Yearly", "Quarterly", "Monthly"], index=0)
+            # Duplicate 'rebalance' removed
             config['cashfreq'] = st.selectbox("Cashflow Frequency", ["Monthly", "Quarterly", "Yearly"], index=0)
+            
+            st.divider()
+            st.markdown("##### Simulation Engine")
+            sim_engine = st.radio(
+                "Engine",
+                ["Standard (Testfol API)", "Custom Rebalance (Hybrid)"],
+                index=0,
+                help="**Standard**: Fast, runs on Testfol servers. Supports Monthly/Quarterly/Yearly rebalancing.\n**Custom (Hybrid)**: Runs locally using Testfol data. Allows flexible rebalancing dates."
+            )
+            config['sim_engine'] = "hybrid" if "Hybrid" in sim_engine else "standard"
+            
+            if config['sim_engine'] == "hybrid":
+                c_reb1, c_reb2 = st.columns(2)
+                with c_reb1:
+                    config['rebalance_month'] = st.selectbox("Rebalance Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%B"), index=0)
+                with c_reb2:
+                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 31, 15)
+                
+                config['rebalance'] = "Custom" # Override standard selector
+                
+                # Construct date string safely
+                try:
+                    rb_month = config['rebalance_month']
+                    rb_day = config['rebalance_day']
+                    # Use a fixed leap year (2024) to handle Feb 29 if needed, 
+                    # though standardizing on non-leap might be safer.
+                    # Just for display purposes:
+                    display_date = pd.to_datetime(f"2024-{rb_month}-{rb_day}").strftime('%B %d')
+                    st.info(f"Rebalancing annually on {display_date}.")
+                except:
+                    st.warning("Invalid Date Selection")
+                    
+                config['compare_standard'] = st.checkbox("Compare vs Standard Rebalance", value=True, help="Overlay the standard Testfol Yearly rebalancing strategy as a benchmark.")
+            else:
+                config['rebalance'] = st.selectbox("Rebalance", ["Yearly", "Quarterly", "Monthly"], index=0)
+                config['rebalance_month'] = 1
+                config['rebalance_day'] = 1
+                config['compare_standard'] = False
             config['pay_down_margin'] = st.checkbox("Pay Down Margin", value=False, help="Use cashflow to reduce margin loan instead of buying shares.")
             
         st.divider()
@@ -223,6 +260,19 @@ def render():
         with c2:
             config['show_range_slider'] = st.checkbox("Show Range Slider", value=True)
             config['show_volume'] = st.checkbox("Show Range/Volume Panel", value=True)
+            
+            st.markdown("---")
+            st.markdown("**Cache Management**")
+            if st.button("🗑️ Clear API Cache", help="Remove cached API responses to force fresh data fetches"):
+                import shutil
+                import os
+                cache_dir = "data/api_cache"
+                if os.path.exists(cache_dir):
+                    shutil.rmtree(cache_dir)
+                    os.makedirs(cache_dir, exist_ok=True)
+                    st.success("Cache cleared!")
+                else:
+                    st.info("Cache is already empty.")
             
     # --- Validation ---
     # Handle case where data editor is empty or hasn't populated yet (e.g., after loading)

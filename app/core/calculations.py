@@ -98,6 +98,36 @@ def process_rebalancing_data(rebal_events, port_series, allocation):
     # Initialize cost basis with initial allocation
     initial_val = port_series.iloc[0]
     cost_basis = {}
+
+def generate_stats(series):
+    """
+    Generates a dictionary of statistics for a given equity series.
+    Returns keys matching Testfol API: cagr, max_drawdown, sharpe, volatility.
+    """
+    if series.empty:
+        return {}
+        
+    cagr = calculate_cagr(series)
+    max_dd = calculate_max_drawdown(series)
+    sharpe = calculate_sharpe_ratio(series)
+    
+    # Volatility (Annualized Std Dev)
+    pct_change = series.pct_change().dropna()
+    volatility = pct_change.std() * (252 ** 0.5) if not pct_change.empty else 0.0
+    
+    return {
+        "cagr": cagr / 100, # API returns floats (0.15), helpers return % (15.0) -> Adjust? 
+        # API returns: cagr=0.155 (15.5%), max_drawdown=-55.0 etc.
+        # Helper: calculate_cagr returns 55.19 (percent).
+        # We need to normalize to match API format for results.py.
+        # results.py expects: cagr * 100 for display?
+        # results.py: m2.metric("CAGR", f"{cagr * 100:.2f}%" ...)
+        # So API returns DECIMAL. Helper returns PERCENT.
+        "cagr": cagr / 100,
+        "max_drawdown": max_dd, # Helper returns -55.14
+        "sharpe": sharpe,
+        "volatility": volatility
+    }
     
     # Normalize allocation to 100% just in case
     total_alloc = sum(allocation.values())
@@ -194,3 +224,40 @@ def process_rebalancing_data(rebal_events, port_series, allocation):
         pl_by_year = pd.Series(dtype=float)
         
     return trades_df, pl_by_year, composition_df
+
+def generate_stats(series):
+    """
+    Calculates portfolio statistics from a daily value series.
+    Returns a dict matching the structure of Testfol API 'stats'.
+    """
+    if series.empty:
+        return {}
+        
+    cagr = calculate_cagr(series)
+    mdd = calculate_max_drawdown(series)
+    sharpe = calculate_sharpe_ratio(series)
+    
+    # Calculate Standard Deviation (Annualized)
+    returns = series.pct_change().dropna()
+    std = returns.std() * (252 ** 0.5) * 100
+    
+    best_year = 0.0
+    worst_year = 0.0
+    
+    # Yearly Returns
+    if not series.empty:
+        yearly = series.resample('YE').last().pct_change()
+        if not yearly.empty:
+             best_year = yearly.max() * 100
+             worst_year = yearly.min() * 100
+    
+    return {
+        "cagr": cagr,
+        "std": std,
+        "sharpe": sharpe,
+        "max_drawdown": mdd,
+        "best_year": best_year,
+        "worst_year": worst_year,
+        "ulcer": 0.0, # Not vital for now
+        "sortino": 0.0 # Not vital for now
+    }

@@ -1,6 +1,11 @@
 import requests
 import pandas as pd
 import numpy as np
+import hashlib
+import json
+import os
+import pickle
+import time
 
 API_URL = "https://testfol.io/api/backtest"
 
@@ -16,11 +21,56 @@ def table_to_dicts(df: pd.DataFrame):
 def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
                    invest_div, rebalance, allocation, return_raw=False, include_raw=False):
     """
-    Fetches backtest data from testfol.io API.
+    Fetches backtest data from testfol.io API with universal disk caching.
     """
-    payload = {
+    # 1. Generate Cache Key
+    # We serialize the arguments to create a unique fingerprint
+    cache_payload = {
         "start_date": str(start_date),
-        "end_date":   str(end_date),
+        "end_date": str(end_date),
+        "start_val": start_val,
+        "cashflow": cashflow,
+        "cashfreq": cashfreq,
+        "rolling": rolling,
+        "invest_div": invest_div,
+        "rebalance": rebalance,
+        "allocation": allocation,
+        # return_raw/include_raw affect output format, so they must be part of key
+        "return_raw": return_raw,
+        "include_raw": include_raw 
+    }
+    
+    # Sort keys for deterministic JSON
+    payload_str = json.dumps(cache_payload, sort_keys=True, default=str)
+    req_hash = hashlib.md5(payload_str.encode("utf-8")).hexdigest()
+    
+    CACHE_DIR = "data/api_cache"
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(CACHE_DIR, f"{req_hash}.pkl")
+    
+    # 2. Try Cache Load
+    if os.path.exists(cache_path):
+        try:
+            with open(cache_path, "rb") as f:
+                # print(f"DEBUG: Cache HIT {req_hash}")
+                return pickle.load(f)
+        except Exception as e:
+            print(f"Cache read failed: {e}")
+            # Fall through to API fetch
+            pass
+            
+    # 3. API Request (Cache Miss)
+    # print(f"DEBUG: Cache MISS {req_hash} - Fetching from API")
+    
+    API_URL = "https://testfol.io/api/backtest"
+    
+    # Format dates as YYYY-MM-DD (API requirement)
+    start_str = pd.Timestamp(start_date).strftime('%Y-%m-%d')
+    end_str = pd.Timestamp(end_date).strftime('%Y-%m-%d')
+    
+    payload = {
+        "start_date": start_str,
+        "end_date":   end_str,
         "start_val":  start_val,
         "adj_inflation": False,
         "cashflow": cashflow,
@@ -36,15 +86,29 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         }]
     }
     r = requests.post(API_URL, json=payload, timeout=30)
+    
+    # Rate Limit Protection (Only on actual API call)
+    time.sleep(2.0) 
+    
     r.raise_for_status()
     resp = r.json()
     
     if return_raw:
-        return resp  # Return raw response for debugging
+        result = resp
+        # Save validation
+        with open(cache_path, "wb") as f:
+            pickle.dump(result, f)
+        return result
     
     stats = resp.get("stats", {})
     if isinstance(stats, list):
         stats = stats[0] if stats else {}
+    
+    # Validation: Ensure charts exist
+    if "charts" not in resp or "history" not in resp["charts"]:
+        # Don't cache bad/empty responses?
+         raise ValueError("Invalid API response: missing chart history")
+
     ts, vals = resp["charts"]["history"]
     dates = pd.to_datetime(ts, unit="s")
     
@@ -56,7 +120,17 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     if include_raw:
         extra_data["raw_response"] = resp
     
-    return pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data
+    # Construct Result Tuple
+    result = (pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data)
+    
+    # 4. Save to Cache
+    try:
+        with open(cache_path, "wb") as f:
+            pickle.dump(result, f)
+    except Exception as e:
+        print(f"Cache write failed: {e}")
+    
+    return result
 
 def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, tax_series=None, repayment_series=None):
     """

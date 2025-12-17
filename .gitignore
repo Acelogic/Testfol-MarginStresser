@@ -202,3 +202,11 @@ yarn-debug.log*
 yarn-error.log*
 .yarn/
 .pnp.*
+
+# Data Caches (Exclude from git)
+data/api_cache/
+data/price_cache/
+
+# User Data (Keep these tracked?)
+# data/*.csv
+# !data/Historical Income Tax Rates and Brackets, 1862-2025.csv

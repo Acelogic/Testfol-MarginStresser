@@ -18,14 +18,6 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
         "Equity %":        (equity_pct.index, equity_pct*100, {"dash":"dash"}, "%{y:.2f}%"),
     }
     
-    # Add Benchmark Trace if available
-    if bench_series is not None:
-         fig.add_scatter(
-             x=bench_series.index, y=bench_series, 
-             name="Benchmark (Gross)",
-             line=dict(color="#FFD700", width=2, dash="dash"),
-             hovertemplate="$%{y:,.0f}<extra></extra>"
-         )
     for key in series_opts:
         if key in TRACES:
             x, y, line, fmt = TRACES[key]
@@ -35,6 +27,17 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
                 hovertemplate=fmt+"<extra></extra>",
                 yaxis="y2" if "%" in key else "y"
             )
+            
+    # Add Benchmark Trace if available (Moved to end for Z-order visibility)
+    if bench_series is not None:
+         bench_name = bench_series.name if hasattr(bench_series, 'name') and bench_series.name else "Benchmark (Gross)"
+         fig.add_scatter(
+             x=bench_series.index, y=bench_series, 
+             name=bench_name,
+             line=dict(color="#FFD700", width=2, dash="dash"),
+             hovertemplate="$%{y:,.0f}<extra></extra>"
+         )
+         
     fig.add_hline(y=100, yref="y2", line={"dash":"dot"},
                   annotation_text="Margin call", annotation_position="top right")
     fig.update_layout(
@@ -92,14 +95,6 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
     leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
     leveraged_port = port * leveraged_mult
     
-    # Add Benchmark Trace if available
-    if bench_series is not None:
-         fig1.add_trace(go.Scatter(
-             x=bench_series.index, y=bench_series,
-             name="Benchmark (Gross)",
-             line=dict(color="#FFD700", width=2, dash="dash")
-         ))
-
     fig1.add_trace(go.Scatter(
         x=port.index, y=leveraged_port,
         name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
@@ -110,6 +105,15 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
         name="Margin Portfolio (Unleveraged)",
         line=dict(color="#1DB954", width=2)
     ))
+
+    # Add Benchmark Trace if available (Moved to end)
+    if bench_series is not None:
+         bench_name = bench_series.name if hasattr(bench_series, 'name') and bench_series.name else "Benchmark (Gross)"
+         fig1.add_trace(go.Scatter(
+             x=bench_series.index, y=bench_series,
+             name=bench_name,
+             line=dict(color="#FFD700", width=2, dash="dash")
+         ))
     
     fig1.update_layout(
         **dark_theme,
@@ -380,10 +384,11 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
 
     # Add Benchmark Trace if available
     if bench_series is not None:
+        bench_name = bench_series.name if hasattr(bench_series, 'name') and bench_series.name else "Benchmark (Gross)"
         fig.add_trace(go.Scatter(
             x=bench_series.index, y=bench_series,
             mode='lines',
-            name='Benchmark (Gross)',
+            name=bench_name,
             line=dict(color='#FFD700', width=2, dash='dash'),
             hovertemplate="Bench: $%{y:,.0f}<extra></extra>"
         ), row=1, col=1)
@@ -430,6 +435,17 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
         line=dict(color="#FF5252", width=1, dash="dot"),
         hovertemplate="Loan: $%{y:,.0f}<extra></extra>"
     ), row=1, col=1)
+
+    # Add Benchmark Trace if available (Moved to end)
+    if bench_series is not None:
+        bench_name = bench_series.name if hasattr(bench_series, 'name') and bench_series.name else "Benchmark (Gross)"
+        fig.add_trace(go.Scatter(
+            x=bench_series.index, y=bench_series,
+            mode='lines',
+            name=bench_name,
+            line=dict(color='#FFD700', width=2, dash='dash'),
+            hovertemplate="Bench: $%{y:,.0f}<extra></extra>"
+        ), row=1, col=1)
 
     # Volume bars (using range as proxy) - only if enabled
     if show_volume:
