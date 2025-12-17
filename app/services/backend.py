@@ -7,9 +7,9 @@ import numpy as np
 import datetime as dt
 
 # Import existing logic
-import testfol_api as api
-import shadow_backtest
-import tax_library
+from . import testfol_api as api
+from app.core import shadow_backtest
+from app.core import tax_library
 
 app = FastAPI()
 

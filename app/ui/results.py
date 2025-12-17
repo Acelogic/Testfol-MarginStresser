@@ -1,0 +1,667 @@
+import streamlit as st
+import plotly.graph_objects as go
+import pandas as pd
+import numpy as np
+from app.common import utils
+from app.core import calculations, tax_library
+from app.services import testfol_api as api
+from app.reporting import report_generator
+from app.ui import charts
+import datetime as dt
+
+def render(results, config):
+    """
+    Renders the results section, including metrics and charts.
+    
+    Args:
+        results (dict): The results dictionary from the backtest.
+        config (dict): The configuration dictionary used for the backtest.
+    """
+    
+    # Extract Data from Results
+    port_series = results["port_series"]
+    stats = results["stats"]
+    trades_df = results["trades_df"]
+    pl_by_year = results["pl_by_year"]
+    composition_df = results.get("composition_df", pd.DataFrame())
+    raw_response = results["raw_response"]
+    
+    # Extract Config Values
+    # We fallback to results defaults if necessary, but config should match
+    start_val = results["start_val"]
+    wmaint = results.get("wmaint", config.get('wmaint', 0.25))
+    
+    # Tax/Margin Config
+    pay_tax_margin = config.get('pay_tax_margin', False)
+    pay_tax_cash = config.get('pay_tax_cash', False)
+    other_income = config.get('other_income', 0.0)
+    filing_status = config.get('filing_status', 'Single')
+    tax_method = config.get('tax_method', '2025_fixed')
+    use_std_deduction = config.get('use_std_deduction', True)
+    state_tax_rate = config.get('state_tax_rate', 0.0)
+    
+    rate_annual = config.get('rate_annual', 8.0)
+    draw_monthly = config.get('draw_monthly', 0.0)
+    starting_loan = config.get('starting_loan', 0.0)
+    
+    cashflow = config.get('cashflow', 0.0)
+    cashfreq = config.get('cashfreq', "Monthly")
+    pay_down_margin = config.get('pay_down_margin', False)
+    
+    chart_style = config.get('chart_style', "Classic (Combined)")
+    timeframe = config.get('timeframe', "1M")
+    log_scale = config.get('log_scale', True)
+    show_range_slider = config.get('show_range_slider', True)
+    show_volume = config.get('show_volume', True)
+    
+    pm_enabled = config.get('pm_enabled', False)
+    
+    logs = results.get("logs", [])
+
+    # Calculate Tax Series for Margin Simulation (and Metrics)
+    tax_payment_series = None
+    total_tax_owed = 0.0
+    
+    if not pl_by_year.empty:
+        # Federal Tax
+        fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
+            pl_by_year, 
+            other_income,
+            filing_status,
+            method=tax_method,
+            use_standard_deduction=use_std_deduction
+        )
+        
+        # State Tax
+        state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
+        loss_cf_state = 0.0
+        total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
+        
+        for y, pl in total_pl_series.sort_index().items():
+            net = pl - loss_cf_state
+            if net > 0:
+                state_tax_series[y] = net * state_tax_rate
+                loss_cf_state = 0.0
+            else:
+                loss_cf_state = abs(net)
+        
+        total_tax_owed = fed_tax_series.sum() + state_tax_series.sum()
+        
+        # Create Payment Series (Unconditional for Sharpe Calc)
+        tax_payment_series = pd.Series(0.0, index=port_series.index)
+        annual_total_tax = fed_tax_series + state_tax_series
+        
+        for year, amount in annual_total_tax.items():
+            if amount > 0:
+                # Pay on April 15th of NEXT year
+                pay_date = pd.Timestamp(year + 1, 4, 15)
+                
+                # Find closest valid date in portfolio index
+                # We use searchsorted to find the insertion point
+                idx = port_series.index.searchsorted(pay_date)
+                
+                if idx < len(port_series.index):
+                    # Check if the date is reasonably close (e.g. within same month)
+                    # If backtest ends in 2024, we can't pay 2024 taxes in 2025
+                    actual_date = port_series.index[idx]
+                    tax_payment_series[actual_date] += amount
+
+    # Prepare Repayment Series (if Pay Down Margin is enabled)
+    repayment_series = None
+    if pay_down_margin and cashflow > 0:
+        # Construct series based on cashfreq
+        dates = port_series.index
+        repayment_vals = pd.Series(0.0, index=dates)
+        
+        if cashfreq == "Monthly":
+                months = dates.month
+                changes = months != np.roll(months, 1)
+                changes[0] = False
+                repayment_vals[changes] = cashflow
+        elif cashfreq == "Quarterly":
+                quarters = dates.quarter
+                changes = quarters != np.roll(quarters, 1)
+                changes[0] = False
+                repayment_vals[changes] = cashflow
+        elif cashfreq == "Yearly":
+                years = dates.year
+                changes = years != np.roll(years, 1)
+                changes[0] = False
+                repayment_vals[changes] = cashflow
+        
+        repayment_series = repayment_vals
+
+    # Re-run margin sim (fast enough to run every time, or could cache too)
+    # Only pass tax_series if the user opted to pay with margin
+    sim_tax_series = tax_payment_series if pay_tax_margin else None
+    
+    # If paying from cash (Cash Mode), we want to simulate a "Cash Only" scenario for the base
+    # This means NO loan, NO interest, NO draws added to loan.
+    # We will handle the draws (and taxes) by subtracting from equity in calculate_tax_adjusted_equity.
+    eff_loan = 0.0 if pay_tax_cash else starting_loan
+    eff_rate = 0.0 if pay_tax_cash else rate_annual
+    eff_draw = 0.0 if pay_tax_cash else draw_monthly
+    
+    loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
+        port_series, eff_loan,
+        eff_rate, eff_draw, wmaint,
+        tax_series=sim_tax_series,
+        repayment_series=repayment_series
+    )
+    
+    # Update session state with latest margin results for reporting
+    results.update({
+        "loan_series": loan_series,
+        "equity_series": equity_series,
+        "usage_series": usage_series,
+        "equity_pct_series": equity_pct_series
+    })
+            
+    
+    # Calculate Tax-Adjusted Equity Curve (Global for Tabs)
+    final_adj_series = pd.Series(dtype=float)
+    final_tax_series = pd.Series(dtype=float) # Series of ACTUAL taxes paid (scaled if needed)
+    
+    if not equity_series.empty:
+        if pay_tax_margin:
+            final_adj_series = equity_series
+            # If paying with margin, we pay the FULL tax amount (no scaling down)
+            final_tax_series = tax_payment_series if tax_payment_series is not None else pd.Series(0.0, index=equity_series.index)
+        elif pay_tax_cash:
+            if tax_payment_series is not None and tax_payment_series.sum() > 0:
+                final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
+                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                )
+            else:
+                # Even if no taxes, we still need to apply the monthly draw if it exists
+                # Re-use the function but with empty tax series
+                empty_tax = pd.Series(0.0, index=equity_series.index)
+                final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
+                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                )
+        else: # None (Gross)
+            final_adj_series = equity_series
+            final_tax_series = pd.Series(0.0, index=equity_series.index)
+    
+    # --- Prepare Tax-Adjusted Data for Charts ---
+    # We want the charts to reflect the "Net" reality.
+    # Portfolio Value = Net Equity + Loan
+    tax_adj_port_series = final_adj_series + loan_series
+    
+    # Retrieve benchmark if available
+    bench_series = results.get("bench_series")
+    bench_resampled = None
+    if bench_series is not None:
+            # Resample/Align benchmark to match portfolio index or timeframe
+            # Usually aligning to tax_adj_port_series
+            bench_aligned = bench_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
+            # Resample for charts handled below
+            bench_resampled = utils.resample_data(bench_aligned, timeframe, method="last")
+
+    # Recalculate Leverage Metrics based on Tax-Adjusted Equity
+    # Equity % = Net Equity / Portfolio Value
+    tax_adj_equity_pct_series = pd.Series(0.0, index=tax_adj_port_series.index)
+    valid_idx = tax_adj_port_series > 0
+    tax_adj_equity_pct_series[valid_idx] = final_adj_series[valid_idx] / tax_adj_port_series[valid_idx]
+    
+    tax_adj_usage_series = pd.Series(0.0, index=tax_adj_port_series.index)
+    if wmaint < 1.0: # Avoid division by zero if maint is 100%
+        # Match the logic in simulate_margin: Usage = Loan / (Port * (1 - Maint))
+        # This represents usage of the current collateral's loan value (Risk of Call)
+        max_loan_series = tax_adj_port_series * (1 - wmaint)
+        valid_loan = max_loan_series > 0
+        tax_adj_usage_series[valid_loan] = loan_series[valid_loan] / max_loan_series[valid_loan]
+    else:
+        pass
+    
+    
+    ohlc_data = utils.resample_data(tax_adj_port_series, timeframe, method="ohlc")
+    equity_resampled = utils.resample_data(final_adj_series, timeframe, method="last")
+    loan_resampled = utils.resample_data(loan_series, timeframe, method="last")
+    usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
+    equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
+
+    m1, m2, m3, m4, m5 = st.columns(5)
+
+    total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
+    
+    # Use Stats reported by Testfol API (TWR) to match user request
+    # This ensures consistency regardless of cashflow method (DCA vs Pay Down)
+    cagr = stats.get("cagr", 0.0)
+    max_dd = stats.get("max_drawdown", 0.0)
+    sharpe = stats.get("sharpe", 0.0)
+        
+    m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+    m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
+    m3.metric("Sharpe", f"{sharpe:.2f}")
+    m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+    m5.metric("Final Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+    
+    # --- New Metrics Row: Tax & Date Range ---
+    st.markdown("---")
+    tm1, tm2, tm3, tm4, tm5 = st.columns(5)
+    
+    # Calculate Total Tax (Already calculated above)
+    tax_label = "Total Tax Paid" if pay_tax_margin else "Total Estimated Tax Owed"
+    
+    if total_tax_owed > 0:
+        # If we have a scaled tax series, show THAT total
+        if not final_tax_series.empty and final_tax_series.sum() > 0:
+            display_tax = final_tax_series.sum()
+            tm1.metric(tax_label, f"${display_tax:,.2f}")
+        else:
+            tm1.metric(tax_label, f"${total_tax_owed:,.2f}")
+    else:
+        tm1.metric(tax_label, "$0.00")
+        
+    # Post-Tax Balance & CAGR & Sharpe
+    if start_val > 0 and not port_series.empty:
+        
+        # Use global final_adj_series calculated above
+        final_adj_val = final_adj_series.iloc[-1]
+        
+        tm2.metric("Post-Tax Net Equity", f"${final_adj_val:,.0f}")
+        
+        days = (final_adj_series.index[-1] - final_adj_series.index[0]).days
+        if days > 0:
+            years = days / 365.25
+            # CAGR based on the adjusted final value
+            tax_adj_cagr = (final_adj_val / start_val) ** (1 / years) - 1
+            tm3.metric("Net Equity CAGR", f"{tax_adj_cagr * 100:.2f}%")
+        else:
+            tm3.metric("Net Equity CAGR", "N/A")
+            
+        # Tax Adjusted Sharpe
+        tax_adj_sharpe = calculations.calculate_sharpe_ratio(final_adj_series)
+        tm4.metric("Net Equity Sharpe", f"{tax_adj_sharpe:.2f}")
+
+    else:
+            tm2.metric("Post-Tax Net Equity", "$0")
+            tm3.metric("Net Equity CAGR", "N/A")
+            tm4.metric("Net Equity Sharpe", "N/A")
+
+    # Date Range
+    if not trades_df.empty:
+        tax_start = trades_df["Date"].min().date()
+        tax_end = trades_df["Date"].max().date()
+        date_range_str = f"{tax_start} to {tax_end}"
+    else:
+        date_range_str = "No Taxable Events"
+        
+    # Custom HTML for wrapping
+    tm5.markdown(f"""
+        <div data-testid="stMetric" class="stMetric">
+            <label data-testid="stMetricLabel" class="css-1qg05tj e1i5pmia2">
+                <div class="css-1wivap2 e1i5pmia3">
+                    <span class="css-10trblm e1i5pmia4">Tax Calculation Date Range</span>
+                </div>
+            </label>
+            <div data-testid="stMetricValue" class="css-1xarl3l e1i5pmia1">
+                <div class="css-1wivap2 e1i5pmia3" style="white-space: normal; word-wrap: break-word; font-size: 1rem;">
+                    {date_range_str}
+                </div>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+            
+    st.markdown("---")
+
+    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔧 Debug"])
+    
+    with res_tab_tax:
+        st.markdown("### Annual Tax Impact Analysis")
+        
+        st.info("""
+        **Methodology: Tax-Adjusted Returns**
+        
+        *   **None (Gross):** No tax simulation. Showing raw pre-tax returns.
+        *   **Pay with Margin:** Taxes paid via loan. Assets preserved. Cost = Interest.
+        *   **Pay from Cash:** Taxes paid via asset sales. Assets reduced. Cost = Lost Compounding.
+        """)
+        
+        if (pay_tax_margin or pay_tax_cash) and not final_adj_series.empty and not pl_by_year.empty:
+            # Prepare Data
+            # 1. Annual Ending Balance (Tax Adjusted)
+            annual_bal = final_adj_series.resample("YE").last()
+            annual_bal.index = annual_bal.index.year
+            
+            # 2. Annual Tax Paid
+            # Use the SCALED tax series (final_tax_series)
+            annual_tax_aligned = final_tax_series.resample("YE").sum()
+            annual_tax_aligned.index = annual_tax_aligned.index.year
+            # Reindex to match balance just in case
+            annual_tax_aligned = annual_tax_aligned.reindex(annual_bal.index, fill_value=0.0)
+            
+            # 3. Annual Market Value (Gross Assets)
+            # Market Value = Net Equity + Loan
+            # This works for Margin (Loan increases)
+            # For Cash Mode, we need a "Gross" baseline that includes Draws but NO Taxes
+            if pay_tax_cash:
+                # Calculate Gross Cash Series (Draws YES, Taxes NO)
+                empty_tax = pd.Series(0.0, index=equity_series.index)
+                gross_cash_series, _ = calculations.calculate_tax_adjusted_equity(
+                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                )
+                market_val_series = gross_cash_series
+            else:
+                # Margin Mode: Market Value = Net Equity + Loan (which includes tax debt)
+                market_val_series = final_adj_series + loan_series
+            
+            annual_mv = market_val_series.resample("YE").last()
+            annual_mv.index = annual_mv.index.year
+            
+            # Create DataFrame
+            tax_impact_df = pd.DataFrame({
+                "Market Value": annual_mv,
+                "Ending Balance": annual_bal,
+                "Tax Paid": annual_tax_aligned
+            })
+            
+            # Plot Stacked Bar Chart with Market Value Line
+            fig_tax_impact = go.Figure()
+            
+            # Market Value as a Line (to compare against the stack)
+            # User requested NO Gross line in Cash Mode
+            if not pay_tax_cash:
+                fig_tax_impact.add_trace(go.Scatter(
+                    x=tax_impact_df.index,
+                    y=tax_impact_df["Market Value"],
+                    name="Market Value (Gross)",
+                    line=dict(color="#636EFA", width=3),
+                    mode='lines+markers',
+                    hovertemplate="%{y:$,.0f}<extra></extra>"
+                ))
+            
+            # Net Balance (Bar)
+            fig_tax_impact.add_trace(go.Bar(
+                x=tax_impact_df.index,
+                y=tax_impact_df["Ending Balance"],
+                name="Ending Balance (Net)",
+                marker_color="#00CC96", # Greenish
+                texttemplate="%{y:$.2s}",
+                textposition="auto",
+                hovertemplate="%{y:$,.0f}<extra></extra>"
+            ))
+            
+            # Tax Paid (Bar)
+            fig_tax_impact.add_trace(go.Bar(
+                x=tax_impact_df.index,
+                y=tax_impact_df["Tax Paid"],
+                name="Tax Paid",
+                marker_color="#EF553B", # Red
+                texttemplate="%{y:$.2s}",
+                textposition="auto",
+                hovertemplate="%{y:$,.0f}<extra></extra>"
+            ))
+            
+            fig_tax_impact.update_layout(
+                title="Annual Tax Impact: Net Balance + Tax vs. Market Value",
+                xaxis_title="Year",
+                yaxis_title="Amount ($)",
+                barmode='stack',
+                template="plotly_dark",
+                height=500,
+                hovermode="x unified",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+            )
+            
+            st.plotly_chart(fig_tax_impact, use_container_width=True)
+            
+            st.markdown("### Detailed Data")
+            st.dataframe(tax_impact_df.style.format("${:,.2f}"), use_container_width=True)
+        elif not (pay_tax_margin or pay_tax_cash):
+            st.warning("Tax Simulation is set to **None (Gross)**. Enable 'Pay from Cash' or 'Pay with Margin' to see tax impact analysis.")
+        else:
+            st.info("No data available for tax analysis.")
+
+    with res_tab_debug:
+        st.markdown("### Shadow Backtest Logs")
+        if logs:
+            st.code("\n".join(logs), language="text")
+        else:
+            st.info("No logs available.")
+            
+        st.markdown("### Raw API Response")
+        st.json(raw_response)
+    
+    with res_tab_chart:
+        if chart_style == "Classic (Combined)":
+            # Default series options for classic view
+            series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
+            charts.render_classic_chart(
+                tax_adj_port_series, final_adj_series, loan_series, 
+                tax_adj_equity_pct_series, tax_adj_usage_series, 
+                series_opts, log_scale,
+                bench_series=bench_resampled
+            )
+        elif chart_style == "Classic (Dashboard)":
+            log_opts = config.get('log_opts', {})
+            charts.render_dashboard_view(
+                tax_adj_port_series, final_adj_series, loan_series, 
+                tax_adj_equity_pct_series, tax_adj_usage_series, 
+                wmaint, stats, log_opts,
+                bench_series=bench_resampled
+            )
+        else: # Candlestick
+            charts.render_candlestick_chart(
+                ohlc_data, 
+                equity_resampled, 
+                loan_resampled,
+                usage_resampled,
+                equity_pct_resampled,
+                timeframe, 
+                log_scale,
+                show_range_slider=show_range_slider,
+                show_volume=show_volume,
+                bench_series=bench_resampled
+            )       
+        if pay_tax_cash:
+            with st.expander("Detailed Cash Statistics", expanded=True):
+                # Calculate Total Withdrawals
+                # 1. Taxes
+                total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
+                
+                # 2. Monthly Draws
+                total_draws = 0.0
+                if draw_monthly > 0 and not equity_series.empty:
+                    # Iterate dates to match exact logic
+                    prev_m = equity_series.index[0].month
+                    for d in equity_series.index[1:]:
+                        if d.month != prev_m:
+                            total_draws += draw_monthly
+                            prev_m = d.month
+                            
+                total_withdrawn = total_tax_paid + total_draws
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Final Balance", f"${final_adj_series.iloc[-1]:,.2f}")
+                c2.metric("Total Withdrawn", f"${total_withdrawn:,.2f}", help="Includes Taxes + Monthly Draws")
+                c3.metric("Total Tax Paid", f"${total_tax_paid:,.2f}")
+                
+                st.markdown("##### Withdrawal Breakdown")
+                w_df = pd.DataFrame({
+                    "Category": ["Monthly Draws", "Taxes Paid"],
+                    "Amount": [total_draws, total_tax_paid]
+                })
+                st.dataframe(w_df.style.format({"Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+
+        else:
+            with st.expander("Detailed Margin Statistics", expanded=True):
+                # --- Calculations ---
+                # Max Usage & Min Equity
+                if not usage_series.empty:
+                    max_usage_idx = usage_series.idxmax()
+                    max_usage_val = usage_series.max()
+                    equity_at_max = equity_series.loc[max_usage_idx]
+                    
+                    min_equity_idx = equity_series.idxmin()
+                    min_equity_val = equity_series.min()
+                    
+                    # Survival Metrics Calculations
+                    total_draws = 0.0
+                    if draw_monthly > 0 and not equity_series.empty:
+                        prev_m = equity_series.index[0].month
+                        for d in equity_series.index[1:]:
+                            if d.month != prev_m:
+                                total_draws += draw_monthly
+                                prev_m = d.month
+                    
+                    total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
+                    start_loan_val = loan_series.iloc[0]
+                    final_loan_val = loan_series.iloc[-1]
+                    total_interest = (final_loan_val - start_loan_val) - total_draws - total_tax_paid
+                    
+                    avg_usage = usage_series.mean()
+                    current_usage = usage_series.iloc[-1]
+                    safety_buffer = 1.0 - current_usage
+                    
+                    current_port_val = tax_adj_port_series.iloc[-1]
+                    max_loan_allowed = current_port_val * (1 - wmaint)
+                    avail_withdraw = max_loan_allowed - final_loan_val
+
+                    # --- Display Layout (Aligned 3-Column Grid) ---
+                    
+                    # Row 1: Current Status
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
+                    c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
+                    c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
+                    
+                    # Row 2: Extremes & Capacity (Aligned with Row 1)
+                    c4, c5, c6 = st.columns(3)
+                    c4.metric(
+                        "Lowest Equity", 
+                        f"${min_equity_val:,.2f}", 
+                        f"{min_equity_idx.date()}",
+                        delta_color="off" 
+                    )
+                    c5.metric(
+                        "Avail. to Withdraw", 
+                        f"${avail_withdraw:,.2f}", 
+                        help="Excess Borrowing Power"
+                    )
+                    c6.metric(
+                        "Max Margin Usage", 
+                        f"{max_usage_val*100:.2f}%", 
+                        f"{max_usage_idx.date()} (Eq: ${equity_at_max:,.0f})",
+                        delta_color="inverse" 
+                    )
+                    
+                    st.markdown("##### Survival Metrics")
+                    # Row 3: Long-term Health
+                    m1, m2, m3 = st.columns(3)
+                    m1.metric("Total Interest Paid", f"${total_interest:,.2f}", help="Cost of Leverage")
+                    m2.metric("Avg Margin Usage", f"{avg_usage*100:.2f}%", help="Chronic Stress Level")
+                    m3.metric("Safety Buffer", f"{safety_buffer*100:.2f}%", help="% Market Drop allowed before Margin Call")
+                    
+                    # Standard Margin Breaches (Usage >= 100%)
+                    breaches = pd.DataFrame({
+                        "Date": usage_series[usage_series >= 1].index.date,
+                        "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
+                        "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2),
+                        "Type": "Reg T Call"
+                    })
+                    
+                    # Portfolio Margin Breaches (Equity < $100k)
+                    if pm_enabled:
+                        pm_breach_mask = equity_series < 100000
+                        if pm_breach_mask.any():
+                            pm_breaches = pd.DataFrame({
+                                "Date": equity_series[pm_breach_mask].index.date,
+                                "Usage %": (usage_series[pm_breach_mask] * 100).round(2),
+                                "Equity %": (equity_pct_series[pm_breach_mask] * 100).round(2),
+                                "Type": "PM Min Equity < $100k"
+                            })
+                            # Combine and sort
+                            breaches = pd.concat([breaches, pm_breaches]).sort_values("Date")
+                    
+                    st.markdown("##### Margin & PM Breaches")
+                    if breaches.empty:
+                        st.success("No breaches triggered! 🎉")
+                    else:
+                        # Count types
+                        reg_t_count = len(breaches[breaches["Type"] == "Reg T Call"])
+                        pm_count = len(breaches[breaches["Type"] == "PM Min Equity < $100k"])
+                        
+                        msg_parts = []
+                        if reg_t_count > 0:
+                            msg_parts.append(f"{reg_t_count} Margin Call(s)")
+                        if pm_count > 0:
+                            msg_parts.append(f"{pm_count} PM Breach(es)")
+                        
+                        full_msg = f"⚠️ {' + '.join(msg_parts)} triggered."
+                        
+                        if reg_t_count > 0:
+                            st.error(full_msg) # Red for Margin Calls (Critical)
+                        else:
+                            st.warning(full_msg) # Yellow for PM Breaches (Warning)
+                            
+                        st.dataframe(breaches, use_container_width=True)
+    
+    with res_tab_returns:
+        if pay_tax_cash:
+            st.info("ℹ️ **Note:** Returns are **Net of Tax** (simulated as cash withdrawals).")
+        elif pay_tax_margin:
+            st.info("ℹ️ **Note:** Returns are **Gross** (taxes paid via margin loan).")
+        else:
+            st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
+
+        charts.render_returns_analysis(tax_adj_port_series)
+        
+    with res_tab_rebal:
+        st.warning("⚠️ **Note:** These trade calculations assume **Gross** portfolio values. Tax payments are NOT deducted by selling shares in this view (assumes taxes paid via margin or external cash).")
+        charts.render_rebalancing_analysis(
+            trades_df, pl_by_year, composition_df,
+            tax_method, other_income, filing_status, state_tax_rate,
+            rebalance_freq=config.get('rebalance', 'Yearly'),
+            use_standard_deduction=use_std_deduction,
+            unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame())
+        )
+    
+    with res_tab_tax:
+        charts.render_tax_analysis(
+            pl_by_year, other_income, filing_status, state_tax_rate,
+            tax_method=tax_method,
+            use_standard_deduction=use_std_deduction,
+            unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
+            trades_df=trades_df,
+            pay_tax_cash=pay_tax_cash,
+            pay_tax_margin=pay_tax_margin
+        )
+        
+    with res_tab_debug:
+        st.subheader("Debug Info")
+        st.json(logs)
+        st.write("Raw API Response (First 5 items):")
+        st.write(str(raw_response)[:1000])
+        
+        # Also provide download button
+        import json as json_lib
+        json_str = json_lib.dumps(raw_response, indent=2)
+        st.download_button(
+            label="Download Raw Response",
+            data=json_str,
+            file_name="testfol_api_response.json",
+            mime="application/json"
+        )
+    
+    # -----------------------------------------------------------------------------
+    # Report Generation (Sidebar)
+    # -----------------------------------------------------------------------------
+    if results:
+        st.sidebar.markdown("---")
+        st.sidebar.subheader("📄 Report")
+        
+        # Generate report on the fly
+        try:
+            report_html = report_generator.generate_html_report(results)
+            
+            st.sidebar.download_button(
+                label="Download HTML Report",
+                data=report_html,
+                file_name=f"testfol_report_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.html",
+                mime="text/html",
+                help="Download a standalone HTML report with charts and stats."
+            )
+        except Exception as e:
+            st.sidebar.error(f"Report Gen Failed: {e}")
