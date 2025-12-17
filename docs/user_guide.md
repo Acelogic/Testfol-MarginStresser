@@ -4,87 +4,62 @@ Welcome to the Testfol Margin Stresser User Guide. This application allows you t
 
 ## Getting Started
 
-### 1. Configure Global Parameters
+### 1. Configure Global Settings
 The sidebar contains all the configuration options for your backtest.
 
 **Date Range**
-- Select the start and end dates for your simulation.
-- Data is available from 1885-01-01 to the present.
+- **Start/End Date**: Select the simulation period.
+- **Range**: You can backtest as far back as **1884** (ticker data permitting).
 
-**Starting Conditions**
-- **Starting Value**: The initial value of your portfolio (e.g., $10,000).
-- **Rolling Window**: The period (in months) used for rolling analysis (default: 60 months).
+**Portfolios**
+- **Save/Load**: Use the "Saved Portfolios" section to persist your favorite strategies.
+- **Allocation**: Enter your portfolio weights in the table. Must sum to 100%.
 
-**Cash Flows**
-- **Cashflow**: Amount to contribute or withdraw periodically.
-- **Frequency**: Choose between Yearly, Quarterly, or Monthly.
+### 2. Strategy Configuration Tabs
 
-### 2. Set Rebalancing Options
-- **Re-invest Dividends**: Check this box to automatically reinvest dividends.
-- **Rebalance Frequency**: Choose how often the portfolio rebalances to its target allocation (Yearly, Quarterly, Monthly, or None).
+#### 💼 Portfolio
+- **Start Value**: Initial capital (e.g., $10,000).
+- **Cashflow**: Periodic contributions (positive) or withdrawals (negative).
+- **Tax Simulation**:
+    -   **Filing Status**: Affects tax brackets.
+    -   **Other Income**: Used to determine your base tax bracket.
+    -   **Calculation Method**:
+        -   *Historical Smart (Default)*: Uses actual historical inclusion rates and brackets.
+        -   *Historical Max*: Applies the top capital gains rate for that year.
+        -   *2025 Fixed*: Applies modern brackets to all years.
 
-### 3. Configure Margin Settings
-This is where you define how the margin simulation behaves.
+#### 🏦 Margin & Financing
+- **Tax Payment Mode**: 
+    -   *Pay from Cash*: Sell assets to pay taxes (reduces compounding).
+    -   *Pay with Margin*: Borrow to pay taxes (increases leverage).
+- **Loan Config**: Set starting loan or initial equity %.
+- **Rates**: Annual interest rate and default maintenance requirement.
 
-**Loan Parameters**
-- **Starting Loan**: The initial amount borrowed.
-- **Initial Equity %**: Alternatively, set the starting equity percentage.
-    - 100% = No leverage (0 loan).
-    - 50% = 2x leverage (Loan = Equity).
-- **Interest Rate**: The annual interest rate charged on the margin debt.
-- **Monthly Margin Draw**: Additional amount to borrow each month (increases debt).
+#### ⚙️ Settings
+- **Chart Style**: Switch between "Classic", "Dashboard", and "Candlestick".
+- **Log Scale**: Toggle logarithmic axis for long-term growth charts.
 
-### 4. Define Portfolio Allocation
-Enter your portfolio allocation in the table.
+---
 
-| Column | Description | Example |
-|--------|-------------|---------|
-| **Ticker** | Stock/ETF symbol | `AAPL`, `SPY`, `VTI` |
-| **Weight %** | Portfolio percentage | `50` |
-| **Maint %** | Maintenance requirement | `30` (30% equity required) |
+## Ticker Modifiers
+You can use Testfol modifiers in the ticker symbol to simulate leverage or expense ratios:
 
-**Ticker Modifiers**:
-You can use Testfol modifiers in the ticker symbol:
-- `?L=X`: Leverage multiplier (e.g., `SPY?L=2` for 2x S&P 500).
-- `?D=X`: Drag percentage (e.g., `SPY?D=0.5` for 0.5% drag).
+| Modifier | Description | Example |
+| :--- | :--- | :--- |
+| `?L=X` | **Leverage**: Multiplies daily returns by X. | `SPY?L=2` (2x S&P 500) |
+| `?D=X` | **Drag**: Applies annual drag (expense ratio). | `SPY?D=0.50` (0.50% fee) |
+| `_SIM` | **Simulation**: Often used to extend history. | `UPRO_SIM` (Simulated 3x SPY) |
 
-**Important**: The total "Weight %" must sum to exactly 100%.
+---
 
-### 5. Run Backtest
-Click the **"Run back-test"** button to start the simulation.
-
-## Visualization Modes
-
-### Combined Chart View
-A single interactive chart showing:
-- **Portfolio**: Total value of assets.
-- **Equity**: Net value (Assets - Loan).
-- **Loan**: Outstanding debt.
-- **Margin Usage %**: How close you are to a margin call (100% = Call).
-
-### Dashboard View
-A comprehensive dashboard with separate charts for:
-- **Portfolio Value**: Log/Linear scale options.
-- **Leverage**: Track current vs. target leverage.
-- **Margin Debt**: Visualize debt growth and interest costs.
-- **Gauges**: Real-time risk indicators.
-
-## Understanding Results
+## Understanding the Results
 
 ### Summary Metrics
 - **CAGR**: Compound Annual Growth Rate.
-- **Sharpe Ratio**: Risk-adjusted return.
-- **Max Drawdown**: Largest drop from peak.
-- **Final Leverage**: Ending leverage ratio.
+- **Sharpe Ratio**: Risk-adjusted return (using risk-free rate = 0).
+- **Max Drawdown**: Largest peak-to-trough decline.
+- **Post-Tax Net Equity**: The final liquidation value of your portfolio after paying all loan balances and taxes.
 
-### Margin Analysis
-- **Margin Call**: Occurs if "Margin Usage %" reaches 100%.
-- **Available Margin**: How much more you could borrow before hitting the limit.
-
-### Tax Analysis
-The "Tax Analysis" tab provides a breakdown of estimated taxes if you enabled tax simulation.
-- **Pay with Margin**: Taxes are paid by increasing the loan.
-- **Pay from Cash**: Taxes are paid by selling assets (reducing the portfolio).
-
-## Presets
-You can save and load portfolio configurations using the "Save preset" and "Load preset (JSON)" buttons in the sidebar. This is useful for comparing different strategies quickly.
+### Visualizations
+- **Combined Chart**: Shows Portfolio Value (Gross Assets), Net Equity, and Loan Balance on one chart to visualize leverage dynamics.
+- **Tax Analysis Tab**: Breakdown of annual tax liabilities and the difference between paying with cash vs. margin.
