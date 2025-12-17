@@ -2,42 +2,37 @@
 
 ## Common Issues
 
+### "Why is my Start Date capped?"
+**Cause**: The simulation start date is strictly limited by the **earliest common data availability** for the assets in your portfolio.
+- **Explanation**: The local tax engine requires real daily price data to track tax lots. It cannot use synthetic data for this purpose. Use the inception date of your *youngest* asset as a guide.
+- **Example**: If your portfolio contains an ETF that launched in 2002 (e.g., TLT), the entire simulation cannot start before that date.
+
 ### "Weights must sum to 100%"
 **Cause**: The total percentage in your allocation table does not equal exactly 100.00%.
-**Fix**: Adjust the "Weight %" column values. Ensure there are no empty rows with 0% weight that might be confusing the validator.
+**Fix**: Adjust the "Weight %" column. Ensure no hidden rows have residual values.
 
 ### API Request Failed
-**Cause**: The application could not connect to the Testfol API.
-**Fix**:
-1. Check your internet connection.
-2. Verify that the ticker symbols are correct and valid on Testfol.io.
-3. Try a shorter date range or fewer tickers to reduce request size.
-4. Wait a few moments and try again (the API might be temporarily busy).
+**Cause**: Connection issue or invalid ticker.
+**Fix**: Verify your internet connection and ticker symbols. Testfol.io must be reachable.
 
-### Charts Not Displaying
-**Cause**: The backtest didn't run or returned empty data.
-**Fix**:
-1. Ensure you clicked the **"Run back-test"** button.
-2. Check if the date range is valid for the selected tickers (e.g., requesting data for a stock before it IPO'd).
+---
 
-### "NameError: name 'px' is not defined"
-**Cause**: This was a known bug in older versions where a library import was missing.
-**Fix**: This has been resolved in the current version. If you see this, please report it as a regression.
-
-## Frequently Asked Questions
-
-### Can I simulate short selling?
-No, the current version only supports long positions with margin leverage. Short selling involves different margin mechanics not yet implemented.
+## Technical Questions
 
 ### How accurate is the tax simulation?
-It is an *estimation*. While it uses historical tax brackets and sophisticated lot tracking (HIFO/LIFO), it cannot account for your specific personal financial situation, deductions, or complex tax events like wash sales perfectly. **Do not use this for actual tax filing.**
+**Very High Fidelity (Mechanically)**.
+-   The app tracks every single share purchase and sale (FIFO Tax Lots).
+-   It distinguishes Short-Term vs. Long-Term gains daily.
+-   It applies historical tax brackets appropriate for each year.
 
-### Why is my "Net Equity" lower than I expected?
-If you enabled "Pay from Cash" for taxes, the simulation withdraws money from your portfolio to pay taxes annually. This reduces the compounding effect significantly over long periods compared to a tax-deferred or tax-free account.
+**However**, it is **NOT** a replacement for a CPA. It does not account for:
+-   Wash Sale rules (30-day window).
+-   Your personal deductions or credits.
+-   State-specific tax brackets (it uses a flat state rate).
 
-### What does "Maintenance %" mean?
-It is the minimum amount of equity (as a percentage of total market value) you must hold.
-- **25%**: Standard Reg T requirement for most stocks.
-- **30-50%**: Often required for volatile stocks or concentrated positions.
-- **100%**: Cash account (no margin allowed).
-If your equity drops below this percentage, a margin call occurs.
+### Can I simulate Short Selling?
+**No**. The simulator currently supports "Long Only" strategies with margin leverage. Short selling involves borrowing shares (not cash) and has different margin maintenance rules not yet modeled here.
+
+### Why is there a difference between "Pay with Margin" and "Pay from Cash"?
+-   **Pay with Margin**: You keep your assets compounding but accumulate a compounding debt liability. Good in bull markets.
+-   **Pay from Cash**: You stay debt-free (regarding taxes) but interrupt the compound growth of your assets by selling them. Often safer but lower total return.
