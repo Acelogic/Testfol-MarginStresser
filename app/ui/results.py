@@ -286,50 +286,57 @@ def render(results, config):
         diff_sharpe = sharpe - b_sharpe
         diff_dd = max_dd - b_dd
         
-        # Primary Metrics Row with benchmark deltas
-        m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs Bench")
-        m3.metric("Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs Bench")
+        # Primary Metrics Row - Gross (Pre-Tax) from API
+        m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs Bench", help="Pre-tax return from Testfol API")
+        m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs Bench", help="Pre-tax risk-adjusted return")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs Bench", delta_color="inverse")
         m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
         
         # Detailed Comparison Table
+        # Get benchmark ending value
+        bench_end_val = bench_series.iloc[-1] if bench_series is not None and not bench_series.empty else 0
+        strategy_end_val = tax_adj_port_series.iloc[-1]
+        
         comp_data = {
-            "Metric": ["CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
-            "Strategy": [f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
-            "Benchmark": [f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{bench_stats.get('volatility',0)*100:.2f}%"],
-            "Diff": [f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
+            "Metric": ["Ending Value", "CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
+            "Strategy": [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
+            "Benchmark": [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{bench_stats.get('volatility',0)*100:.2f}%"],
+            "Diff": [f"${strategy_end_val - bench_end_val:+,.0f}", f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
         }
         comp_df = pd.DataFrame(comp_data)
         with st.expander("📊 Detailed Strategy vs Benchmark Statistics", expanded=False):
             st.dataframe(comp_df, hide_index=True, use_container_width=True)
             
     else:
-        # Standard View (No Benchmark)
-        m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{cagr_display:.2f}%")
-        m3.metric("Sharpe", f"{sharpe:.2f}")
+        # Standard View (No Benchmark) - Gross (Pre-Tax) from API
+        m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m2.metric("Gross CAGR", f"{cagr_display:.2f}%", help="Pre-tax return from Testfol API")
+        m3.metric("Gross Sharpe", f"{sharpe:.2f}", help="Pre-tax risk-adjusted return")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
         m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
 
-    # --- Secondary Metrics in Expander ---
-    with st.expander("💰 Tax & Net Equity Details", expanded=False):
-        sm1, sm2, sm3, sm4 = st.columns(4)
-        
-        # Tax Info
-        tax_label = "Total Tax Paid" if pay_tax_margin else "Est. Tax Owed"
-        if total_tax_owed > 0:
-            if not final_tax_series.empty and final_tax_series.sum() > 0:
-                display_tax = final_tax_series.sum()
-            else:
-                display_tax = total_tax_owed
-        else:
-            display_tax = 0.0
+    # --- Secondary Metrics in Expander (Only show when tax simulation is active) ---
+    tax_sim_active = pay_tax_margin or pay_tax_cash
+    
+    if tax_sim_active:
+        with st.expander("💰 Tax & Post-Tax Details", expanded=False):
+            sm1, sm2, sm3, sm4 = st.columns(4)
             
-        sm1.metric(tax_label, f"${display_tax:,.0f}")
-        sm2.metric("Net Equity", f"${final_adj_val:,.0f}")
-        sm3.metric("Net CAGR", f"{tax_adj_cagr * 100:.2f}%")
-        sm4.metric("Net Sharpe", f"{tax_adj_sharpe:.2f}")
+            # Tax Info
+            tax_label = "Total Tax Paid" if pay_tax_margin else "Est. Tax Owed"
+            if total_tax_owed > 0:
+                if not final_tax_series.empty and final_tax_series.sum() > 0:
+                    display_tax = final_tax_series.sum()
+                else:
+                    display_tax = total_tax_owed
+            else:
+                display_tax = 0.0
+                
+            sm1.metric(tax_label, f"${display_tax:,.0f}")
+            sm2.metric("Post-Tax Equity", f"${final_adj_val:,.0f}", help="Equity after tax simulation")
+            sm3.metric("Post-Tax CAGR", f"{tax_adj_cagr * 100:.2f}%", help="Growth rate after taxes")
+            sm4.metric("Post-Tax Sharpe", f"{tax_adj_sharpe:.2f}", help="Risk-adjusted return after taxes")
             
     st.markdown("---")
 
@@ -637,10 +644,15 @@ def render(results, config):
         
     with res_tab_rebal:
         st.warning("⚠️ **Note:** These trade calculations assume **Gross** portfolio values. Tax payments are NOT deducted by selling shares in this view (assumes taxes paid via margin or external cash).")
+        # Determine correct frequency for chart view
+        rebal_freq_for_chart = config.get('rebalance', 'Yearly')
+        if rebal_freq_for_chart == "Custom":
+            rebal_freq_for_chart = config.get('custom_freq', 'Yearly')
+            
         charts.render_rebalancing_analysis(
             trades_df, pl_by_year, composition_df,
             tax_method, other_income, filing_status, state_tax_rate,
-            rebalance_freq=config.get('rebalance', 'Yearly'),
+            rebalance_freq=rebal_freq_for_chart,
             use_standard_deduction=use_std_deduction,
             unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame())
         )
