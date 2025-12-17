@@ -49,25 +49,67 @@ def parse_ticker(ticker):
         leverage = 1.0
         
     # Handle Synthetic Tickers Mapping
-    # Map SIM tickers to their real counterparts for yfinance
+    # Map SIM/TR tickers to their real counterparts for yfinance
     mapping = {
-        "QQQSIM": "QQQ", "QQQTR": "QQQ",
+        # Cash/Bills
+        "TBILL": "BIL", "CASHX": "BIL", "EFFRX": "BIL",
+        "ZEROX": "BIL",  # 0% return placeholder
+        
+        # S&P 500 / Large Cap
         "SPYSIM": "SPY", "SPYTR": "SPY",
-        "DIA_SIM": "DIA",
-        "TBILL": "BIL", "CASHX": "BIL",
-        "GLDSIM": "GLD", "GOLDX": "GLD",
-        "TLTSIM": "TLT", "TLTTR": "TLT",
-        "ZROZSIM": "ZROZ", "ZROZX": "ZROZ",
-        "VXUSSIM": "VXUS", "VXUSX": "VXUS",
+        "VOOSIM": "VOO",
+        "VTVSIM": "VTV",  # US Large Cap Value
+        "VUGSIM": "VUG",  # US Large Cap Growth
+        
+        # Mid Cap
+        "VOSIM": "VO",    # US Mid Cap
+        "VOESIM": "VOE",  # US Mid Cap Value
+        "VOTSIM": "VOT",  # US Mid Cap Growth
+        
+        # Small/Micro Cap
+        "VBSIM": "VB",    # US Small Cap
+        "VBRSIM": "VBR",  # US Small Cap Value
+        "VBKSIM": "VBK",  # US Small Cap Growth
+        "IWCSIM": "IWC",  # US Micro Cap
+        
+        # Total Market
         "VTISIM": "VTI", "VTITR": "VTI",
         "VTSIM": "VT",
-        "DBMFSIM": "DBMF", "DBMFX": "DBMF",
-        "GSGSIM": "GSG", "GSGTR": "GSG",
+        "QQQSIM": "QQQ", "QQQTR": "QQQ",
+        
+        # International
+        "VXUSSIM": "VXUS", "VXUSX": "VXUS",
+        
+        # Bonds
+        "TLTSIM": "TLT", "TLTTR": "TLT",
+        "ZROZSIM": "ZROZ", "ZROZX": "ZROZ",
         "IEFSIM": "IEF", "IEFTR": "IEF",
         "IEISIM": "IEI", "IEITR": "IEI",
         "SHYSIM": "SHY", "SHYTR": "SHY",
+        "BNDSIM": "BND",
+        
+        # Metals
+        "GLDSIM": "GLD", "GOLDX": "GLD",
+        "SLVSIM": "SLV",
+        
+        # Commodities
+        "GSGSIM": "GSG", "GSGTR": "GSG",
+        
+        # Managed Futures
+        "DBMFSIM": "DBMF", "DBMFX": "DBMF",
+        "KMLMSIM": "KMLM", "KMLMX": "KMLM",
+        
+        # Volatility
+        "VIXSIM": "^VIX", "VOLIX": "^VIX",
+        "SVIXSIM": "SVIX", "SVIXX": "SVIX",
+        "UVIXSIM": "UVXY",
+        "ZVOLSIM": "SVXY", "ZIVBX": "SVXY",  # Approximate with SVXY
+        
+        # Crypto
         "BTCSIM": "BTC-USD", "BTCTR": "BTC-USD",
         "ETHSIM": "ETH-USD", "ETHTR": "ETH-USD",
+        
+        # Sector ETFs
         "XLBSIM": "XLB", "XLBTR": "XLB",
         "XLCSIM": "XLC", "XLCTR": "XLC",
         "XLESIM": "XLE", "XLETR": "XLE",
@@ -78,7 +120,16 @@ def parse_ticker(ticker):
         "XLUSIM": "XLU", "XLUTR": "XLU",
         "XLVSIM": "XLV", "XLVTR": "XLV",
         "XLYSIM": "XLY", "XLYTR": "XLY",
-        "VIXSIM": "^VIX", "VOLIX": "^VIX"
+        
+        # Special/Leveraged
+        "FNGUSIM": "FNGU",
+        "CAOSSIM": "CAOS",
+        "GDESIM": "GDE",
+        "MCISIM": "MCI",
+        "REITSIM": "VNQ",
+        
+        # Legacy
+        "DIA_SIM": "DIA",
     }
     
     if base in mapping:
@@ -401,13 +452,15 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             if custom_freq == "Monthly":
                 # Rebalance on specified day of every month
                 if date.day >= rebalance_day:
-                    # Check if we already rebalanced this month
                     month_key = (date.year, date.month)
                     if 'last_rebal_month' not in locals():
                         last_rebal_month = (0, 0)
                     if last_rebal_month != month_key:
                         should_rebal = True
                         last_rebal_month = month_key
+                        # Log if date shifted
+                        if date.day > rebalance_day:
+                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} (non-trading day)")
                         
             elif custom_freq == "Quarterly":
                 # Rebalance on specified day of Jan/Apr/Jul/Oct
@@ -419,6 +472,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     if last_rebal_quarter != quarter_key:
                         should_rebal = True
                         last_rebal_quarter = quarter_key
+                        # Log if date shifted
+                        if date.day > rebalance_day:
+                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} (non-trading day)")
                         
             else:  # Yearly (default)
                 # Rebalance on specified Month/Day each year
@@ -429,6 +485,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     if last_rebal_year != date.year:
                         should_rebal = True
                         last_rebal_year = date.year
+                        # Log if date shifted
+                        if date > target_date:
+                            logs.append(f"ℹ️ Rebalance shifted: Target {target_date.date()} → Actual {date.date()} (non-trading day)")
                     
         # No forced rebalance on last day
                 
