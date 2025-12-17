@@ -73,23 +73,37 @@ def render():
             config['sim_engine'] = "hybrid" if "Hybrid" in sim_engine else "standard"
             
             if config['sim_engine'] == "hybrid":
+                # Custom Frequency Selection
+                config['custom_freq'] = st.selectbox(
+                    "Rebalance Frequency",
+                    ["Yearly", "Quarterly", "Monthly"],
+                    index=0,
+                    help="How often to rebalance. The day selection below determines WHEN in each period."
+                )
+                
                 c_reb1, c_reb2 = st.columns(2)
                 with c_reb1:
-                    config['rebalance_month'] = st.selectbox("Rebalance Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%B"), index=0)
+                    if config['custom_freq'] == "Yearly":
+                        config['rebalance_month'] = st.selectbox("Rebalance Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%B"), index=0)
+                    else:
+                        config['rebalance_month'] = 1  # Not used for Monthly/Quarterly
+                        
                 with c_reb2:
-                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 31, 15)
+                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 28, 15, help="Day of month to rebalance (1-28 for safety)")
                 
-                config['rebalance'] = "Custom" # Override standard selector
+                config['rebalance'] = "Custom"
                 
-                # Construct date string safely
+                # Display info based on frequency
                 try:
-                    rb_month = config['rebalance_month']
                     rb_day = config['rebalance_day']
-                    # Use a fixed leap year (2024) to handle Feb 29 if needed, 
-                    # though standardizing on non-leap might be safer.
-                    # Just for display purposes:
-                    display_date = pd.to_datetime(f"2024-{rb_month}-{rb_day}").strftime('%B %d')
-                    st.info(f"Rebalancing annually on {display_date}.")
+                    if config['custom_freq'] == "Yearly":
+                        rb_month = config['rebalance_month']
+                        display_date = pd.to_datetime(f"2024-{rb_month}-{rb_day}").strftime('%B %d')
+                        st.info(f"Rebalancing **annually** on {display_date}.")
+                    elif config['custom_freq'] == "Quarterly":
+                        st.info(f"Rebalancing **quarterly** on day {rb_day} of Jan/Apr/Jul/Oct.")
+                    else:  # Monthly
+                        st.info(f"Rebalancing **monthly** on day {rb_day}.")
                 except:
                     st.warning("Invalid Date Selection")
                     
@@ -104,63 +118,40 @@ def render():
         st.divider()
         
         st.subheader("Tax Simulation")
-        c_tax1, c_tax2 = st.columns(2)
-        with c_tax1:
-            config['filing_status'] = st.selectbox(
-            "Filing Status",
-            ["Single", "Married Filing Jointly", "Head of Household"],
-            index=0,
-            help="Determines tax brackets and standard deduction."
-        )
-        with c_tax2:
-            config['other_income'] = st.number_input("Other Annual Income ($)", 0.0, 10000000.0, 100000.0, 5000.0, help="Used to determine tax bracket base.")
-            
-        tax_method_selection = st.radio(
-            "Tax Calculation Method",
-            ["Historical Smart Calculation (Default)", "Historical Max Capital Gains Rate (Excel)", "2025 Fixed Brackets"],
-            index=0,
-            help="Choose the method for calculating federal taxes on realized gains.\n\n- **Historical Smart (Default)**: Most accurate. Uses historical inclusion rates (e.g. 50% exclusion) and ordinary brackets, capped by the historical Alternative Tax (max rate).\n- **Historical Max**: Applies the flat historical maximum capital gains rate for each year.\n- **2025 Fixed**: Uses modern 0%/15%/20% brackets for all years (anachronistic)."
-        )
         
-        # Add detailed explanation for Historical Smart Calculation
-        if "Smart" in tax_method_selection:
-            with st.expander("ℹ️ How Historical Smart Calculation Works", expanded=False):
-                st.markdown("""
-                This method simulates the historical "Alternative Tax" system for older years **AND** applies modern preferential brackets for recent years.
-
-                **1. Historical Era (Pre-1987)**
-                You paid the **lower** of:
-                - **Regular Tax**: Tax on the included portion (e.g., 50%) at ordinary rates.
-                - **Alternative Tax**: A flat maximum rate (e.g., 25%) on the total gain.
-
-                **2. Modern Era (1987 – Present)**
-                The simulation automatically switches to modern rules (100% inclusion) and applies the specific brackets for each year.
-                
-                **Current 2025 Brackets (Used in Simulation):**
-                | Rate | Single Filers | Married Jointly |
-                | :--- | :--- | :--- |
-                | **0%** | Up to $49,450 | Up to $98,900 |
-                | **15%** | $49,451 – $545,500 | $98,901 – $613,700 |
-                | **20%** | Over $545,500 | Over $613,700 |
-                
-                *(Plus 3.8% NIIT if income exceeds $200k/$250k)*
-
-                **Key Historical Rates:**
-                - **1938 – 1978**: 50% included (Alternative Cap ~25%)
-                - **1979 – 1986**: 40% included (Alternative Cap ~20%)
-                - **1987 – Present**: Modern Brackets (15%/20% + NIIT)
-                """)
-        
-        if "Smart" in tax_method_selection:
-             config['tax_method'] = "historical_smart"
-        elif "Max" in tax_method_selection:
-             config['tax_method'] = "historical_max_rate"
-        else:
-             config['tax_method'] = "2025_fixed"
-            
-        config['state_tax_rate'] = st.number_input("State Tax Rate (%)", 0.0, 20.0, 0.0, 0.1, help="Flat state tax rate applied to all realized gains.") / 100.0
-        
+        # Primary toggle visible at top level
         config['use_std_deduction'] = st.checkbox("Apply Standard Deduction", value=True, help="Subtracts historical standard deduction from income before calculating tax.")
+        
+        # Collapse all other tax options into an expander
+        with st.expander("⚙️ Tax Calculation Options", expanded=False):
+            c_tax1, c_tax2 = st.columns(2)
+            with c_tax1:
+                config['filing_status'] = st.selectbox(
+                    "Filing Status",
+                    ["Single", "Married Filing Jointly", "Head of Household"],
+                    index=0,
+                    help="Determines tax brackets and standard deduction."
+                )
+                config['state_tax_rate'] = st.number_input("State Tax Rate (%)", 0.0, 20.0, 0.0, 0.1, help="Flat state tax rate applied to all realized gains.") / 100.0
+                
+            with c_tax2:
+                config['other_income'] = st.number_input("Other Annual Income ($)", 0.0, 10000000.0, 100000.0, 5000.0, help="Used to determine tax bracket base.")
+            
+            st.markdown("---")
+            tax_method_selection = st.radio(
+                "Tax Calculation Method",
+                ["Historical Smart (Default)", "Historical Max Rate", "2025 Fixed Brackets"],
+                index=0,
+                horizontal=True,
+                help="Smart: Uses historical inclusion rates. Max: Flat historical max rate. Fixed: Modern 0/15/20% for all years."
+            )
+            
+            if "Smart" in tax_method_selection:
+                 config['tax_method'] = "historical_smart"
+            elif "Max" in tax_method_selection:
+                 config['tax_method'] = "historical_max_rate"
+            else:
+                 config['tax_method'] = "2025_fixed"
 
     with tab_margin:
         # Move Tax Simulation to top to control state of other inputs

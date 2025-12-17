@@ -154,7 +154,7 @@ def fetch_prices(tickers, start_date, end_date):
         
     return prices, output
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly"):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -162,8 +162,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     Args:
         prices_df (pd.DataFrame): Optional pre-fetched daily prices (index=Date, columns=Ticker).
                                   If provided, yfinance is skipped.
-        rebalance_month (int): Month to rebalance (1-12) if rebalance_freq="Custom".
-        rebalance_day (int): Day to rebalance (1-31) if rebalance_freq="Custom".
+        rebalance_month (int): Month to rebalance (1-12) if rebalance_freq="Custom" and custom_freq="Yearly".
+        rebalance_day (int): Day to rebalance (1-28) for custom rebalancing.
+        custom_freq (str): For "Custom" rebalance mode - "Yearly", "Quarterly", or "Monthly".
     """
 
     tickers = list(allocation.keys())
@@ -174,7 +175,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     logs.append(f"Timeframe: {start_date} to {end_date}")
     logs.append(f"Rebalance Frequency: {rebalance_freq}")
     if rebalance_freq == "Custom":
-        logs.append(f"Custom Rebalance Date: Month {rebalance_month}, Day {rebalance_day}")
+        logs.append(f"Custom Frequency: {custom_freq}, Day: {rebalance_day}" + (f", Month: {rebalance_month}" if custom_freq == "Yearly" else ""))
     
     if cashflow > 0:
         logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
@@ -395,23 +396,39 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     should_rebal = True
                     
         elif rebalance_freq == "Custom":
-            # Rebalance on the specified Month/Day
-            # Logic: If current date is >= target M/D and we haven't rebalanced this year yet.
-            # But we need to act on the specific day (or first trading day after).
+            # Custom rebalancing based on custom_freq (Yearly/Quarterly/Monthly)
             
-            # Simple approach: Check if today is the first day on/after Target Date in this Year
-            target_date = pd.Timestamp(year=date.year, month=rebalance_month, day=rebalance_day)
-            
-            # If target date falls on weekend/holiday, we take the first available date >= target
-            if date >= target_date:
-                # Check if we already rebalanced this year
-                # We can track last_rebal_year
-                if 'last_rebal_year' not in locals():
-                    last_rebal_year = -1
-                    
-                if last_rebal_year != date.year:
-                    should_rebal = True
-                    last_rebal_year = date.year
+            if custom_freq == "Monthly":
+                # Rebalance on specified day of every month
+                if date.day >= rebalance_day:
+                    # Check if we already rebalanced this month
+                    month_key = (date.year, date.month)
+                    if 'last_rebal_month' not in locals():
+                        last_rebal_month = (0, 0)
+                    if last_rebal_month != month_key:
+                        should_rebal = True
+                        last_rebal_month = month_key
+                        
+            elif custom_freq == "Quarterly":
+                # Rebalance on specified day of Jan/Apr/Jul/Oct
+                quarter_months = [1, 4, 7, 10]
+                if date.month in quarter_months and date.day >= rebalance_day:
+                    quarter_key = (date.year, date.month)
+                    if 'last_rebal_quarter' not in locals():
+                        last_rebal_quarter = (0, 0)
+                    if last_rebal_quarter != quarter_key:
+                        should_rebal = True
+                        last_rebal_quarter = quarter_key
+                        
+            else:  # Yearly (default)
+                # Rebalance on specified Month/Day each year
+                target_date = pd.Timestamp(year=date.year, month=rebalance_month, day=rebalance_day)
+                if date >= target_date:
+                    if 'last_rebal_year' not in locals():
+                        last_rebal_year = -1
+                    if last_rebal_year != date.year:
+                        should_rebal = True
+                        last_rebal_year = date.year
                     
         # No forced rebalance on last day
                 
