@@ -237,23 +237,19 @@ def render(results, config):
 
     m1, m2, m3, m4, m5 = st.columns(5)
     
-    # Comparison Logic Debug info (Temporary or Permanent?)
+    # Comparison Logic
     if bench_series is not None:
-         # Calculate Difference
          try:
-             # Ensure alignment
              aligned_pf = tax_adj_port_series.reindex(bench_series.index, method='ffill')
              diff_val = aligned_pf.iloc[-1] - bench_series.iloc[-1]
              diff_pct = (diff_val / bench_series.iloc[-1]) * 100
-             
              st.info(f"**Comparison Active**: Strategy vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
          except:
              pass
 
     total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
     
-    # Use Stats reported by Testfol API (TWR) to match user request
-    # This ensures consistency regardless of cashflow method (DCA vs Pay Down)
+    # Use Stats reported by Testfol API (TWR)
     cagr = stats.get("cagr", 0.0)
     max_dd = stats.get("max_drawdown", 0.0)
     sharpe = stats.get("sharpe", 0.0)
@@ -261,28 +257,43 @@ def render(results, config):
     # Retrieve Benchmark Stats
     bench_stats = results.get("bench_stats")
     
+    # Calculate CAGR display value
+    cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
+    
+    # Calculate Tax-Adjusted metrics
+    if start_val > 0 and not port_series.empty:
+        final_adj_val = final_adj_series.iloc[-1]
+        days = (final_adj_series.index[-1] - final_adj_series.index[0]).days
+        if days > 0:
+            years = days / 365.25
+            tax_adj_cagr = (final_adj_val / start_val) ** (1 / years) - 1
+        else:
+            tax_adj_cagr = 0.0
+        tax_adj_sharpe = calculations.calculate_sharpe_ratio(final_adj_series)
+    else:
+        final_adj_val = 0.0
+        tax_adj_cagr = 0.0
+        tax_adj_sharpe = 0.0
+    
     # Calculate Differences if Benchmark Exists
     if bench_stats:
         b_cagr = bench_stats.get("cagr", 0.0)
         b_sharpe = bench_stats.get("sharpe", 0.0)
         b_dd = bench_stats.get("max_drawdown", 0.0)
         
-        diff_cagr = cagr - b_cagr
+        b_cagr_display = b_cagr * 100 if abs(b_cagr) <= 1 else b_cagr
+        diff_cagr_display = cagr_display - b_cagr_display
         diff_sharpe = sharpe - b_sharpe
         diff_dd = max_dd - b_dd
         
-        # Display Metrics with Delta
-        # Note: API returns cagr as percentage (55.19), not decimal (0.5519)
-        cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
-        b_cagr_display = b_cagr * 100 if abs(b_cagr) <= 1 else b_cagr
-        diff_cagr_display = cagr_display - b_cagr_display
-        
+        # Primary Metrics Row with benchmark deltas
         m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs Bench")
         m3.metric("Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs Bench")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs Bench", delta_color="inverse")
+        m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
         
-        # Add Detailed Comparison Table below metrics
+        # Detailed Comparison Table
         comp_data = {
             "Metric": ["CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
             "Strategy": [f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
@@ -290,84 +301,35 @@ def render(results, config):
             "Diff": [f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
         }
         comp_df = pd.DataFrame(comp_data)
-        with st.expander("Detailed Strategy vs Benchmark Statistics", expanded=True):
+        with st.expander("📊 Detailed Strategy vs Benchmark Statistics", expanded=False):
             st.dataframe(comp_df, hide_index=True, use_container_width=True)
             
     else:
         # Standard View (No Benchmark)
         m1.metric("Final Balance", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("CAGR", f"{cagr * 100:.2f}%" if abs(cagr) <= 1 else f"{cagr:.2f}%")
+        m2.metric("CAGR", f"{cagr_display:.2f}%")
         m3.metric("Sharpe", f"{sharpe:.2f}")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+        m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
 
-    m5.metric("Final Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
-    
-    # --- New Metrics Row: Tax & Date Range ---
-    st.markdown("---")
-    tm1, tm2, tm3, tm4, tm5 = st.columns(5)
-    
-    # Calculate Total Tax (Already calculated above)
-    tax_label = "Total Tax Paid" if pay_tax_margin else "Total Estimated Tax Owed"
-    
-    if total_tax_owed > 0:
-        # If we have a scaled tax series, show THAT total
-        if not final_tax_series.empty and final_tax_series.sum() > 0:
-            display_tax = final_tax_series.sum()
-            tm1.metric(tax_label, f"${display_tax:,.2f}")
+    # --- Secondary Metrics in Expander ---
+    with st.expander("💰 Tax & Net Equity Details", expanded=False):
+        sm1, sm2, sm3, sm4 = st.columns(4)
+        
+        # Tax Info
+        tax_label = "Total Tax Paid" if pay_tax_margin else "Est. Tax Owed"
+        if total_tax_owed > 0:
+            if not final_tax_series.empty and final_tax_series.sum() > 0:
+                display_tax = final_tax_series.sum()
+            else:
+                display_tax = total_tax_owed
         else:
-            tm1.metric(tax_label, f"${total_tax_owed:,.2f}")
-    else:
-        tm1.metric(tax_label, "$0.00")
-        
-    # Post-Tax Balance & CAGR & Sharpe
-    if start_val > 0 and not port_series.empty:
-        
-        # Use global final_adj_series calculated above
-        final_adj_val = final_adj_series.iloc[-1]
-        
-        tm2.metric("Post-Tax Net Equity", f"${final_adj_val:,.0f}")
-        
-        days = (final_adj_series.index[-1] - final_adj_series.index[0]).days
-        if days > 0:
-            years = days / 365.25
-            # CAGR based on the adjusted final value
-            tax_adj_cagr = (final_adj_val / start_val) ** (1 / years) - 1
-            tm3.metric("Net Equity CAGR", f"{tax_adj_cagr * 100:.2f}%")
-        else:
-            tm3.metric("Net Equity CAGR", "N/A")
+            display_tax = 0.0
             
-        # Tax Adjusted Sharpe
-        tax_adj_sharpe = calculations.calculate_sharpe_ratio(final_adj_series)
-        tm4.metric("Net Equity Sharpe", f"{tax_adj_sharpe:.2f}")
-
-    else:
-            tm2.metric("Post-Tax Net Equity", "$0")
-            tm3.metric("Net Equity CAGR", "N/A")
-            tm4.metric("Net Equity Sharpe", "N/A")
-
-    # Date Range
-    if not trades_df.empty:
-        tax_start = trades_df["Date"].min().date()
-        tax_end = trades_df["Date"].max().date()
-        date_range_str = f"{tax_start} to {tax_end}"
-    else:
-        date_range_str = "No Taxable Events"
-        
-    # Custom HTML for wrapping
-    tm5.markdown(f"""
-        <div data-testid="stMetric" class="stMetric">
-            <label data-testid="stMetricLabel" class="css-1qg05tj e1i5pmia2">
-                <div class="css-1wivap2 e1i5pmia3">
-                    <span class="css-10trblm e1i5pmia4">Tax Calculation Date Range</span>
-                </div>
-            </label>
-            <div data-testid="stMetricValue" class="css-1xarl3l e1i5pmia1">
-                <div class="css-1wivap2 e1i5pmia3" style="white-space: normal; word-wrap: break-word; font-size: 1rem;">
-                    {date_range_str}
-                </div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+        sm1.metric(tax_label, f"${display_tax:,.0f}")
+        sm2.metric("Net Equity", f"${final_adj_val:,.0f}")
+        sm3.metric("Net CAGR", f"{tax_adj_cagr * 100:.2f}%")
+        sm4.metric("Net Sharpe", f"{tax_adj_sharpe:.2f}")
             
     st.markdown("---")
 

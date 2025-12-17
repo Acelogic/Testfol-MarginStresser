@@ -151,7 +151,8 @@ else:
                         cashflow_freq=config['cashfreq'],
                         prices_df=prices_df,
                         rebalance_month=config.get('rebalance_month', 1),
-                        rebalance_day=config.get('rebalance_day', 1)
+                        rebalance_day=config.get('rebalance_day', 1),
+                        custom_freq=config.get('custom_freq', 'Yearly')
                     )
                     
                     if port_series.empty:
