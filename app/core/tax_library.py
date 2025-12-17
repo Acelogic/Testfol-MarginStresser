@@ -4,6 +4,10 @@ import os
 # Global cache for tax tables
 _TAX_TABLES = {}
 
+# Constants
+DEFAULT_TAX_CSV_PATH = "data/Historical Income Tax Rates and Brackets, 1862-2025.csv"
+DEFAULT_CAP_GAINS_EXCEL_PATH = "data/Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx"
+
 def load_tax_tables(csv_path):
     """
     Parses the Historical Income Tax Rates CSV and populates _TAX_TABLES.
@@ -83,7 +87,7 @@ def load_tax_tables(csv_path):
     except Exception as e:
         print(f"Error loading tax tables: {e}")
 
-def calculate_historical_tax(year, taxable_income, filing_status="Single", csv_path="data/Historical Income Tax Rates and Brackets, 1862-2025.csv"):
+def calculate_historical_tax(year, taxable_income, filing_status="Single", csv_path=DEFAULT_TAX_CSV_PATH):
     """
     Calculates tax based on historical ordinary income brackets.
     """
@@ -271,7 +275,7 @@ def get_standard_deduction(year, filing_status, income=0):
         latest_year = max(_STANDARD_DEDUCTIONS.keys())
         return _STANDARD_DEDUCTIONS[latest_year].get(filing_status, 0)
 
-def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=2024, filing_status="Single", method="2024_fixed", excel_path="data/Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx", short_term_gain=0.0, long_term_gain=0.0, long_term_gain_collectible=0.0, use_standard_deduction=True):
+def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=2024, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, short_term_gain=0.0, long_term_gain=0.0, long_term_gain_collectible=0.0, use_standard_deduction=True):
     """
     Calculates tax on realized gains using the specified method.
     

@@ -77,3 +77,4 @@ def render():
         st.info("Configure your strategy, then click Run.")
         
     return start_date, end_date, run_placeholder
+

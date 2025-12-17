@@ -154,10 +154,16 @@ def fetch_prices(tickers, start_date, end_date):
         
     return prices, output
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly"):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
+    
+    Args:
+        prices_df (pd.DataFrame): Optional pre-fetched daily prices (index=Date, columns=Ticker).
+                                  If provided, yfinance is skipped.
+        rebalance_month (int): Month to rebalance (1-12) if rebalance_freq="Custom".
+        rebalance_day (int): Day to rebalance (1-31) if rebalance_freq="Custom".
     """
 
     tickers = list(allocation.keys())
@@ -167,10 +173,18 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     logs.append(f"Starting Shadow Backtest for {len(tickers)} tickers.")
     logs.append(f"Timeframe: {start_date} to {end_date}")
     logs.append(f"Rebalance Frequency: {rebalance_freq}")
+    if rebalance_freq == "Custom":
+        logs.append(f"Custom Rebalance Date: Month {rebalance_month}, Day {rebalance_day}")
+    
     if cashflow > 0:
         logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
     
-    prices_base, yf_output = fetch_prices(tickers, start_date, end_date)
+    if prices_df is not None and not prices_df.empty:
+        logs.append("Using pre-fetched price data (Hybrid Simulation).")
+        prices_base = prices_df
+        yf_output = None
+    else:
+        prices_base, yf_output = fetch_prices(tickers, start_date, end_date)
     
     if yf_output:
         logs.append("\n--- yfinance Output & Payload ---")
@@ -183,19 +197,33 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     # Construct leveraged returns
     returns_port = pd.DataFrame(index=returns_base.index)
     
+    # Construct leveraged returns
+    returns_port = pd.DataFrame(index=returns_base.index)
+    
+    missing_tickers = []
     for ticker in tickers:
         base, leverage = parse_ticker(ticker)
         if base in returns_base.columns:
             returns_port[ticker] = returns_base[base] * leverage
         else:
+            missing_tickers.append(ticker)
             returns_port[ticker] = np.nan # Mark as missing
+            
+    if missing_tickers:
+        logs.append(f"CRITICAL ERROR: Missing price data for: {', '.join(missing_tickers)}")
+        # We cannot simulate if assets are missing.
+        empty_series = pd.Series(dtype=float)
+        empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
             
     # Determine Simulation Start Date (Hybrid Logic)
     valid_returns = returns_port.dropna()
     
     if valid_returns.empty:
         logs.append("Error: No valid data found for any common date range.")
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs
+        empty_series = pd.Series(dtype=float)
+        empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
         
     sim_start_date = valid_returns.index[0]
     logs.append(f"First valid data found at: {sim_start_date.date()}")
@@ -207,6 +235,8 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     trades = []
     composition = []
     unrealized_pl_by_year = []
+    portfolio_history_vals = []
+    portfolio_history_dates = []
     
     # Check if we are starting late (Hybrid Mode)
     if sim_start_date > pd.to_datetime(start_date) and api_port_series is not None:
@@ -264,12 +294,21 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         date = dates[i]
         prev_date = dates[i-1]
         
+        if i == 0:
+             # Record initial state
+             portfolio_history_dates.append(dates[0])
+             portfolio_history_vals.append(current_val)
+
         # 1. Update Position Values
         day_port_val = 0
         for ticker in tickers:
             r = returns_port.loc[date, ticker]
             positions[ticker] *= (1 + r)
             day_port_val += positions[ticker]
+            
+        # Record daily value
+        portfolio_history_dates.append(date)
+        portfolio_history_vals.append(day_port_val)
             
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
@@ -331,6 +370,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 3. Check for Rebalance
         should_rebal = False
         
+        # 3. Check for Rebalance
+        should_rebal = False
+        
         if rebalance_freq == "Yearly":
             if i < len(dates) - 1:
                 next_date = dates[i+1]
@@ -351,6 +393,25 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 next_date = dates[i+1]
                 if next_date.month != date.month:
                     should_rebal = True
+                    
+        elif rebalance_freq == "Custom":
+            # Rebalance on the specified Month/Day
+            # Logic: If current date is >= target M/D and we haven't rebalanced this year yet.
+            # But we need to act on the specific day (or first trading day after).
+            
+            # Simple approach: Check if today is the first day on/after Target Date in this Year
+            target_date = pd.Timestamp(year=date.year, month=rebalance_month, day=rebalance_day)
+            
+            # If target date falls on weekend/holiday, we take the first available date >= target
+            if date >= target_date:
+                # Check if we already rebalanced this year
+                # We can track last_rebal_year
+                if 'last_rebal_year' not in locals():
+                    last_rebal_year = -1
+                    
+                if last_rebal_year != date.year:
+                    should_rebal = True
+                    last_rebal_year = date.year
                     
         # No forced rebalance on last day
                 
@@ -518,7 +579,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 
     # Record final composition snapshot
     if dates.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, pd.Series()
         
     last_date = dates[-1]
     
@@ -561,6 +622,16 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
 
     logs.append("Shadow Backtest Completed Successfully.")
     
+    # Generate Portfolio Series (Daily Total Value)
+    if portfolio_history_vals:
+        portfolio_series = pd.Series(portfolio_history_vals, index=pd.DatetimeIndex(portfolio_history_dates), name="Portfolio")
+        # Ensure it's sorted and unique
+        portfolio_series = portfolio_series[~portfolio_series.index.duplicated(keep='last')].sort_index()
+    else:
+        # Crucial: Must have DatetimeIndex for resample() to work downstream
+        portfolio_series = pd.Series(dtype=float)
+        portfolio_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
+
     # Write logs to file
     try:
         import os
@@ -571,4 +642,4 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     except Exception as e:
         logs.append(f"Failed to write log file: {e}")
         
-    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs
+    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series
