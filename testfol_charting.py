@@ -290,7 +290,7 @@ def resample_data(series: pd.Series, timeframe: str, method="ohlc") -> pd.DataFr
     else:
         return series.resample(rule).last().dropna()
 
-def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale):
+def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale, bench_series=None):
     fig = go.Figure()
     TRACES = {
         "Portfolio":       (port.index, port, {"width":2}, "$%{y:,.0f}"),
@@ -299,6 +299,15 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
         "Margin usage %":  (usage_pct.index, usage_pct*100, {"width":2,"color":"yellow"}, "%{y:.2f}%"),
         "Equity %":        (equity_pct.index, equity_pct*100, {"dash":"dash"}, "%{y:.2f}%"),
     }
+    
+    # Add Benchmark Trace if available
+    if bench_series is not None:
+         fig.add_scatter(
+             x=bench_series.index, y=bench_series, 
+             name="Benchmark (Gross)",
+             line=dict(color="#FFD700", width=2, dash="dash"),
+             hovertemplate="$%{y:,.0f}<extra></extra>"
+         )
     for key in series_opts:
         if key in TRACES:
             x, y, line, fmt = TRACES[key]
@@ -333,7 +342,7 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
     )
     st.plotly_chart(fig, use_container_width=True)
 
-def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts):
+def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None):
     """Render dashboard-style separate charts"""
     
     # Get log scale settings
@@ -365,6 +374,14 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
     leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
     leveraged_port = port * leveraged_mult
     
+    # Add Benchmark Trace if available
+    if bench_series is not None:
+         fig1.add_trace(go.Scatter(
+             x=bench_series.index, y=bench_series,
+             name="Benchmark (Gross)",
+             line=dict(color="#FFD700", width=2, dash="dash")
+         ))
+
     fig1.add_trace(go.Scatter(
         x=port.index, y=leveraged_port,
         name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
@@ -572,7 +589,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             unsafe_allow_html=True
         )
 
-def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True):
+def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True, bench_series=None):
     title_map = {
         "1D": "Daily",
         "1W": "Weekly",
@@ -642,6 +659,16 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
         increasing_fillcolor='#26a69a',
         decreasing_fillcolor='#ef5350',
     ), row=1, col=1)
+
+    # Add Benchmark Trace if available
+    if bench_series is not None:
+        fig.add_trace(go.Scatter(
+            x=bench_series.index, y=bench_series,
+            mode='lines',
+            name='Benchmark (Gross)',
+            line=dict(color='#FFD700', width=2, dash='dash'),
+            hovertemplate="Bench: $%{y:,.0f}<extra></extra>"
+        ), row=1, col=1)
 
     # Add Moving Averages
     fig.add_trace(go.Scatter(
@@ -2139,7 +2166,7 @@ with st.sidebar:
 # --- Main Area ---
 st.subheader("Strategy Configuration")
 
-tab_port, tab_margin, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "⚙️ Settings"])
+tab_port, tab_margin, tab_bench, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "📊 Benchmark", "⚙️ Settings"])
 
 with tab_port:
     c1, c2 = st.columns([2, 1])
@@ -2147,17 +2174,18 @@ with tab_port:
     with c1:
         st.markdown("##### Allocation")
         _default = [
-            {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"AAPL?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"MSFT?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"AVGO?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"AMZN?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"META?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"NVDA?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"GOOGL?L=2","Weight %":5,"Maint %":50},
+            {"Ticker":"TSLA?L=2","Weight %":5,"Maint %":50},
             {"Ticker":"GLD","Weight %":20,"Maint %":25},
             {"Ticker":"VXUS","Weight %":15,"Maint %":25},
             {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
+            {"Ticker":"UGL","Weight %":20,"Maint %":50},
         ]
 
         if "alloc_df" not in st.session_state:
@@ -2305,6 +2333,29 @@ with tab_margin:
 
 
 
+with tab_bench:
+    st.markdown("##### Benchmark Configuration")
+    st.info("Compare your strategy against a benchmark (Gross Total Return).")
+    
+    bench_mode = st.radio("Benchmark Mode", ["None", "Single Ticker", "Custom Portfolio"], horizontal=True)
+    
+    if bench_mode == "Single Ticker":
+        bench_ticker = st.text_input("Benchmark Ticker", "SPY", help="Enter a single ticker symbol (e.g. SPY, VTI, QQQ).")
+        st.caption("Standard 100% allocation to this ticker.")
+        
+    elif bench_mode == "Custom Portfolio":
+        st.markdown("Define Benchmark Allocation:")
+        
+        if "bench_alloc_df" not in st.session_state:
+            st.session_state.bench_alloc_df = pd.DataFrame([{"Ticker":"SPY","Weight %":60}, {"Ticker":"O","Weight %":40}])
+            
+        bench_edited_df = st.data_editor(
+            st.session_state.bench_alloc_df,
+            num_rows="dynamic",
+            use_container_width=True,
+            key="bench_editor"
+        )
+
 with tab_settings:
     c1, c2 = st.columns(2)
     with c1:
@@ -2434,6 +2485,58 @@ else:
             except Exception as e:
                 st.error(f"Error running backtest: {e}")
                 st.stop()
+                
+            # --- Benchmark Backtest ---
+            # Run only if enabled and primary backtest succeeded
+            bench_series = None
+            if bench_mode != "None":
+                with st.spinner("Fetching Benchmark Data..."):
+                    try:
+                        # Prepare Benchmark Allocation
+                        bench_port_map = {}
+                        if bench_mode == "Single Ticker":
+                             if bench_ticker.strip():
+                                 bench_port_map = {bench_ticker.strip(): 100.0}
+                        elif bench_mode == "Custom Portfolio":
+                             # Convert DataFrame to dict
+                             # Need to check if bench_edited_df is defined (it's inside the tab block)
+                             # We can access the state or the variable if it's in scope.
+                             # Streamlit data editor writes to key "bench_editor".
+                             # But that's returned from the function call.
+                             # Since the tab block runs before this button block, `bench_edited_df` variable MIGHT be in local scope if the tab block was executed.
+                             # However, Streamlit reruns the whole script. Yes, it will be in scope.
+                             
+                             # Safer to use the result of data_editor if available, else session state default
+                             # But `bench_edited_df` is defined in `with tab_bench:` block.
+                             if 'bench_edited_df' in locals() and not bench_edited_df.empty:
+                                 b_df = bench_edited_df.dropna(subset=["Ticker"])
+                                 bench_port_map = {r["Ticker"]: r["Weight %"] for _,r in b_df.iterrows()}
+                        
+                        if bench_port_map:
+                             # Fetch Benchmark Data
+                             # We assume Gross Return (no cashflow, no leverage logic for benchmark yet)
+                             # Actually api.fetch_backtest handles cashflows.
+                             # Standard benchmark is Buy & Hold (0 cashflow).
+                             b_series, b_stats, _ = cached_fetch_backtest(
+                                start_date=start_date,
+                                end_date=end_date,
+                                start_val=start_val,
+                                cashflow=0.0, # Pure performance
+                                cashfreq="Monthly",
+                                rolling=60,
+                                invest_div=True, # Always reinvest for total return benchmark
+                                rebalance=rebalance, # Use same rebalance setting? Or assume Quarterly? Let's use same.
+                                allocation=bench_port_map,
+                                return_raw=False
+                             )
+                             bench_series = b_series
+                             bench_series.name = "Benchmark"
+                             
+                    except Exception as e:
+                        st.warning(f"Benchmark failed: {e}")
+
+                # Add benchmark to results
+                st.session_state.bt_results["bench_series"] = bench_series
 
     # Check if we have results to display
     if "bt_results" in st.session_state:
@@ -2582,12 +2685,22 @@ else:
             else: # None (Gross)
                 final_adj_series = equity_series
                 final_tax_series = pd.Series(0.0, index=equity_series.index)
-
+        
         # --- Prepare Tax-Adjusted Data for Charts ---
         # We want the charts to reflect the "Net" reality.
         # Portfolio Value = Net Equity + Loan
         tax_adj_port_series = final_adj_series + loan_series
         
+        # Retrieve benchmark if available
+        bench_resampled = None
+        if "bench_series" in results and results["bench_series"] is not None:
+             bench_series = results["bench_series"]
+             # Resample/Align benchmark to match portfolio index or timeframe
+             # Usually aligning to tax_adj_port_series
+             bench_aligned = bench_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
+             # Resample for charts handled below
+             bench_resampled = resample_data(bench_aligned, timeframe, method="last")
+
         # Recalculate Leverage Metrics based on Tax-Adjusted Equity
         # Equity % = Net Equity / Portfolio Value
         tax_adj_equity_pct_series = pd.Series(0.0, index=tax_adj_port_series.index)
@@ -2598,10 +2711,7 @@ else:
         # Or just Loan / (Net Equity + Loan)? 
         # The API returns 'usage_series' which is Loan / (Equity * Max_Loan_to_Equity_Ratio).
         # Let's approximate it or recalculate if we know the formula.
-        # Usage = Loan / (Equity * (1/maint_pct - 1))  <-- Standard Reg T formula approximation
-        # Let's just use the ratio of Loan / Net Equity for now, or stick to the original usage if it's too complex to replicate perfectly.
-        # Actually, let's recalculate usage properly if possible.
-        # usage = loan / (equity * (1/maint - 1))
+        # Usage = Loan / (Equity * (1/maint - 1))  <-- Standard Reg T formula approximation
         # if maint is 0.25, max leverage is 4x. max loan is 3x equity.
         # usage = loan / (equity * 3)
         
@@ -2846,7 +2956,8 @@ else:
                 render_classic_chart(
                     tax_adj_port_series, final_adj_series, loan_series, 
                     tax_adj_equity_pct_series, tax_adj_usage_series, 
-                    series_opts, log_scale
+                    series_opts, log_scale,
+                    bench_series=bench_resampled
                 )
             elif chart_style == "Classic (Dashboard)":
                 log_opts = {
@@ -2857,16 +2968,22 @@ else:
                 render_dashboard_view(
                     tax_adj_port_series, final_adj_series, loan_series, 
                     tax_adj_equity_pct_series, tax_adj_usage_series, 
-                    st.session_state.get("maint_pct", 0.25), # Fallback if not in state
-                    stats, log_opts
+                    wmaint, stats, log_opts,
+                    bench_series=bench_resampled
                 )
-            else:
+            else: # Candlestick
                 render_candlestick_chart(
-                    ohlc_data, equity_resampled, loan_resampled, 
-                    usage_resampled, equity_pct_resampled, 
-                    timeframe, log_scale, show_range_slider, show_volume
-                )
-            
+                    ohlc_data, 
+                    equity_resampled, 
+                    loan_resampled,
+                    usage_resampled,
+                    equity_pct_resampled,
+                    timeframe, 
+                    log_scale,
+                    show_range_slider=show_range_slider,
+                    show_volume=show_volume,
+                    bench_series=bench_resampled
+                )       
             if pay_tax_cash:
                 with st.expander("Detailed Cash Statistics", expanded=True):
                     # Calculate Total Withdrawals
