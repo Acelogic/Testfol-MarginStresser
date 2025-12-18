@@ -208,29 +208,20 @@ else:
                     sim_range_str = f"{s} - {e}"
 
                 shadow_range_str = "N/A"
-                if sim_engine == 'hybrid' and not prices_df.empty:
-                    # Show the range actually USED (intersection of available data and requested start_date)
-                    # Convert start_date (date) to Timestamp for comparison
-                    req_start = pd.Timestamp(start_date)
-                    avail_start = prices_df.index[0]
-                    
-                    # effective start is the later of the two
-                    eff_start = max(avail_start, req_start)
-                    
-                    # Ensure effective start is within data bounds (it might be after end if data is missing, but assuming valid)
-                    # If effective start is not in price index exactly, it's fine, we just want the label.
-                    # But for accuracy, let's find the first actual data point >= eff_start
-                    try:
-                         actual_start = prices_df.loc[eff_start:].index[0]
-                         s_shadow = actual_start.strftime("%b %d, %Y")
-                         e_shadow = prices_df.index[-1].strftime("%b %d, %Y")
+                if not composition_df.empty:
+                     if "Date" in composition_df.columns:
+                         s_shadow = composition_df["Date"].iloc[0].strftime("%b %d, %Y")
+                         e_shadow = composition_df["Date"].iloc[-1].strftime("%b %d, %Y")
                          shadow_range_str = f"{s_shadow} - {e_shadow}"
-                    except IndexError:
-                         shadow_range_str = "No Data in Range"
+                     else:
+                         shadow_range_str = "Invalid Composition"
+                elif sim_engine == 'hybrid' and not prices_df.empty:
+                    # Fallback if composition failed but prices existed (e.g. all filtered out?)
+                    try:
+                        shadow_range_str = f"{prices_df.index[0].strftime('%b %d, %Y')} - {prices_df.index[-1].strftime('%b %d, %Y')}"
+                    except:
+                        pass
 
-                elif sim_engine == 'standard' and not port_series.empty:
-                     # For standard, shadow uses API port series alignment, so same as sim
-                     shadow_range_str = sim_range_str
 
                 # Initialize results
                 st.session_state.bt_results = {
@@ -339,6 +330,7 @@ else:
                         )
                         c_series.name = "Standard (Yearly)"
                         st.session_state.bt_results["comparison_series"] = c_series
+                        st.session_state.bt_results["comparison_stats"] = c_stats
                         
                     except Exception as e:
                         st.warning(f"Comparison Benchmark failed: {e}")
