@@ -288,36 +288,47 @@ def render(results, config):
         tax_adj_sharpe = 0.0
     
     # Calculate Differences if Benchmark Exists
-    if bench_stats:
-        b_cagr = bench_stats.get("cagr", 0.0)
-        b_sharpe = bench_stats.get("sharpe", 0.0)
-        b_dd = bench_stats.get("max_drawdown", 0.0)
+    active_bench_series = bench_series if bench_series is not None else results.get("comparison_series")
+    active_bench_stats = bench_stats if bench_stats is not None else results.get("comparison_stats")
+    
+    if active_bench_stats:
+        b_cagr = active_bench_stats.get("cagr", 0.0)
+        b_sharpe = active_bench_stats.get("sharpe", 0.0)
+        b_dd = active_bench_stats.get("max_drawdown", 0.0)
         
         b_cagr_display = b_cagr * 100 if abs(b_cagr) <= 1 else b_cagr
         diff_cagr_display = cagr_display - b_cagr_display
         diff_sharpe = sharpe - b_sharpe
         diff_dd = max_dd - b_dd
         
+        bench_label = "Bench"
+        if active_bench_series is not None and hasattr(active_bench_series, 'name') and active_bench_series.name:
+            # Use short name for label if possible
+            bench_label = active_bench_series.name.replace("Benchmark", "").replace("Standard", "").strip(" ()")
+            if not bench_label: bench_label = "Bench"
+        
         # Primary Metrics Row - Gross (Pre-Tax) from API
         m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
-        m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs Bench", help="Pre-tax return from Testfol API")
-        m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs Bench", help="Pre-tax risk-adjusted return")
-        m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs Bench", delta_color="inverse")
+        m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs {bench_label}", help="Pre-tax return from Testfol API")
+        m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs {bench_label}", help="Pre-tax risk-adjusted return")
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs {bench_label}", delta_color="inverse")
         m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
         
         # Detailed Comparison Table
         # Get benchmark ending value
-        bench_end_val = bench_series.iloc[-1] if bench_series is not None and not bench_series.empty else 0
+        bench_end_val = active_bench_series.iloc[-1] if active_bench_series is not None and not active_bench_series.empty else 0
         strategy_end_val = tax_adj_port_series.iloc[-1]
+        
+        comp_label = active_bench_series.name if active_bench_series is not None and hasattr(active_bench_series, 'name') and active_bench_series.name else "Benchmark"
         
         comp_data = {
             "Metric": ["Ending Value", "CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
             "Strategy": [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
-            "Benchmark": [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{bench_stats.get('volatility',0)*100:.2f}%"],
+            comp_label: [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{active_bench_stats.get('volatility',0)*100:.2f}%"],
             "Diff": [f"${strategy_end_val - bench_end_val:+,.0f}", f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
         }
         comp_df = pd.DataFrame(comp_data)
-        with st.expander("📊 Detailed Strategy vs Benchmark Statistics", expanded=False):
+        with st.expander(f"📊 Detailed Strategy vs {comp_label} Statistics", expanded=False):
             st.dataframe(comp_df, hide_index=True, use_container_width=True)
             
     else:
