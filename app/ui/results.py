@@ -679,7 +679,7 @@ def render(results, config):
         # Determine correct frequency for chart view
         rebal_freq_for_chart = config.get('rebalance', 'Yearly')
         if rebal_freq_for_chart == "Custom":
-            rebal_freq_for_chart = "Per Event"
+            pass # We handle Custom logic inside render_rebalancing_analysis now
             
         # Scale composition_df to match tax_adj_port_series (Source of Truth for Metrics)
         if not composition_df.empty:
@@ -698,7 +698,8 @@ def render(results, config):
             tax_method, other_income, filing_status, state_tax_rate,
             rebalance_freq=rebal_freq_for_chart,
             use_standard_deduction=use_std_deduction,
-            unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame())
+            unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
+            custom_freq=config.get('custom_freq', 'Yearly')
         )
     
     with res_tab_tax:

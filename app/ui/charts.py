@@ -1124,7 +1124,7 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         )
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly"):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -1135,7 +1135,11 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         default_idx = freq_options.index(rebalance_freq)
     except ValueError:
         if rebalance_freq == "Custom":
-            default_idx = 3 # Default to "Per Event" for Custom rebalancing
+            # Try to match the custom frequency (Yearly/Quarterly/Monthly)
+            if custom_freq in freq_options:
+                default_idx = freq_options.index(custom_freq)
+            else:
+                default_idx = 3 # Default to "Per Event"
         else:
             default_idx = 0
         
