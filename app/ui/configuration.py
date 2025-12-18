@@ -89,7 +89,7 @@ def render():
                         config['rebalance_month'] = 1  # Not used for Monthly/Quarterly
                         
                 with c_reb2:
-                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 28, 15, help="Day of month to rebalance (1-28 for safety)")
+                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 31, 15, help="Day of month to rebalance. If the month has fewer days, the last day of the month is used.")
                 
                 config['rebalance'] = "Custom"
                 

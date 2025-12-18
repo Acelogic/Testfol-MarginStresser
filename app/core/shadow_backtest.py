@@ -249,17 +249,35 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     # Construct leveraged returns
     returns_port = pd.DataFrame(index=returns_base.index)
     
+    # Log Data Availability
+    logs.append("\n[Data Check]")
+    for col in returns_base.columns:
+        valid_idx = returns_base[col].dropna().index
+        if not valid_idx.empty:
+            logs.append(f"  {col}: {valid_idx[0].date()} to {valid_idx[-1].date()}")
+        else:
+            logs.append(f"  {col}: NO DATA")
+    logs.append("-" * 20)
+    
     # Construct leveraged returns
     returns_port = pd.DataFrame(index=returns_base.index)
     
     missing_tickers = []
     for ticker in tickers:
         base, leverage = parse_ticker(ticker)
+        
+        # 1. Try Mapped Base (e.g. SPYSIM -> SPY)
         if base in returns_base.columns:
             returns_port[ticker] = returns_base[base] * leverage
+            
+        # 2. Try Unmapped Base (e.g. SPYSIM -> SPYSIM) - If prices_df provided directly (Hybrid)
         else:
-            missing_tickers.append(ticker)
-            returns_port[ticker] = np.nan # Mark as missing
+            raw_base = ticker.split("?")[0]
+            if raw_base in returns_base.columns:
+                returns_port[ticker] = returns_base[raw_base] * leverage
+            else:
+                missing_tickers.append(ticker)
+                returns_port[ticker] = np.nan # Mark as missing
             
     if missing_tickers:
         logs.append(f"CRITICAL ERROR: Missing price data for: {', '.join(missing_tickers)}")
@@ -269,10 +287,15 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
             
     # Determine Simulation Start Date (Hybrid Logic)
+    # 2024-12-17: Fix - Enforce user start_date if provided
+    if start_date:
+        start_ts = pd.to_datetime(start_date)
+        returns_port = returns_port[returns_port.index >= start_ts]
+
     valid_returns = returns_port.dropna()
     
     if valid_returns.empty:
-        logs.append("Error: No valid data found for any common date range.")
+        logs.append(f"Error: No valid data found after start date {start_date}.")
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
@@ -449,45 +472,53 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         elif rebalance_freq == "Custom":
             # Custom rebalancing based on custom_freq (Yearly/Quarterly/Monthly)
             
+            # Check if this is the last trading day of the month
+            is_month_end = False
+            if i < len(dates) - 1:
+                if dates[i+1].month != date.month:
+                    is_month_end = True
+            else:
+                is_month_end = True
+
+            days_in_month = date.days_in_month
+            # Clamp target day to actual days in potential month (for Feb/Apr etc)
+            effective_day = min(rebalance_day, days_in_month)
+            
             if custom_freq == "Monthly":
-                # Rebalance on specified day of every month
-                if date.day >= rebalance_day:
+                # Rebalance if we reached target day OR it's month end and we haven't reached target yet
+                if date.day >= effective_day or (is_month_end and effective_day > date.day):
                     month_key = (date.year, date.month)
                     if 'last_rebal_month' not in locals():
                         last_rebal_month = (0, 0)
                     if last_rebal_month != month_key:
                         should_rebal = True
                         last_rebal_month = month_key
-                        # Log if date shifted
-                        if date.day > rebalance_day:
-                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} (non-trading day)")
+                        if date.day != effective_day:
+                             logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
                         
             elif custom_freq == "Quarterly":
-                # Rebalance on specified day of Jan/Apr/Jul/Oct
                 quarter_months = [1, 4, 7, 10]
-                if date.month in quarter_months and date.day >= rebalance_day:
-                    quarter_key = (date.year, date.month)
-                    if 'last_rebal_quarter' not in locals():
-                        last_rebal_quarter = (0, 0)
-                    if last_rebal_quarter != quarter_key:
-                        should_rebal = True
-                        last_rebal_quarter = quarter_key
-                        # Log if date shifted
-                        if date.day > rebalance_day:
-                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} (non-trading day)")
-                        
+                if date.month in quarter_months:
+                    if date.day >= effective_day or (is_month_end and effective_day > date.day):
+                        quarter_key = (date.year, date.month)
+                        if 'last_rebal_quarter' not in locals():
+                            last_rebal_quarter = (0, 0)
+                        if last_rebal_quarter != quarter_key:
+                            should_rebal = True
+                            last_rebal_quarter = quarter_key
+                            if date.day != effective_day:
+                                logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
+
             else:  # Yearly (default)
-                # Rebalance on specified Month/Day each year
-                target_date = pd.Timestamp(year=date.year, month=rebalance_month, day=rebalance_day)
-                if date >= target_date:
-                    if 'last_rebal_year' not in locals():
-                        last_rebal_year = -1
-                    if last_rebal_year != date.year:
-                        should_rebal = True
-                        last_rebal_year = date.year
-                        # Log if date shifted
-                        if date > target_date:
-                            logs.append(f"ℹ️ Rebalance shifted: Target {target_date.date()} → Actual {date.date()} (non-trading day)")
+                if date.month == rebalance_month:
+                     if date.day >= effective_day or (is_month_end and effective_day > date.day):
+                        if 'last_rebal_year' not in locals():
+                            last_rebal_year = -1
+                        if last_rebal_year != date.year:
+                            should_rebal = True
+                            last_rebal_year = date.year
+                            if date.day != effective_day:
+                                logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
                     
         # No forced rebalance on last day
                 

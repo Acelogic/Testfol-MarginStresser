@@ -200,6 +200,38 @@ else:
                         st.error("API returned empty portfolio data.")
                         st.stop()
                 
+                # Ranges for UI display
+                sim_range_str = "N/A"
+                if not port_series.empty:
+                    s = port_series.index[0].strftime("%b %d, %Y")
+                    e = port_series.index[-1].strftime("%b %d, %Y")
+                    sim_range_str = f"{s} - {e}"
+
+                shadow_range_str = "N/A"
+                if sim_engine == 'hybrid' and not prices_df.empty:
+                    # Show the range actually USED (intersection of available data and requested start_date)
+                    # Convert start_date (date) to Timestamp for comparison
+                    req_start = pd.Timestamp(start_date)
+                    avail_start = prices_df.index[0]
+                    
+                    # effective start is the later of the two
+                    eff_start = max(avail_start, req_start)
+                    
+                    # Ensure effective start is within data bounds (it might be after end if data is missing, but assuming valid)
+                    # If effective start is not in price index exactly, it's fine, we just want the label.
+                    # But for accuracy, let's find the first actual data point >= eff_start
+                    try:
+                         actual_start = prices_df.loc[eff_start:].index[0]
+                         s_shadow = actual_start.strftime("%b %d, %Y")
+                         e_shadow = prices_df.index[-1].strftime("%b %d, %Y")
+                         shadow_range_str = f"{s_shadow} - {e_shadow}"
+                    except IndexError:
+                         shadow_range_str = "No Data in Range"
+
+                elif sim_engine == 'standard' and not port_series.empty:
+                     # For standard, shadow uses API port series alignment, so same as sim
+                     shadow_range_str = sim_range_str
+
                 # Initialize results
                 st.session_state.bt_results = {
                     "port_series": port_series,
@@ -212,7 +244,9 @@ else:
                     "pl_by_year": pl_by_year,
                     "composition_df": composition_df,
                     "unrealized_pl_df": unrealized_pl_df,
-                    "logs": logs
+                    "logs": logs,
+                    "sim_range": sim_range_str,
+                    "shadow_range": shadow_range_str
                 }
                 
             except Exception as e:
@@ -225,46 +259,11 @@ else:
             bench_stats = None
             
             # Logic for Comparison Override
-            run_standard_bench = False
-            if sim_engine == 'hybrid' and config.get('compare_standard', False):
-                run_standard_bench = True
+            # Logic for Comparison Override
+            # 2024-12-17: Prioritize explicit Benchmark Tab settings over Hybrid Default
             
-            if run_standard_bench:
-                 with st.spinner("Fetching Standard Rebalance Benchmark..."):
-                    try:
-                        # Use same allocation but standard Yearly rebalance
-                        alloc_map = alloc_preview
-                        
-                        b_series, b_stats, _ = cached_fetch_backtest(
-                            start_date=start_date,
-                            end_date=end_date,
-                            start_val=config['start_val'],
-                            cashflow=0.0, # Pure performance comparison
-                            cashfreq="Monthly",
-                            rolling=60,
-                            invest_div=config['invest_div'],
-                            rebalance="Yearly", # Force Yearly Standard
-                            allocation=alloc_map,
-                            return_raw=False
-                        )
-                        bench_series = b_series
-                        bench_series.name = "Standard (Yearly)"
-                        
-                        # Capture benchmark stats - this was missing!
-                        from_api = True
-                        if not b_stats:
-                            b_stats = calculations.generate_stats(b_series)
-                            from_api = False
-                            
-                        bench_stats = b_stats
-                        st.session_state.bt_results["bench_stats_from_api"] = from_api
-                        
-                        config['bench_mode'] = "Standard Rebalance" # Override for UI label
-                        
-                    except Exception as e:
-                        st.warning(f"Comparison Benchmark failed: {e}")
-            
-            elif config['bench_mode'] != "None":
+            # 1. Explicit Benchmark (from Tab)
+            if config['bench_mode'] != "None":
                 with st.spinner("Fetching Benchmark Data..."):
                     try:
                         bench_port_map = {}
@@ -279,6 +278,12 @@ else:
                                  bench_port_map = {r["Ticker"]: r["Weight %"] for _,r in b_df.iterrows()}
                         
                         if bench_port_map:
+                             # Validate rebalance freq for API (Custom is not allowed in API)
+                             api_rebal = config['rebalance']
+                             if api_rebal == "Custom":
+                                 # Fallback to the custom_freq (e.g. Monthly/Yearly) or default to Yearly
+                                 api_rebal = config.get('custom_freq', 'Yearly')
+
                              b_series, b_stats, _ = cached_fetch_backtest(
                                 start_date=start_date,
                                 end_date=end_date,
@@ -287,11 +292,17 @@ else:
                                 cashfreq="Monthly",
                                 rolling=60,
                                 invest_div=True, 
-                                rebalance=config['rebalance'], 
+                                rebalance=api_rebal, 
                                 allocation=bench_port_map,
                                 return_raw=False
                              )
                              bench_series = b_series
+                             
+                             # Rename for clear chart labels
+                             if config['bench_mode'] == "Single Ticker":
+                                 bench_series.name = f"Benchmark ({config.get('bench_ticker', 'Ticker').strip()})"
+                             else:
+                                 bench_series.name = "Benchmark (Custom)"
                              
                              # Fallback: Calculate stats locally if API didn't return them
                              from_api = True
@@ -305,6 +316,32 @@ else:
                     except Exception as e:
                         st.warning(f"Benchmark Fetch Failed: {e}")
                         bench_stats = None
+
+            # 2. Hybrid Standard Comparison (Secondary Benchmark)
+            # Independent check - can coexist with primary benchmark
+            if sim_engine == 'hybrid' and config.get('compare_standard', False):
+                 with st.spinner("Fetching Standard Rebalance Benchmark..."):
+                    try:
+                        # Use same allocation but standard Yearly rebalance
+                        alloc_map = alloc_preview
+                        
+                        c_series, c_stats, _ = cached_fetch_backtest(
+                            start_date=start_date,
+                            end_date=end_date,
+                            start_val=config['start_val'],
+                            cashflow=0.0, # Pure performance comparison
+                            cashfreq="Monthly",
+                            rolling=60,
+                            invest_div=config['invest_div'],
+                            rebalance="Yearly", # Force Yearly Standard
+                            allocation=alloc_map,
+                            return_raw=False
+                        )
+                        c_series.name = "Standard (Yearly)"
+                        st.session_state.bt_results["comparison_series"] = c_series
+                        
+                    except Exception as e:
+                        st.warning(f"Comparison Benchmark failed: {e}")
             
             # Add benchmark to results
             st.session_state.bt_results["bench_series"] = bench_series
