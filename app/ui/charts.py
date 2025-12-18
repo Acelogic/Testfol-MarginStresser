@@ -1378,7 +1378,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         
         # Estimated Tax Owed Chart
         if not pl_by_year.empty:
-            st.subheader(f"Estimated Federal Tax Owed ({view_freq} - {tax_method})")
+            st.subheader(f"Estimated Total Tax Owed ({view_freq} - {tax_method})")
             
             # 1. Calculate Annual Federal Tax (Base)
             federal_tax_annual = tax_library.calculate_tax_series_with_carryforward(
