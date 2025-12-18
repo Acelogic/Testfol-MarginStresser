@@ -363,6 +363,11 @@ def render(results, config):
             sm3.metric("Post-Tax CAGR", f"{tax_adj_cagr * 100:.2f}%", help="Growth rate after taxes")
             sm4.metric("Post-Tax Sharpe", f"{tax_adj_sharpe:.2f}", help="Risk-adjusted return after taxes")
             
+            # Explain discrepancy between Owed (Chart) and Paid (Metric)
+            unpaid_liability = total_tax_owed - display_tax
+            if unpaid_liability > 1: # Threshold for noise
+                st.caption(f"ℹ️ **Timing Difference:** Total Tax Paid (\${display_tax:,.0f}) is lower than Total Tax Owed (\${total_tax_owed:,.0f}) because taxes are typically paid on **April 15th of the following year**. The tax bill for the final simulation year (\${unpaid_liability:,.0f}) is technically owed (Accrued) but the payment date falls **after** the simulation ends, so it was never deducted from your cash.")
+            
     st.markdown("---")
 
     res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔧 Debug"])
