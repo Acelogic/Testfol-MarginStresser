@@ -24,7 +24,7 @@ def cached_fetch_backtest(*args, **kwargs):
     return fetch_backtest(*args, **kwargs)
 
 @st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
-def cached_run_shadow_backtest(*args, **kwargs):
+def cached_run_shadow_backtest_v2(*args, **kwargs):
     """Cached wrapper for shadow_backtest.run_shadow_backtest"""
     return run_shadow_backtest(*args, **kwargs)
 
@@ -140,7 +140,7 @@ else:
                         st.stop()
                         
                     # 2. Run Local Simulation
-                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series = cached_run_shadow_backtest(
+                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = cached_run_shadow_backtest_v2(
                         allocation=alloc_preview, 
                         start_val=config['start_val'],
                         start_date=start_date,
@@ -165,7 +165,7 @@ else:
                         st.stop()
                         
                     # Package results for render_results
-                    stats = calculations.generate_stats(port_series) # Local Stats
+                    stats = calculations.generate_stats(twr_series) # Local Stats (TWR based)
                     extra_data = {"rebalancing_events": []} # No native events for custom yet
                     
                 else:
@@ -186,7 +186,7 @@ else:
                     
                     # Run Shadow for Tax Lots ONLY (using API series for alignment)
                     if not port_series.empty:
-                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _ = cached_run_shadow_backtest(
+                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, _ = cached_run_shadow_backtest_v2(
                             allocation=alloc_preview, 
                             start_val=config['start_val'],
                             start_date=start_date,
@@ -320,8 +320,8 @@ else:
                             start_date=start_date,
                             end_date=end_date,
                             start_val=config['start_val'],
-                            cashflow=0.0, # Pure performance comparison
-                            cashfreq="Monthly",
+                            cashflow=config.get('cashflow', 0.0), # Use user defined cashflow
+                            cashfreq=config.get('cashfreq', "Monthly"),
                             rolling=60,
                             invest_div=config['invest_div'],
                             rebalance="Yearly", # Force Yearly Standard

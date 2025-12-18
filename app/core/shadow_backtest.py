@@ -365,14 +365,19 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         dates = valid_returns.index
 
     # Iterate through dates
+    # Initialize History with Start Date
+    portfolio_history_dates.append(dates[0])
+    portfolio_history_vals.append(current_val)
+    
+    # Initialize TWR Tracking
+    twr_history_dates = [dates[0]]
+    twr_history_vals = [1.0] # Start at 1.0 (indexed to 100)
+    curr_twr = 1.0
+    prev_post_flow_val = current_val # Tracks value after flows, for next day's return calc
+
     for i in range(1, len(dates)):
         date = dates[i]
         prev_date = dates[i-1]
-        
-        if i == 0:
-             # Record initial state
-             portfolio_history_dates.append(dates[0])
-             portfolio_history_vals.append(current_val)
 
         # 1. Update Position Values
         day_port_val = 0
@@ -384,6 +389,17 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # Record daily value
         portfolio_history_dates.append(date)
         portfolio_history_vals.append(day_port_val)
+        
+        # Calculate TWR
+        # Return = Current Pre-Flow / Previous Post-Flow
+        if prev_post_flow_val > 0:
+            daily_ret = day_port_val / prev_post_flow_val
+        else:
+            daily_ret = 1.0
+            
+        curr_twr *= daily_ret
+        twr_history_dates.append(date)
+        twr_history_vals.append(curr_twr)
             
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
@@ -431,7 +447,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 
                 logs.append(f"  {ticker}: Bought ${amount:,.2f} ({shares_bought:.4f} units)")
                 
-                # Log as a trade (BUY) but with 0 realized P&L
                 trades.append({
                     "Date": date,
                     "Ticker": ticker,
@@ -441,6 +456,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     "Realized P&L": 0,
                     "Price (Est)": current_price
                 })
+        
+        # Update baseline for next day's return calculation
+        prev_post_flow_val = day_port_val
             
         # 3. Check for Rebalance
         should_rebal = False
@@ -739,6 +757,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         portfolio_series = pd.Series(dtype=float)
         portfolio_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
 
+    # Generate TWR Series
+    if twr_history_vals:
+        twr_series = pd.Series(twr_history_vals, index=pd.DatetimeIndex(twr_history_dates), name="TWR")
+        twr_series = twr_series[~twr_series.index.duplicated(keep='last')].sort_index()
+    else:
+        twr_series = pd.Series(dtype=float)
+
     # Write logs to file
     try:
         import os
@@ -749,4 +774,4 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     except Exception as e:
         logs.append(f"Failed to write log file: {e}")
         
-    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series
+    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series, twr_series
