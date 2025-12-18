@@ -668,7 +668,11 @@ def render(results, config):
         else:
             st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
 
-        charts.render_returns_analysis(tax_adj_port_series)
+        charts.render_returns_analysis(
+            tax_adj_port_series, 
+            bench_series=bench_resampled,
+            comparison_series=comp_resampled
+        )
         
     with res_tab_rebal:
         st.warning("⚠️ **Note:** These trade calculations assume **Gross** portfolio values. Tax payments are NOT deducted by selling shares in this view (assumes taxes paid via margin or external cash).")
