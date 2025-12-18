@@ -8,7 +8,7 @@ from app.core import tax_library
 import os
 from app.common.utils import color_return
 
-def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale, bench_series=None):
+def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale, bench_series=None, comparison_series=None):
     fig = go.Figure()
     TRACES = {
         "Portfolio":       (port.index, port, {"width":2}, "$%{y:,.0f}"),
@@ -38,6 +38,16 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
              hovertemplate="$%{y:,.0f}<extra></extra>"
          )
          
+    # Add Comparison Trace if available
+    if comparison_series is not None:
+         comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
+         fig.add_scatter(
+             x=comparison_series.index, y=comparison_series, 
+             name=comp_name,
+             line=dict(color="#00FFFF", width=2, dash="dot"), # Cyan Dot
+             hovertemplate="$%{y:,.0f}<extra></extra>"
+         )
+         
     fig.add_hline(y=100, yref="y2", line={"dash":"dot"},
                   annotation_text="Margin call", annotation_position="top right")
     fig.update_layout(
@@ -63,7 +73,7 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
     )
     st.plotly_chart(fig, use_container_width=True)
 
-def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None):
+def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None, comparison_series=None):
     """Render dashboard-style separate charts"""
     
     # Get log scale settings
@@ -113,6 +123,15 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
              x=bench_series.index, y=bench_series,
              name=bench_name,
              line=dict(color="#FFD700", width=2, dash="dash")
+         ))
+         
+    # Add Comparison Trace if available
+    if comparison_series is not None:
+         comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
+         fig1.add_trace(go.Scatter(
+             x=comparison_series.index, y=comparison_series,
+             name=comp_name,
+             line=dict(color="#00FFFF", width=2, dash="dot")
          ))
     
     fig1.update_layout(
@@ -311,7 +330,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             unsafe_allow_html=True
         )
 
-def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True, bench_series=None):
+def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True, bench_series=None, comparison_series=None):
     title_map = {
         "1D": "Daily",
         "1W": "Weekly",
@@ -393,6 +412,17 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
             hovertemplate="Bench: $%{y:,.0f}<extra></extra>"
         ), row=1, col=1)
 
+    # Add Comparison Trace if available
+    if comparison_series is not None:
+        comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
+        fig.add_trace(go.Scatter(
+            x=comparison_series.index, y=comparison_series,
+            mode='lines',
+            name=comp_name,
+            line=dict(color='#00FFFF', width=2, dash='dot'), # Cyan Dot
+            hovertemplate="Comp: $%{y:,.0f}<extra></extra>"
+        ), row=1, col=1)
+
     # Add Moving Averages
     fig.add_trace(go.Scatter(
         x=ohlc_df.index,
@@ -445,6 +475,17 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
             name=bench_name,
             line=dict(color='#FFD700', width=2, dash='dash'),
             hovertemplate="Bench: $%{y:,.0f}<extra></extra>"
+        ), row=1, col=1)
+
+    # Add Comparison Trace if available
+    if comparison_series is not None:
+        comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
+        fig.add_trace(go.Scatter(
+            x=comparison_series.index, y=comparison_series,
+            mode='lines',
+            name=comp_name,
+            line=dict(color='#00FFFF', width=2, dash='dot'), # Cyan Dot
+            hovertemplate="Comp: $%{y:,.0f}<extra></extra>"
         ), row=1, col=1)
 
     # Volume bars (using range as proxy) - only if enabled
@@ -712,6 +753,25 @@ def render_returns_analysis(port_series):
         zmax_yearly = scale_yearly
         
         
+        # Calculate actual date ranges for each quarter from the source series
+        date_map = {}
+        try:
+            # Group by Period (Year-Quarter) to find min/max dates
+            # This ensures we show the ACTUAL data range (e.g. "Jan 3 - Mar 31" or "Oct 1 - Dec 17")
+            # instead of just generic "Q1" labels.
+            periods = port_series.index.to_period("Q")
+            # Group dates by period
+            period_groups = port_series.index.groupby(periods)
+            
+            for p, dates in period_groups.items():
+                if not dates.empty:
+                    s_date = dates.min().date()
+                    e_date = dates.max().date()
+                    date_map[(p.year, p.quarter)] = f"{s_date.strftime('%b %d')} - {e_date.strftime('%b %d')}"
+        except Exception as e:
+            # Fallback if period conversion fails
+            print(f"Date mapping failed: {e}")
+
         # Build Custom Hovertext Arrays
         # Main Heatmap Hovertext
         hovertext_main = []
@@ -725,7 +785,16 @@ def render_returns_analysis(port_series):
                     if row_label == "Average":
                         row_txt.append(f"Average<br>{col_label}: {val:+.2f}%")
                     else:
-                        row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.2f}%")
+                        # Lookup actual dates
+                        try:
+                            year_int = int(row_label)
+                            q_int = j + 1
+                            d_range = date_map.get((year_int, q_int), "")
+                            date_html = f"<br><span style='color: #ccc; font-size: 0.9em;'>{d_range}</span>" if d_range else ""
+                        except:
+                            date_html = ""
+                            
+                        row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.2f}%{date_html}")
             hovertext_main.append(row_txt)
             
         # Yearly Heatmap Hovertext
@@ -1103,6 +1172,8 @@ def render_rebalance_sankey(trades_df, view_freq="Yearly"):
         df["Period"] = df["Date"].dt.to_period("Q").astype(str)
     elif view_freq == "Monthly":
         df["Period"] = df["Date"].dt.to_period("M").astype(str)
+    elif view_freq == "Per Event":
+        df["Period"] = df["Date"].dt.strftime('%Y-%m-%d')
         
     # Period Selection
     periods = sorted(df["Period"].unique(), reverse=True)
@@ -1181,43 +1252,84 @@ def render_rebalance_sankey(trades_df, view_freq="Yearly"):
     fig.update_layout(title_text=f"Rebalancing Flow {selected_period}", font_size=12, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
-def render_portfolio_composition(composition_df):
+def render_portfolio_composition(composition_df, view_freq="Yearly"):
     if composition_df.empty:
         return
 
     st.subheader("Portfolio Composition")
     
-    # Create Stacked Bar Chart (Horizontal)
-    # Y: Year, X: Value, Color: Ticker
+    # Ensure sorted by date
+    df = composition_df.sort_values(["Date", "Ticker"])
     
-    # Pivot for easier plotting if needed, or just use px
+    # Filtering Logic based on View Frequency to avoid summing multiple snapshots in one bar
+    if view_freq == "Yearly":
+        # Keep only the last snapshot available for each Year
+        last_dates = df.groupby(df['Date'].dt.year)['Date'].max()
+        df = df[df['Date'].isin(last_dates)]
+    elif view_freq == "Quarterly":
+        # Keep last snapshot for each Quarter
+        last_dates = df.groupby(df['Date'].dt.to_period('Q'))['Date'].max()
+        df = df[df['Date'].isin(last_dates)]
+    elif view_freq == "Monthly":
+        # Keep last snapshot for each Month
+        last_dates = df.groupby(df['Date'].dt.to_period('M'))['Date'].max()
+        df = df[df['Date'].isin(last_dates)]
+    elif view_freq == "Per Event":
+        # Keep every unique rebalance snapshot date
+        pass
+
+    # Format Date for the axis labeling (categorical)
+    df['Date Label'] = df['Date'].dt.strftime('%Y-%m-%d')
+    
+    # Calculate Total Value per date for hover display
+    totals = df.groupby('Date Label')['Value'].sum().rename('Total Value')
+    df = df.merge(totals, on='Date Label')
+    
     import plotly.express as px
     
-    # Ensure sorted by date
-    df_sorted = composition_df.sort_values(["Date", "Ticker"])
-    
     fig = px.bar(
-        df_sorted, 
-        y="Year", 
+        df, 
+        y="Date Label", 
         x="Value", 
         color="Ticker", 
-        title="Portfolio Value by Asset (Pre-Rebalance)",
+        title=f"Portfolio Value by Asset (Pre-Rebalance, {view_freq})",
         text_auto="$.2s",
         orientation='h',
-        template="plotly_dark"
+        template="plotly_dark",
+        custom_data=["Total Value"]
     )
     
-    fig.update_traces(hovertemplate="<b>%{fullData.name}</b><br>%{x:$,.0f}<extra></extra>")
+    fig.update_traces(
+        hovertemplate="<b>%{fullData.name}</b><br>Asset Value: %{x:$,.0f}<br>Total Portfolio: %{customdata[0]:$,.0f}<extra></extra>"
+    )
     
     fig.update_layout(
         xaxis_title="Value ($)",
-        yaxis_title="Year",
+        yaxis_title="Rebalance Date",
         legend_title="Asset",
-        height=500,
-        yaxis=dict(type='category') # Treat year as category for better spacing
+        height=min(1200, max(400, len(df['Date Label'].unique()) * 30)), # Dynamic height
+        yaxis=dict(type='category', categoryorder='category ascending') # Recent at top (Y-axis ascending puts largest/latest at top)
     )
     
     st.plotly_chart(fig, use_container_width=True)
+
+    # --- Data Table View ---
+    with st.expander(f"📋 Portfolio Composition Details ({view_freq})", expanded=False):
+        # Pivot the data for a clean table view: Dates as rows, Tickers as columns
+        table_df = df.pivot(index='Date Label', columns='Ticker', values='Value').fillna(0)
+        
+        # Add Total Column
+        table_df['Total'] = table_df.sum(axis=1)
+        
+        # Sort by date descending (latest at top)
+        table_df = table_df.sort_index(ascending=False)
+        
+        # Format for display
+        st.dataframe(
+            table_df.style.format("${:,.0f}"),
+            use_container_width=True
+        )
+
 
 def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None):
     if trades_df.empty:
@@ -1225,11 +1337,14 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         return
         
     # Determine default index based on rebalance_freq
-    freq_options = ["Yearly", "Quarterly", "Monthly"]
+    freq_options = ["Yearly", "Quarterly", "Monthly", "Per Event"]
     try:
         default_idx = freq_options.index(rebalance_freq)
     except ValueError:
-        default_idx = 0
+        if rebalance_freq == "Custom":
+            default_idx = 3 # Default to "Per Event" for Custom rebalancing
+        else:
+            default_idx = 0
         
     # View Frequency Selector
     view_freq = st.selectbox(
@@ -1297,6 +1412,22 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             agg_df = agg_df.join(unrealized_m[["Unrealized P&L"]], how="outer").fillna(0.0)
             
         x_axis = agg_df.index.to_timestamp()
+        
+    elif view_freq == "Per Event":
+        # Use exact dates of each trade event
+        cols_to_agg = ["Realized P&L", "Realized ST P&L", "Realized LT P&L"]
+        if "Realized LT (Collectible)" in df_chart.columns:
+            cols_to_agg.append("Realized LT (Collectible)")
+            
+        agg_df = df_chart.groupby("Date")[cols_to_agg].sum().sort_index()
+        
+        # Merge Unrealized P&L (Match to exact event dates)
+        if unrealized_pl_df is not None and not unrealized_pl_df.empty:
+            # We align unrealized P&L to the exact rebalance dates
+            unrealized_aligned = unrealized_pl_df.reindex(agg_df.index, method='ffill').fillna(0.0)
+            agg_df = agg_df.join(unrealized_aligned[["Unrealized P&L"]], how="outer").fillna(0.0)
+            
+        x_axis = agg_df.index
         
     c1, c2 = st.columns([2, 1])
     
@@ -1432,6 +1563,8 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                         periods_in_year = [p for p in agg_df.index if p.year == year]
                     elif view_freq == "Monthly":
                         periods_in_year = [p for p in agg_df.index if p.year == year]
+                    elif view_freq == "Per Event":
+                        periods_in_year = [p for p in agg_df.index if p.year == year]
                     
                     # Calculate total POSITIVE realized P&L for this year from the periods
                     # We only allocate tax to periods that had gains
@@ -1498,7 +1631,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
 
 
     # Portfolio Composition
-    render_portfolio_composition(composition_df)
+    render_portfolio_composition(composition_df, view_freq=view_freq)
         
     # Sankey Diagram
     render_rebalance_sankey(trades_df, view_freq=view_freq)
@@ -1526,6 +1659,8 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                 df_details["Period"] = df_details["Date"].dt.to_period("Q").astype(str)
             elif view_freq == "Monthly":
                 df_details["Period"] = df_details["Date"].dt.to_period("M").astype(str)
+            elif view_freq == "Per Event":
+                df_details["Period"] = df_details["Date"].dt.strftime('%Y-%m-%d')
 
             # Create Pivot Table: Period vs Ticker (Net Flow)
             pivot_df = df_details.pivot_table(

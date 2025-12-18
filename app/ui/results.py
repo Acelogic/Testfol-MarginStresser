@@ -209,6 +209,17 @@ def render(results, config):
             # Resample for charts handled below
             bench_resampled = utils.resample_data(bench_aligned, timeframe, method="last")
 
+    # Retrieve Comparison Benchmark (Standard Rebalance) if available
+    comp_series = results.get("comparison_series")
+    comp_resampled = None
+    if comp_series is not None:
+             comp_aligned = comp_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
+             comp_resampled = utils.resample_data(comp_aligned, timeframe, method="last")
+             if comp_series.name is None:
+                 comp_resampled.name = "Standard (Yearly)"
+             else:
+                 comp_resampled.name = comp_series.name
+
     # Recalculate Leverage Metrics based on Tax-Adjusted Equity
     # Equity % = Net Equity / Portfolio Value
     tax_adj_equity_pct_series = pd.Series(0.0, index=tax_adj_port_series.index)
@@ -235,6 +246,7 @@ def render(results, config):
     usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
     equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
 
+    st.caption(f"📅 **Backtest Range:** {results.get('sim_range', 'N/A')}")
     m1, m2, m3, m4, m5 = st.columns(5)
     
     # Comparison Logic
@@ -321,6 +333,8 @@ def render(results, config):
     
     if tax_sim_active:
         with st.expander("💰 Tax & Post-Tax Details", expanded=False):
+            st.caption(f"📅 **Shadow Data Range:** {results.get('shadow_range', 'N/A')}")
+            
             sm1, sm2, sm3, sm4 = st.columns(4)
             
             # Tax Info
@@ -466,7 +480,8 @@ def render(results, config):
                 tax_adj_port_series, final_adj_series, loan_series, 
                 tax_adj_equity_pct_series, tax_adj_usage_series, 
                 series_opts, log_scale,
-                bench_series=bench_resampled
+                bench_series=bench_resampled,
+                comparison_series=comp_resampled
             )
         elif chart_style == "Classic (Dashboard)":
             log_opts = config.get('log_opts', {})
@@ -474,7 +489,8 @@ def render(results, config):
                 tax_adj_port_series, final_adj_series, loan_series, 
                 tax_adj_equity_pct_series, tax_adj_usage_series, 
                 wmaint, stats, log_opts,
-                bench_series=bench_resampled
+                bench_series=bench_resampled,
+                comparison_series=comp_resampled
             )
         else: # Candlestick
             charts.render_candlestick_chart(
@@ -487,7 +503,8 @@ def render(results, config):
                 log_scale,
                 show_range_slider=show_range_slider,
                 show_volume=show_volume,
-                bench_series=bench_resampled
+                bench_series=bench_resampled,
+                comparison_series=comp_resampled
             )       
         if pay_tax_cash:
             with st.expander("Detailed Cash Statistics", expanded=True):
@@ -647,8 +664,20 @@ def render(results, config):
         # Determine correct frequency for chart view
         rebal_freq_for_chart = config.get('rebalance', 'Yearly')
         if rebal_freq_for_chart == "Custom":
-            rebal_freq_for_chart = config.get('custom_freq', 'Yearly')
+            rebal_freq_for_chart = "Per Event"
             
+        # Scale composition_df to match tax_adj_port_series (Source of Truth for Metrics)
+        if not composition_df.empty:
+            # We must use .copy() to avoid modifying session state unexpectedly if needed, 
+            # though composition_df is already a local variable here.
+            for d in composition_df["Date"].unique():
+                if d in tax_adj_port_series.index:
+                    target_total = tax_adj_port_series.loc[d]
+                    current_total = composition_df[composition_df["Date"] == d]["Value"].sum()
+                    if current_total > 0:
+                        ratio = target_total / current_total
+                        composition_df.loc[composition_df["Date"] == d, "Value"] *= ratio
+
         charts.render_rebalancing_analysis(
             trades_df, pl_by_year, composition_df,
             tax_method, other_income, filing_status, state_tax_rate,

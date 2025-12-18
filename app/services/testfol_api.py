@@ -85,12 +85,21 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
             "relative_dev": 0
         }]
     }
-    r = requests.post(API_URL, json=payload, timeout=30)
-    
-    # Rate Limit Protection (Only on actual API call)
-    time.sleep(2.0) 
-    
-    r.raise_for_status()
+    try:
+        r = requests.post(API_URL, json=payload, timeout=30)
+        
+        # Rate Limit Protection (Only on actual API call)
+        time.sleep(2.0) 
+        
+        r.raise_for_status()
+    except requests.exceptions.HTTPError as e:
+        # Include response text in error message for debugging
+        error_msg = f"HTTP Error: {e}\nResponse: {r.text}"
+        raise requests.exceptions.HTTPError(error_msg, response=r)
+    except Exception as e:
+        raise e
+
+    print(f"DEBUG: API Success {req_hash} (Msg Size: {len(r.content)} bytes)")
     resp = r.json()
     
     if return_raw:
