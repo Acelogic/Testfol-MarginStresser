@@ -1287,6 +1287,9 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
     
     import plotly.express as px
     
+    # Sort by Value (Smallest to Largest) for the stack order
+    df = df.sort_values(["Date Label", "Value"], ascending=[True, True])
+    
     fig = px.bar(
         df, 
         y="Date Label", 
@@ -1353,6 +1356,74 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         index=default_idx,
         key="rebal_view_freq"
     )
+
+    # Optional "Mag 7 Fund" Grouping
+    group_mag7 = st.toggle("Enable Mag 7 Grouping", value=False, help="Groups AAPL, MSFT, GOOG, AMZN, NVDA, META, TSLA, and AVGO into a single 'Mag 7' fund.")
+    
+    # Process Composition Data for Mag 7 Grouping
+    comp_df_to_plot = composition_df.copy()
+    if group_mag7 and not comp_df_to_plot.empty:
+        # Define sets
+        mag7_standard = ["MSFT", "TSLA", "GOOG", "AAPL", "NVDA", "META", "AMZN"]
+        mag7_plus_avgo = mag7_standard + ["AVGO"]
+        
+        # Helper to categorize tickers
+        def get_group(ticker):
+            # Check for leverage
+            is_lev = "?L=2" in ticker
+            
+            # Clean base ticker for checking (handle ?L=2 and other suffixes if any)
+            base = ticker.split("?")[0]
+            
+            # Check if it starts with any known root (e.g. GOOGL matches GOOG)
+            # We must be careful not to match random things, but for these specific tickers likely safe
+            
+            # 1. QQQU Check: Mag 7 + AVGO (Leveraged)
+            # User said: "When you see it [Mag7+AVGO] with L2 consider the tag 'QQQU'"
+            if is_lev:
+                # Check root match against Mag 7 + AVGO
+                match = False
+                if base in mag7_plus_avgo: match = True
+                else:
+                    for r in mag7_plus_avgo:
+                        if base.startswith(r): 
+                            match = True
+                            break
+                if match: return "QQQU"
+
+            # 2. Mag 7 Check: Standard Mag 7 (Unleveraged, NO AVGO)
+            # User said: "Mag 7 without AVGO ... without ?L=2 consider it labeled 'Mag 7'"
+            else:
+                # Check root match against Standard Mag 7 ONLY
+                match = False
+                if base in mag7_standard: match = True
+                else: 
+                     for r in mag7_standard:
+                        if base.startswith(r):
+                            match = True
+                            break
+                if match: return "Mag 7"
+            
+            # Default: No Group
+            return None
+
+        # Apply grouping
+        comp_df_to_plot["Group"] = comp_df_to_plot["Ticker"].apply(get_group)
+        
+        # Split into grouped and ungrouped
+        grouped_rows = comp_df_to_plot[comp_df_to_plot["Group"].notna()]
+        ungrouped_rows = comp_df_to_plot[comp_df_to_plot["Group"].isna()].drop(columns=["Group"])
+        
+        if not grouped_rows.empty:
+            # Aggregate by Date AND Group
+            grouped_agg = grouped_rows.groupby(["Date", "Group"])["Value"].sum().reset_index()
+            grouped_agg = grouped_agg.rename(columns={"Group": "Ticker"})
+            
+            # Combine back
+            comp_df_to_plot = pd.concat([ungrouped_rows, grouped_agg], ignore_index=True).sort_values("Date")
+        else:
+            # Cleanup if nothing matched
+             comp_df_to_plot = comp_df_to_plot.drop(columns=["Group"])
     
     # Aggregate Data based on Frequency
     df_chart = trades_df.copy()
@@ -1631,7 +1702,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
 
 
     # Portfolio Composition
-    render_portfolio_composition(composition_df, view_freq=view_freq)
+    render_portfolio_composition(comp_df_to_plot, view_freq=view_freq)
         
     # Sankey Diagram
     render_rebalance_sankey(trades_df, view_freq=view_freq)
