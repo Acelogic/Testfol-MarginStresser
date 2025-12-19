@@ -107,6 +107,37 @@ $$ Loan_{t} = Loan_{t-1} \times (1 + \frac{Rate_{annual}}{365}) + Draws + Taxes 
 
 ---
 
+## Volatility Harvesting: Unlocking "Shannon's Demon"
+
+This backtester is uniquely architected to simulate **Volatility Harvesting** strategies (often referred to as **Shannon's Demon** or Shannon's Ratchet).
+
+### What is Shannon's Demon?
+Claude Shannon demonstrated that by frequently rebalancing a portfolio between a volatile zero-return asset (like a coin toss) and a stable asset (Cash), you can generate **positive geometric growth** from volatility alone. This is the mathematical opposite of "Volatility Decay."
+
+In modern investing, this is applied by mixing **Volatile Leveraged Assets** (e.g., TQQQ, bitcoin) with uncorrelated assets (e.g., Cash, TMF, KMLM) and rebalancing frequently.
+
+### Why this Backtester?
+Most backtesters fail to model this correctly because they ignore the **Execution Drag** which kills the demon in real life. Testfol Margin Stresser accounts for:
+1.  **High-Frequency Rebalancing**: Simulate the granular effects of Daily vs. Weekly vs. Quarterly rebalancing to find the optimal frequency.
+2.  **Tax Drag**: Rebalancing triggers capital gains. Our **Shadow Engine** calculates the exact tax bill for every rebalance, showing you if the "Harvested Volatility" exceeds the "Tax Drag" (a critical failure point for "Demon" strategies in taxable accounts).
+3.  **Leverage Management**: Safely model "Cash + 3x Leveraged ETF" portfolios to verify if the cash buffer prevents margin calls during 90% drawdowns.
+
+---
+
+## Monte Carlo & Risk Analysis
+
+The tool now includes a professional **Monte Carlo Simulation** suite to stress-test your strategy against thousands of alternative history timelines.
+
+### Features
+-   **Historical Bootstrap**: Unlike Gaussian simulations which assume normal distributions, we resample **actual historical daily returns** from your strategy. This preserves the "Fat Tails" and extreme market shocks (like 1987 or 2008) inherent to your specific asset allocation.
+-   **Cone of Uncertainty**: Visualize the P10 (Pessimistic), Median, and P90 (Optimistic) future paths over 10 years.
+-   **Distribution Analysis**: A robust histogram showing the probability distribution of final portfolio values, featuring:
+    -   **Log/Linear Switching**: Automatically adapts binning to visualize massive upside outliers common in leveraged portfolios.
+    -   **Smart Formatting**: Tooltips and axes use "B" (Billions) notation for readability.
+-   **Sequence Risk**: Test how your portfolio survives purely based on the *order* of returns, specifically crucial for retirement (decumulation) mechanics.
+
+---
+
 ## Installation & Usage
 
 1.  **Install**:

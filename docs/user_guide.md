@@ -60,6 +60,21 @@ You can use Testfol modifiers in the ticker symbol to simulate leverage or expen
 - **Max Drawdown**: Largest peak-to-trough decline.
 - **Post-Tax Net Equity**: The final liquidation value of your portfolio after paying all loan balances and taxes.
 
-### Visualizations
-- **Combined Chart**: Shows Portfolio Value (Gross Assets), Net Equity, and Loan Balance on one chart to visualize leverage dynamics.
-- **Tax Analysis Tab**: Breakdown of annual tax liabilities and the difference between paying with cash vs. margin.
+### 3. Analysis Tabs
+
+#### 🔮 Monte Carlo Analysis (New)
+A robust stochastic simulation to stress-test your strategy against thousands of alternative history timelines.
+-   **Configuration**:
+    -   **Scenarios**: Choose between 100 (fast) to 5,000 (deep) iterations.
+    -   **Start Value / Monthly Add**: Override your backtest settings to answer "What if I started with $X?"
+-   **Charts**:
+    -   **Fan Chart**: Shows the cone of probability (P10 to P90) over 10 years. Toggle "Show Paths" to see individual random outcomes.
+    -   **Distribution Histogram**: Visualizes the bell curve of final portfolio values. Uses explicit "B" (Billion) formatting and supports Log/Linear scales.
+-   **Metrics**:
+    -   **Median CAGR**: The most likely annual return.
+    -   **Worst Case DD (P90)**: The 90th percentile worst drawdown.
+    -   **Chance of Loss**: Probability of ending with less money than you started.
+
+#### 🏗️ Margin Details
+-   **Combined Chart**: Shows Portfolio Value (Gross Assets), Net Equity, and Loan Balance on one chart to visualize leverage dynamics.
+-   **Tax Analysis**: Breakdown of annual tax liabilities and the difference between paying with cash vs. margin.
