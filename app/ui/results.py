@@ -73,6 +73,10 @@ def render(results, config):
     tax_payment_series = None
     total_tax_owed = 0.0
     
+    # Initialize Tax Series (Defaults)
+    fed_tax_series = pd.Series(dtype=float)
+    state_tax_series = pd.Series(dtype=float)
+
     if not pl_by_year.empty:
         # Federal Tax
         fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
@@ -95,6 +99,10 @@ def render(results, config):
                 loss_cf_state = 0.0
             else:
                 loss_cf_state = abs(net)
+    else:
+        # No realized P&L = No Tax
+        fed_tax_series = pd.Series(0.0, index=[dt.date.today().year]) # Dummy index
+        state_tax_series = pd.Series(0.0, index=[dt.date.today().year])
         
     total_tax_owed = fed_tax_series.sum() + state_tax_series.sum()
     
