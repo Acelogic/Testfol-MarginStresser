@@ -28,6 +28,30 @@ $$ \text{Usage \%} = \frac{\text{Loan}}{\text{Portfolio Value} \times (1 - \text
 
 ---
 
+---
+
+## Monte Carlo Simulation Engine
+
+The application includes a `monte_carlo.py` module for stochastic analysis.
+
+### 1. Historical Bootstrap
+Unlike standard simulations that assume Gaussian (Bell Curve) distribution, this engine uses **Historical Bootstrapping**:
+-   **Resampling**: It randomly samples actual daily returns from the strategy's history.
+-   **Why?**: This preserves the **volatility clustering**, skewness, and "Fat Tails" (black swan events) inherent to the asset class, providing a more realistic stress test than a normal distribution.
+
+### 2. Iterative Cashflow Engine
+To accurately model "Monthly Adds" or withdrawals, the engine does **not** simply use a compound formula.
+-   It iterates day-by-day (optimised with NumPy masking for speed).
+-   On the 1st of every month, cash is injected/withdrawn.
+-   Returns are applied to the *new* balance daily.
+-   This captures the **Sequence of Returns Risk** specific to the timing of your contributions.
+
+### 3. Distribution Visualization
+-   **Fan Chart**: Calculates the P10, P25, Median, P75, and P90 percentiles of equity at every single time step.
+-   **Histogram**: Uses a custom manual binning algorithm (linear vs. log-space) to accurately visualize the probability density of final outcomes, handling the extreme "right-tail" skew of leveraged portfolios where winners can grow exponentially.
+
+---
+
 ## Shadow Backtest Engine (Tax Lots)
 
 To calculate taxes accurately, the application runs a local "Shadow Backtest" that reconstructs the portfolio using a **Tax Lot System**.
