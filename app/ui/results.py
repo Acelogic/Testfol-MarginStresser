@@ -784,20 +784,59 @@ When yFinance data starts later than your chart, the tax engine initializes your
         st.info("Simulating **10-year future performance** based on your strategy's historical daily volatility. Assumes reinvestment of all returns.")
         
         
-        # 1. Get Returns Data
-        twr_series = results.get("twr_series")
-        if twr_series is None or twr_series.empty:
-            # Fallback for old cache or if Standard mode missed it (shouldn't happen now)
-            # Use portfolio series but warn about cashflows
-            series_to_use = results.get("port_series")
-            if series_to_use is not None and not series_to_use.empty:
-                st.warning("⚠️ Using Portfolio Equity for simulation (TWR not found). If you have cashflows, this may be inaccurate.")
-                daily_rets = series_to_use.pct_change()
+        # 1. Get Returns Data source
+        # Priority:
+        # A. Extended Portfolio Data (api_port_series) - Best for Long History (ZROZSIM back to 1960s)
+        # B. TWR Series (Shadow Backtest) - Best for Accuracy (excludes cashflows) but might be short (2009+) in Hybrid Mode
+        
+        # We prefer Extended (A) for Monte Carlo generally, so we can capture regimes.
+        # But if Cashflows are heavy, (A) is dirty (MWR).
+        # Compromise: Use (A) if available for full history.
+        
+        # Actually, results['port_series'] IS the API extended series (Simulated).
+        # results['twr_series'] is the shadow/tax series (Real/Short in Hybrid).
+        
+        # Let's default to port_series (Extended) to enable 1970s scenarios.
+        extended_series = results.get("port_series")
+        tax_twr_series = results.get("twr_series")
+        
+        daily_rets = pd.Series(dtype=float)
+        source_label = "Unknown"
+        
+        # Decide which series to use
+        # Logic: Use Extended if it covers more history than TWR
+        use_extended = False
+        
+        if extended_series is not None and not extended_series.empty:
+            if tax_twr_series is not None and not tax_twr_series.empty:
+                 # Check start dates
+                 if extended_series.index[0] < tax_twr_series.index[0]:
+                     use_extended = True
+                     source_label = "Extended Chart Data (Simulated)"
+                 else:
+                     # They start same time, prefer TWR (Cleaner)
+                     daily_rets = tax_twr_series.pct_change()
+                     source_label = "Tax TWR Data (Real)"
             else:
-                st.error("No return data available for Monte Carlo.")
-                st.stop()
+                 use_extended = True
+                 source_label = "Extended Chart Data (Simulated)"
+        elif tax_twr_series is not None and not tax_twr_series.empty:
+             daily_rets = tax_twr_series.pct_change()
+             source_label = "Tax TWR Data (Real)"
+        
+        if use_extended:
+             daily_rets = extended_series.pct_change()
+             # Warn if cashflows exist
+             if results.get("cashflow", 0.0) != 0:
+                 st.caption(f"ℹ️ using **{source_label}** to maximize history. Note: Returns include cashflow effects (MWR).")
+             else:
+                 st.caption(f"ℹ️ Using **{source_label}**.")
         else:
-            daily_rets = twr_series.pct_change()
+             st.caption(f"ℹ️ Using **{source_label}**.")
+
+        if daily_rets.empty:
+             st.error("No return data available for Monte Carlo.")
+             st.stop()
             
         # 2. Configuration
         c_sims, c_start, c_flow = st.columns(3)
@@ -817,15 +856,227 @@ When yFinance data starts later than your chart, the tax engine initializes your
         
         sim_monthly_add = c_flow.number_input("Monthly Add ($)", value=float(def_monthly), step=100.0, help="Monthly contribution injected into simulation")
     
-        # 3. Run Simulation
-        with st.spinner(f"Running {n_sims:,} Simulations..."):
-             mc_results = monte_carlo.run_monte_carlo(
-                 daily_rets, 
-                 n_sims=n_sims, 
-                 n_years=10, 
-                 initial_val=sim_start,
-                 monthly_cashflow=sim_monthly_add
-             )
+        # Advanced Settings
+        custom_mean = None
+        custom_vol = None
+        filter_start = None
+        filter_end = None
+        block_size = 1
+        
+        with st.expander("⚙️ Advanced Settings (Regimes & Scenarios)", expanded=False):
+            # Source Mode
+            mc_mode = st.radio(
+                "Source Data / Regime",
+                ["Full History (Default)", "Historical Period Filter", "Stress Scenario", "Custom Parameters"],
+                help="Choose how to generate future return paths."
+            )
+            
+            # Mode Logic
+            if mc_mode == "Historical Period Filter":
+                # Get min/max dates from data
+                min_date = daily_rets.index.min().date()
+                max_date = daily_rets.index.max().date()
+                
+                c_f1, c_f2 = st.columns(2)
+                filter_start = c_f1.date_input("From", value=max(min_date, pd.to_datetime("2020-01-01").date()))
+                filter_end = c_f2.date_input("To", value=max_date)
+                
+            elif mc_mode == "Stress Scenario":
+                scenario = st.selectbox(
+                    "Select Historical Scenario",
+                    ["1970s Stagflation (1973-1982)", 
+                     "2000 DotCom Bust (2000-2002)", 
+                     "2008 GFC (2007-2009)", 
+                     "2020 COVID Crash (Feb-Apr 2020)", 
+                     "2022 Inflation/Rates (2022)"]
+                )
+                
+                # Preset Scenarios
+                if "1970s" in scenario:
+                    # Note: Original data may not go back this far!
+                    # Ideally we'd warn, but let the engine filter handle empty data
+                    filter_start = "1973-01-01"
+                    filter_end = "1982-12-31"
+                    st.caption("High Inflation, Rising Rates, Poor Real Returns.")
+                elif "2000" in scenario:
+                    filter_start = "2000-03-01"
+                    filter_end = "2002-10-01"
+                    st.caption("Tech Bubble Burst, Prolonged Bear Market.")
+                elif "2008" in scenario:
+                    filter_start = "2007-10-01"
+                    filter_end = "2009-03-09"
+                    st.caption("Systemic Financial Crisis, DEFLATIONARY shock.")
+                elif "2020" in scenario:
+                    filter_start = "2020-02-19"
+                    filter_end = "2020-04-30"
+                    st.caption("Sudden Pandemic Shock & rapid V-shaped recovery.")
+                elif "2022" in scenario:
+                    filter_start = "2022-01-01"
+                    filter_end = "2022-12-31"
+                    st.caption("Correlated Bond/Stock selloff due to Rate Hikes.")
+                    
+                # Warning about data availability
+                min_avail = daily_rets.index.min().date()
+                if pd.to_datetime(filter_start).date() < min_avail:
+                    st.warning(f"⚠️ Your backtest data starts on {min_avail}. The selected scenario starts earlier ({filter_start}). The simulation will only use available data.")
+                    
+            elif mc_mode == "Custom Parameters":
+                c_p1, c_p2 = st.columns(2)
+                custom_mean = c_p1.number_input("Expected Annual Return (%)", value=7.0, step=0.5) / 100.0
+                custom_vol = c_p2.number_input("Expected Annual Volatility (%)", value=15.0, step=0.5) / 100.0
+                st.info("Generates synthetic returns using Normal Distribution (IID). Ignores historical data patterns.")
+            
+            # Bootstrap Method (Only if using History)
+            if mc_mode != "Custom Parameters":
+                st.markdown("##### Sampling Method")
+                boot_method = st.radio("Method", ["Simple Bootstrap (IID)", "Block Bootstrap"], horizontal=True)
+                if boot_method == "Block Bootstrap":
+                    block_size = st.slider("Block Size (Days)", min_value=5, max_value=60, value=20, help="Larger blocks preserve longer-term market memory (volatility clustering).")
+                    st.caption(f"Sampling contiguous blocks of {block_size} days.")
+    
+        # --- TABS: Standard vs Seasonal ---
+        mc_tab_std, mc_tab_seas = st.tabs(["Standard Simulation (10 Yr)", "📅 Seasonal Analysis (1 Yr)"])
+        
+        with mc_tab_std:
+            # 3. Run Simulation (Standard)
+            with st.spinner(f"Running {n_sims:,} Simulations..."):
+                mc_results = monte_carlo.run_monte_carlo(
+                    daily_rets, 
+                    n_sims=n_sims, 
+                    n_years=10, 
+                    initial_val=sim_start,
+                    monthly_cashflow=sim_monthly_add,
+                    filter_start_date=filter_start,
+                    filter_end_date=filter_end,
+                    custom_mean_annual=custom_mean,
+                    custom_vol_annual=custom_vol,
+                    block_size=block_size
+                )
+        
+        with mc_tab_seas:
+             st.markdown("### 📅 Typical Year Analysis (Seasonal Bootstrap)")
+             st.info("This simulation builds a 'Typical Year' by sampling January returns only from historical Januaries, February entries from Februaries, etc. This reveals seasonal patterns like 'Sell in May' or 'Santa Rally'.")
+             
+             if st.button("Run Seasonal Analysis (5,000 Runs)"):
+                 with st.spinner("Analyzing Seasonality..."):
+                     # Uses the same source data as main MC (e.g. Extended History if avail)
+                     # Uses the same source data as main MC (e.g. Extended History if avail)
+                     seas_df = monte_carlo.run_seasonal_monte_carlo(daily_rets, n_sims=5000, initial_val=sim_start, monthly_cashflow=sim_monthly_add)
+                     
+                     if not seas_df.empty:
+                         # Plot
+                         import plotly.graph_objects as go
+                         import numpy as np
+                         fig = go.Figure()
+                         
+                         # Create a dummy date range for a typical year (using 2024 as generic leap year)
+                         # This allows Plotly to show dates in the tooltip header automatically.
+                         x_axis = pd.bdate_range(start='2024-01-01', periods=len(seas_df))
+                         
+                         # Values are already in DOLLARS from the engine
+                         p90_vals = seas_df["P90"]
+                         p75_vals = seas_df["P75"]
+                         p25_vals = seas_df["P25"]
+                         p10_vals = seas_df["P10"]
+                         median_vals = seas_df["Median"]
+                         
+                         # Custom Hover Template
+                         # Note: In 'x unified' hovermode, the LAST added trace appears at the TOP.
+                         # We want P90 at top, so we add P10 first, then P25... finishing with P90.
+                         
+                         # 1. P10 (Pessimistic) - Bottom of List
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p10_vals,
+                             mode='lines', 
+                             line=dict(color='rgba(255, 50, 50, 0.5)', width=1, dash='dash'), # Red
+                             name='P10 (Pessimistic)',
+                             hovertemplate='<b>P10</b>: $%{y:,.0f}<extra></extra>'
+                         ))
+
+                         # 2. P25
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p25_vals,
+                             mode='lines', 
+                             line=dict(color='rgba(255, 165, 0, 0.5)', width=1, dash='dot'), # Orange
+                             name='P25 (Mod. Downside)',
+                             hovertemplate='<b>P25</b>: $%{y:,.0f}<extra></extra>'
+                         ))
+
+                         # 3. Median (Main)
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=median_vals,
+                             mode='lines', 
+                             line=dict(color='#00C8FF', width=3), # Cyan
+                             name='Median',
+                             hovertemplate='<b>Median</b>: $%{y:,.0f}<extra></extra>'
+                         ))
+
+                         # 4. P75
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p75_vals,
+                             mode='lines', 
+                             line=dict(color='rgba(200, 200, 200, 0.5)', width=1, dash='dot'),
+                             name='P75 (Mod. Upside)',
+                             hovertemplate='<b>P75</b>: $%{y:,.0f}<extra></extra>'
+                         ))
+
+                         # 5. P90 (Optimistic) - Top of List
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p90_vals,
+                             mode='lines', 
+                             line=dict(color='rgba(255, 215, 0, 0.5)', width=1, dash='dash'), # Gold dashed
+                             name='P90 (Optimistic)',
+                             hovertemplate='<b>P90</b>: $%{y:,.0f}<extra></extra>'
+                         ))
+                         
+                         # Shading (Fills) using invisible traces if needed, or fill='tonexty' on lines
+                         # Let's add separate fill traces to keep lines clean in legend
+                         # Fill 10-90
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p90_vals,
+                             mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
+                         ))
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p10_vals,
+                             mode='lines', line=dict(width=0),
+                             fill='tonexty', fillcolor='rgba(255, 215, 0, 0.05)', # Very faint gold/yellow
+                             showlegend=False, hoverinfo='skip'
+                         ))
+                         
+                         # Fill 25-75 (Darker center)
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p75_vals,
+                             mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
+                         ))
+                         fig.add_trace(go.Scatter(
+                             x=x_axis, y=p25_vals,
+                             mode='lines', line=dict(width=0),
+                             fill='tonexty', fillcolor='rgba(0, 200, 255, 0.1)', # Cyan tint
+                             showlegend=False, hoverinfo='skip'
+                         ))
+                         
+                         fig.update_layout(
+                             title=f"Seasonal Performance Cone (Based on ${sim_start:,.0f})",
+                             xaxis=dict(
+                                 title="Month (Typical Year)",
+                                 tickformat="%b",      # Axis labels: Jan, Feb...
+                                 hoverformat="%b %d",  # Tooltip header: Jan 01, Jan 02...
+                                 dtick="M1"            # Force monthly ticks
+                             ),
+                             yaxis=dict(title="Portfolio Value ($)", tickprefix="$"),
+                             template="plotly_dark",
+                             height=500,
+                             hovermode="x unified",
+                             legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
+                         )
+                         
+                         st.plotly_chart(fig, use_container_width=True)
+                         
+                         # Stats
+                         final_med = seas_df["Median"].iloc[-1]
+                         st.metric("Typical Year Ending Balance", f"${final_med:,.0f}")
+                     else:
+                         st.error("Not enough data for seasonality.")
         
         # Log detailed scenario results to .csv file
         try:

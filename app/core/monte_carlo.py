@@ -2,10 +2,15 @@
 import pandas as pd
 import numpy as np
 
-def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, monthly_cashflow=0.0):
+def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, monthly_cashflow=0.0,
+                    filter_start_date=None, filter_end_date=None,
+                    custom_mean_annual=None, custom_vol_annual=None,
+                    block_size=1):
     """
-    Runs a Monte Carlo simulation using Historical Bootstrap (resampling with replacement).
-    Supports optional monthly cashflow injections.
+    Runs a Monte Carlo simulation with advanced regime options:
+    - Historical Period Filtering
+    - Custom Return/Vol Parameters
+    - Block Bootstrapping (Preserves autocorrelation)
     """
     if returns_series.empty:
         return {"percentiles": pd.DataFrame(), "metrics": {}}
@@ -13,15 +18,83 @@ def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, 
     # Pre-calculate simulation parameters
     n_days = int(n_years * 252) # Trading days
     
-    # Extract daily returns as numpy array (drop NaNs)
-    daily_rets = returns_series.dropna().values
-    if len(daily_rets) == 0:
-        return {"percentiles": pd.DataFrame(), "metrics": {}}
+    # --- Mode 2: Custom Parameters (Synthetic) ---
+    if custom_mean_annual is not None and custom_vol_annual is not None:
+        # Convert annual to daily
+        daily_mean = custom_mean_annual / 252.0
+        daily_vol = custom_vol_annual / np.sqrt(252.0)
+        
+        # Generate Gaussian noise (IID)
+        sim_returns = np.random.normal(daily_mean, daily_vol, size=(n_days, n_sims))
+        
+    else:
+        # --- Mode 1 & 3: Historical Bootstrap (Filtered or Full) ---
+        
+        # 1. Date Range Filtering
+        data_to_sample = returns_series
+        if filter_start_date and filter_end_date:
+            try:
+                start_ts = pd.to_datetime(filter_start_date)
+                end_ts = pd.to_datetime(filter_end_date)
+                # Ensure we have data in range
+                filtered = returns_series[
+                    (returns_series.index >= start_ts) & 
+                    (returns_series.index <= end_ts)
+                ]
+                if not filtered.empty:
+                    data_to_sample = filtered
+            except Exception:
+                pass # Fallback to full series if parsing fails
+        
+        # Extract daily returns
+        daily_rets = data_to_sample.dropna().values
+        if len(daily_rets) == 0:
+            return {"percentiles": pd.DataFrame(), "metrics": {}}
 
-    # Generate random indices for bootstrapping
-    # Shape: (n_days, n_sims)
-    random_indices = np.random.randint(0, len(daily_rets), size=(n_days, n_sims))
-    sim_returns = daily_rets[random_indices]
+        # 2. Bootstrapping Logic
+        if block_size > 1:
+            # --- Circular Block Bootstrapping ---
+            # Using Circular Bootstrap ensures equal probability for all data points
+            # (including start/end of the series).
+            n_samples = len(daily_rets)
+            
+            # Allow picking ANY start index (0 to n_samples - 1)
+            # The block will wrap around using modulo if it hits the end
+            num_blocks_needed = (n_days // block_size) + 1
+            
+            # Generate random start indices
+            # Shape: (num_blocks_needed, n_sims)
+            block_starts = np.random.randint(0, n_samples, size=(num_blocks_needed, n_sims))
+            
+            # Create offset array [0, 1, 2, ... block_size-1]
+            block_offsets = np.arange(block_size) # Shape: (block_size,)
+            
+            sim_returns_list = []
+            for b in range(num_blocks_needed):
+                starts = block_starts[b, :] # Shape: (n_sims,)
+                
+                # Matrix of raw indices: starts + offset
+                # shape: (block_size, n_sims)
+                raw_indices = starts[np.newaxis, :] + block_offsets[:, np.newaxis]
+                
+                # Modulo arithmetic for circular wrapping
+                wrapped_indices = raw_indices % n_samples
+                
+                block_rets = daily_rets[wrapped_indices]
+                sim_returns_list.append(block_rets)
+                
+            # Concatenate all blocks along time axis (axis 0)
+            full_sim = np.concatenate(sim_returns_list, axis=0)
+            
+            # Trim to exact n_days
+            sim_returns = full_sim[:n_days, :]
+
+        else:
+            # --- Simple IID Bootstrap (Default) ---
+            # Generate random indices for bootstrapping
+            # Shape: (n_days, n_sims)
+            random_indices = np.random.randint(0, len(daily_rets), size=(n_days, n_sims))
+            sim_returns = daily_rets[random_indices]
     
     # --- Simulation Engine ---
     if monthly_cashflow == 0:
@@ -140,3 +213,92 @@ def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, 
             "final_twr": final_twr_multiples
         }
     }
+
+def run_seasonal_monte_carlo(returns_series, n_sims=1000, initial_val=10000.0, monthly_cashflow=0.0):
+    """
+    Runs a Seasonal Monte Carlo simulation for a single "Typical Year".
+    
+    Logic:
+    1. Group historical daily returns by Month (1-12).
+    2. Simulate a year day-by-day.
+    3. If simulation day is in Jan, sample from Jan bucket. If Feb, sample from Feb bucket.
+    4. Applies monthly cashflows if provided.
+    
+    Returns:
+    DataFrame of percentiles (P10, P50, P90) indexed by day of year.
+    Values are in DOLLARS (Projected Portfolio Value), not normalized multipliers.
+    """
+    if returns_series.empty:
+         return pd.DataFrame()
+
+    # 1. Bucket Returns by Month
+    # We use explicit looping for safety or boolean indexing
+    # Optimization: Create a list of 12 numpy arrays
+    df_rets = returns_series.to_frame(name="ret")
+    df_rets["month"] = df_rets.index.month
+    
+    month_buckets = {}
+    for m in range(1, 13):
+        # Dropna inside bucket
+        vals = df_rets[df_rets["month"] == m]["ret"].dropna().values
+        if len(vals) == 0:
+            # Fallback: if a month has no data (weird), use full history
+            vals = df_rets["ret"].dropna().values
+        month_buckets[m] = vals
+        
+    # 2. Simulate Calendar Year
+    # We'll assume 21 trading days per month for simplicity
+    days_per_month = 21
+    total_days = days_per_month * 12
+    
+    # Store daily returns for all sims
+    # Shape: (total_days, n_sims)
+    sim_returns = np.zeros((total_days, n_sims))
+    
+    current_day = 0
+    for m in range(1, 13):
+        bucket = month_buckets[m]
+        n_days_in_this_month = days_per_month
+        
+        # Sample for this month
+        # Shape: (days_in_month, n_sims)
+        # Random choice from bucket
+        random_indices = np.random.randint(0, len(bucket), size=(n_days_in_this_month, n_sims))
+        monthly_sim_rets = bucket[random_indices]
+        
+        # Fill results array
+        sim_returns[current_day : current_day + n_days_in_this_month, :] = monthly_sim_rets
+        current_day += n_days_in_this_month
+        
+    # 3. Calculate Cumulative Path with Cashflows
+    # Shape: (n_days + 1, n_sims) to include start
+    sim_paths = np.zeros((total_days + 1, n_sims))
+    sim_paths[0, :] = initial_val
+    
+    for t in range(total_days):
+        # 3a. Apply Market Return
+        # Value(t+1) = Value(t) * (1 + Ret)
+        sim_paths[t+1, :] = sim_paths[t, :] * (1 + sim_returns[t, :])
+        
+        # 3b. Apply Monthly Cashflow (Approx every 21 days)
+        # Inject at the END of the month (after return)
+        if (t + 1) % days_per_month == 0:
+            sim_paths[t+1, :] += monthly_cashflow
+    
+    # 4. Calculate Percentiles (on Dollar Values)
+    p10 = np.percentile(sim_paths, 10, axis=1)
+    p25 = np.percentile(sim_paths, 25, axis=1)
+    p50 = np.percentile(sim_paths, 50, axis=1)
+    p75 = np.percentile(sim_paths, 75, axis=1)
+    p90 = np.percentile(sim_paths, 90, axis=1)
+    
+    # Index: 0 to 252
+    df_result = pd.DataFrame({
+        "P10": p10,
+        "P25": p25,
+        "Median": p50,
+        "P75": p75,
+        "P90": p90
+    })
+    
+    return df_result
