@@ -1973,7 +1973,8 @@ def render_monte_carlo_view(mc_results):
         bargap=0.1,
         xaxis=xaxis_config,
         yaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
-        margin=dict(t=60) # More space for 3-tier annotations
+        margin=dict(t=60), # More space for 3-tier annotations
+        hovermode="x" # Snap to x-axis (easier to hit lines)
     )
     
     st.plotly_chart(fig_hist, use_container_width=True)
