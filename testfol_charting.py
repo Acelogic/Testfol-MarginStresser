@@ -131,7 +131,7 @@ else:
                     # --- Hybrid (Local) Simulation ---
                     from app.core import calculations
                     
-                    # 1. Fetch Component Data
+                    # 1. Fetch Component Data (Testfol API for extended history)
                     tickers = list(alloc_preview.keys())
                     prices_df = fetch_component_data(tickers, start_date, end_date)
                     
@@ -139,8 +139,8 @@ else:
                         st.error("Failed to fetch price data for tickers.")
                         st.stop()
                         
-                    # 2. Run Local Simulation
-                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = cached_run_shadow_backtest_v2(
+                    # 2. Generate Chart using Testfol Data (Extended Simulated History)
+                    _, _, _, _, _, port_series, _ = cached_run_shadow_backtest_v2(
                         allocation=alloc_preview, 
                         start_val=config['start_val'],
                         start_date=start_date,
@@ -149,24 +149,36 @@ else:
                         rebalance_freq="Custom",
                         cashflow=shadow_cashflow,
                         cashflow_freq=config['cashfreq'],
-                        prices_df=prices_df,
+                        prices_df=prices_df,  # Use Testfol data for chart
                         rebalance_month=config.get('rebalance_month', 1),
                         rebalance_day=config.get('rebalance_day', 1),
                         custom_freq=config.get('custom_freq', 'Yearly')
                     )
                     
                     if port_series.empty:
-                        st.error("Hybrid Simulation Failed.")
-                        with st.expander("Error Logs", expanded=True):
-                            for log in logs:
-                                st.write(log)
+                        st.error("Hybrid Simulation Failed (Chart Generation).")
                         st.stop()
-                        
-                        st.stop()
+                    
+                    # 3. Generate Taxes using yFinance (Real Market Data Only)
+                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
+                        allocation=alloc_preview, 
+                        start_val=config['start_val'],
+                        start_date=start_date,
+                        end_date=end_date,
+                        api_port_series=port_series, # Use Testfol chart for alignment
+                        rebalance_freq="Custom",
+                        cashflow=shadow_cashflow,
+                        cashflow_freq=config['cashfreq'],
+                        # prices_df NOT passed - forces yFinance usage for realistic taxes
+                        rebalance_month=config.get('rebalance_month', 1),
+                        rebalance_day=config.get('rebalance_day', 1),
+                        custom_freq=config.get('custom_freq', 'Yearly')
+                    )
                         
                     # Package results for render_results
                     stats = calculations.generate_stats(twr_series) # Local Stats (TWR based)
                     extra_data = {"rebalancing_events": []} # No native events for custom yet
+                    
                     
                 else:
                     # --- Standard (API) Simulation ---

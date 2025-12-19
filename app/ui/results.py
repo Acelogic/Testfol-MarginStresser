@@ -18,12 +18,11 @@ def render(results, config):
         results (dict): The results dictionary from the backtest.
         config (dict): The configuration dictionary used for the backtest.
     """
-    
+        
     # Extract Data from Results
     port_series = results["port_series"]
     stats = results["stats"]
     
-    # Validation: Ensure we have a valid DatetimeIndex series
     if port_series.empty or not isinstance(port_series.index, pd.DatetimeIndex):
         st.error("No valid simulation data generated. Check inputs or API connection.")
         return
@@ -97,26 +96,26 @@ def render(results, config):
             else:
                 loss_cf_state = abs(net)
         
-        total_tax_owed = fed_tax_series.sum() + state_tax_series.sum()
-        
-        # Create Payment Series (Unconditional for Sharpe Calc)
-        tax_payment_series = pd.Series(0.0, index=port_series.index)
-        annual_total_tax = fed_tax_series + state_tax_series
-        
-        for year, amount in annual_total_tax.items():
-            if amount > 0:
-                # Pay on April 15th of NEXT year
-                pay_date = pd.Timestamp(year + 1, 4, 15)
-                
-                # Find closest valid date in portfolio index
-                # We use searchsorted to find the insertion point
-                idx = port_series.index.searchsorted(pay_date)
-                
-                if idx < len(port_series.index):
-                    # Check if the date is reasonably close (e.g. within same month)
-                    # If backtest ends in 2024, we can't pay 2024 taxes in 2025
-                    actual_date = port_series.index[idx]
-                    tax_payment_series[actual_date] += amount
+    total_tax_owed = fed_tax_series.sum() + state_tax_series.sum()
+    
+    # Create Payment Series (Unconditional for Sharpe Calc)
+    tax_payment_series = pd.Series(0.0, index=port_series.index)
+    annual_total_tax = fed_tax_series + state_tax_series
+    
+    for year, amount in annual_total_tax.items():
+        if amount > 0:
+            # Pay on April 15th of NEXT year
+            pay_date = pd.Timestamp(year + 1, 4, 15)
+            
+            # Find closest valid date in portfolio index
+            # We use searchsorted to find the insertion point
+            idx = port_series.index.searchsorted(pay_date)
+            
+            if idx < len(port_series.index):
+                # Check if the date is reasonably close (e.g. within same month)
+                # If backtest ends in 2024, we can't pay 2024 taxes in 2025
+                actual_date = port_series.index[idx]
+                tax_payment_series[actual_date] += amount
 
     # Prepare Repayment Series (if Pay Down Margin is enabled)
     repayment_series = None
@@ -142,7 +141,7 @@ def render(results, config):
                 repayment_vals[changes] = cashflow
         
         repayment_series = repayment_vals
-
+    
     # Re-run margin sim (fast enough to run every time, or could cache too)
     # Only pass tax_series if the user opted to pay with margin
     sim_tax_series = tax_payment_series if pay_tax_margin else None
@@ -209,7 +208,7 @@ def render(results, config):
             bench_aligned = bench_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
             # Resample for charts handled below
             bench_resampled = utils.resample_data(bench_aligned, timeframe, method="last")
-
+    
     # Retrieve Comparison Benchmark (Standard Rebalance) if available
     comp_series = results.get("comparison_series")
     comp_resampled = None
@@ -220,7 +219,7 @@ def render(results, config):
                  comp_resampled.name = "Standard (Yearly)"
              else:
                  comp_resampled.name = comp_series.name
-
+    
     # Recalculate Leverage Metrics based on Tax-Adjusted Equity
     # Equity % = Net Equity / Portfolio Value
     tax_adj_equity_pct_series = pd.Series(0.0, index=tax_adj_port_series.index)
@@ -243,10 +242,10 @@ def render(results, config):
     loan_resampled = utils.resample_data(loan_series, timeframe, method="last")
     usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
     equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
-
+    
     usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
     equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
-
+    
     st.caption(f"📅 **Backtest Range:** {results.get('sim_range', 'N/A')}")
     m1, m2, m3, m4, m5 = st.columns(5)
     
@@ -259,7 +258,7 @@ def render(results, config):
              st.info(f"**Comparison Active**: Strategy vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
          except:
              pass
-
+    
     total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
     
     # Use Stats reported by Testfol API (TWR)
@@ -339,7 +338,7 @@ def render(results, config):
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", help="Pre-tax risk-adjusted return")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
         m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
-
+    
     # --- Secondary Metrics in Expander (Only show when tax simulation is active) ---
     tax_sim_active = pay_tax_margin or pay_tax_cash
     
@@ -370,7 +369,7 @@ def render(results, config):
                 st.caption(f"ℹ️ **Timing Difference:** Total Tax Paid (\${display_tax:,.0f}) is lower than Total Tax Owed (\${total_tax_owed:,.0f}) because taxes are typically paid on **April 15th of the following year**. The tax bill for the final simulation year (\${unpaid_liability:,.0f}) is technically owed (Accrued) but the payment date falls **after** the simulation ends, so it was never deducted from your cash.")
             
     st.markdown("---")
-
+    
     res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔮 Monte Carlo", "🔧 Debug"])
     
     with res_tab_tax:
@@ -383,7 +382,68 @@ def render(results, config):
         *   **Pay with Margin:** Taxes paid via loan. Assets preserved. Cost = Interest.
         *   **Pay from Cash:** Taxes paid via asset sales. Assets reduced. Cost = Lost Compounding.
         """)
-        
+
+        # --- Data Integrity Check (Chart vs Tax Data) ---
+        twr_series = results.get("twr_series")
+        if twr_series is not None and not twr_series.empty:
+            # 1. Determine Common Timeframe
+            start_dt = twr_series.index[0]
+            end_dt = twr_series.index[-1]
+            years = (end_dt - start_dt).days / 365.25
+            
+            # 2. Calculate Shadow CAGR
+            shadow_cagr = (twr_series.iloc[-1] / twr_series.iloc[0]) ** (1/years) - 1
+            
+            # 3. Calculate "Subset" API CAGR (Aligned to Shadow Dates)
+            api_cagr = 0.0
+            if not port_series.empty:
+                try:
+                    p_start = port_series.asof(start_dt)
+                    p_end = port_series.asof(end_dt)
+                    if pd.notna(p_start) and pd.notna(p_end) and p_start > 0:
+                        api_cagr = (p_end / p_start) ** (1/years) - 1
+                except:
+                    api_cagr = stats.get("cagr", 0.0)
+                    if api_cagr > 1.0: api_cagr /= 100.0
+
+            # 4. Comparison
+            cf_amt = config.get('cashflow', 0.0)
+            diff = abs(shadow_cagr - api_cagr)
+            
+            # Show Validation Expander
+            with st.expander("🔎 Data Validation (Chart vs Tax Data)", expanded=False):
+                st.caption(f"Comparing performance over overlapped period: {start_dt.strftime('%Y-%m-%d')} to {end_dt.strftime('%Y-%m-%d')}")
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Chart CAGR (Testfol)", f"{api_cagr:.2%}")
+                c2.metric("Tax CAGR (yFinance)", f"{shadow_cagr:.2%}")
+                
+                delta_color = "normal"
+                if diff < 0.002: delta_color = "normal" 
+                elif diff < 0.005: delta_color = "off" 
+                else: delta_color = "inverse" 
+                
+                c3.metric("Drift", f"{diff:.2%}", delta="Match" if diff < 0.005 else "Mismatch", delta_color=delta_color)
+                
+                # Explanatory notes
+                if abs(cf_amt) > 10:
+                    st.caption("Note: Small drift is expected when Cashflows are active (MWR vs TWR).")
+                elif diff > 0.01:
+                    st.warning("Significant drift detected! 'yfinance' price data may differ from Testfol's source (e.g., missing dividends, bad splits). Tax calculations may be less accurate.")
+                
+                # Hybrid mode explanation
+                sim_engine = config.get('sim_engine', 'standard')
+                if sim_engine == 'hybrid':
+                    st.info("""
+**Hybrid Mode: Why Drift Occurs**
+
+Your chart uses Testfol's extended simulated data (e.g., SPYSIM for SPY back to the 1980s). However, tax calculations use **real yFinance data only**, which may start later (e.g., real ZROZ data starts in 2009).
+
+When yFinance data starts later than your chart, the tax engine initializes your portfolio at that later date using the chart's value at that time as your cost basis. This ensures taxes are grounded in reality rather than synthetic models.
+
+**Example:** If your chart shows $500k in 2009 but uses simulated data for 1980–2009, your taxes will treat 2009 as your acquisition date with a $500k cost basis.
+                    """.strip())
+
         if (pay_tax_margin or pay_tax_cash) and not final_adj_series.empty and not pl_by_year.empty:
             # Prepare Data
             # 1. Annual Ending Balance (Tax Adjusted)
@@ -478,7 +538,7 @@ def render(results, config):
             st.warning("Tax Simulation is set to **None (Gross)**. Enable 'Pay from Cash' or 'Pay with Margin' to see tax impact analysis.")
         else:
             st.info("No data available for tax analysis.")
-
+    
     with res_tab_debug:
         st.markdown("### Shadow Backtest Logs")
         if logs:
@@ -552,7 +612,7 @@ def render(results, config):
                     "Amount": [total_draws, total_tax_paid]
                 })
                 st.dataframe(w_df.style.format({"Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
-
+    
         else:
             with st.expander("Detailed Margin Statistics", expanded=True):
                 # --- Calculations ---
@@ -586,7 +646,7 @@ def render(results, config):
                     current_port_val = tax_adj_port_series.iloc[-1]
                     max_loan_allowed = current_port_val * (1 - wmaint)
                     avail_withdraw = max_loan_allowed - final_loan_val
-
+    
                     # --- Display Layout (Aligned 3-Column Grid) ---
                     
                     # Row 1: Current Status
@@ -673,7 +733,7 @@ def render(results, config):
             st.info("ℹ️ **Note:** Returns are **Gross** (taxes paid via margin loan).")
         else:
             st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
-
+    
         charts.render_returns_analysis(
             tax_adj_port_series, 
             bench_series=bench_resampled,
@@ -698,7 +758,7 @@ def render(results, config):
                     if current_total > 0:
                         ratio = target_total / current_total
                         composition_df.loc[composition_df["Date"] == d, "Value"] *= ratio
-
+    
         charts.render_rebalancing_analysis(
             trades_df, pl_by_year, composition_df,
             tax_method, other_income, filing_status, state_tax_rate,
@@ -756,7 +816,7 @@ def render(results, config):
         elif cf_freq == 'Yearly': def_monthly = cf_amt / 12
         
         sim_monthly_add = c_flow.number_input("Monthly Add ($)", value=float(def_monthly), step=100.0, help="Monthly contribution injected into simulation")
-
+    
         # 3. Run Simulation
         with st.spinner(f"Running {n_sims:,} Simulations..."):
              mc_results = monte_carlo.run_monte_carlo(
@@ -805,12 +865,14 @@ def render(results, config):
                 
         except Exception as e:
             st.error(f"Failed to write detailed CSV: {e}")
-
+    
         # 3. Render
         charts.render_monte_carlo_view(mc_results)
         
     with res_tab_debug:
         st.subheader("Debug Info")
+        
+        st.divider()
         st.json(logs)
         st.write("Raw API Response (First 5 items):")
         st.write(str(raw_response)[:1000])
