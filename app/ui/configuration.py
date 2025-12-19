@@ -2,13 +2,14 @@ import streamlit as st
 import pandas as pd
 from app.common import utils
 from app.services import testfol_api as api
+from . import asset_explorer
 
 def render():
     """Renders the configuration tabs and returns a config dictionary."""
     
     st.subheader("Strategy Configuration")
     
-    tab_port, tab_margin, tab_bench, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "📊 Benchmark", "⚙️ Settings"])
+    tab_port, tab_margin, tab_bench, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "📊 Benchmark", "🧩 Asset Explorer", "⚙️ Settings"])
     
     config = {}
 
@@ -226,6 +227,11 @@ def render():
                 use_container_width=True,
                 key="bench_editor"
             )
+
+    with tab_asset:
+        # Asset Explorer is self-contained.
+        # It doesn't modify the simulation config, just visualizes data.
+        asset_explorer.render_asset_explorer()
 
     with tab_settings:
         c1, c2 = st.columns(2)

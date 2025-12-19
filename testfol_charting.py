@@ -12,7 +12,7 @@ import os
 from app.services import fetch_backtest
 from app.core import run_shadow_backtest, calculations
 from app.common import utils
-from app.ui import render_sidebar, render_config, render_results
+from app.ui import render_sidebar, render_config, render_results, asset_explorer
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Caching Wrappers
