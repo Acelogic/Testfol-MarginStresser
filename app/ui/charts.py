@@ -1736,15 +1736,35 @@ def render_monte_carlo_view(mc_results):
 
     # --- Helper & Pre-calc ---
     def fmt_currency_custom(val):
-        if abs(val) >= 1e9: return f"${val/1e9:.2f}B"
-        if abs(val) >= 1e6: return f"${val/1e6:.2f}M"
+        if abs(val) >= 1e9: return f"${val/1e9:.2f}B" # 2 decimals for Billions
+        if abs(val) >= 1e6: return f"${val/1e6:.1f}M" # 1 decimal for Millions
         if abs(val) >= 1e3: return f"${val/1e3:.0f}k"
         return f"${val:.0f}"
+        
+    def calculate_nice_ticks(min_v, max_v, is_log=False):
+        """Generate human-friendly tick values for axes."""
+        if is_log:
+            # Powers of 10
+            start_exp = np.floor(np.log10(max(1, min_v)))
+            end_exp = np.ceil(np.log10(max(1, max_v)))
+            ticks = 10 ** np.arange(start_exp, end_exp + 1)
+            # Filter to relevant range
+            ticks = ticks[(ticks >= min_v * 0.5) & (ticks <= max_v * 1.5)]
+            return ticks
+        else:
+            # Simple linear grid (5-6 ticks)
+            return np.linspace(0, max_v, num=6)
 
     # Pre-calculate custom labels for tooltips
     chart_cols = ["Median", "P10", "P90", "P25", "P75"]
     for col in chart_cols:
         df[f"{col}_chk"] = df[col].apply(fmt_currency_custom)
+        
+    # Calculate Axis Ticks (Force 'B' suffix)
+    y_max_main = df["P90"].max()
+    y_min_main = df["P10"].min()
+    main_ticks = calculate_nice_ticks(y_min_main, y_max_main, use_log)
+    main_tickdata = [fmt_currency_custom(x) for x in main_ticks]
 
     # --- Visible Lines (Ordered Bottom-to-Top for Z-Order) ---
     
@@ -1842,52 +1862,64 @@ def render_monte_carlo_view(mc_results):
     # --- Manual Binning for Robust Scale Handling ---
     if use_log:
         # Log Mode: Bin in log-space, then map back to dollars
-        # This ensures the "bars" (steps) look uniform on a log axis
-        safe_data = path_finals[path_finals > 0] # Filter <= 0
+        safe_data = path_finals[path_finals > 0] 
         log_data = np.log10(safe_data)
-        counts, bin_edges = np.histogram(log_data, bins=100)
+        counts, bin_edges_log = np.histogram(log_data, bins=100)
         
-        # Calculate centers in log space, convert to dollars
-        ctrs_log = (bin_edges[:-1] + bin_edges[1:]) / 2
-        x_plot = 10**ctrs_log
+        # Calculate widths in linear domain (critical for go.Bar on log axis)
+        bin_edges = 10**bin_edges_log
+        widths = np.diff(bin_edges)
+        ctrs = (bin_edges[:-1] + bin_edges[1:]) / 2
+        
+        x_plot = ctrs
         y_plot = counts
+        bar_widths = widths
         
         xaxis_config = dict(
             tickformat='$.2s', 
             gridcolor='rgba(128,128,128,0.2)',
-            type='log',
-            # Let Plotly auto-range the explicit points
+            type='log'
         )
     else:
-        # Linear Mode: Bin the clipped data (0 to P95)
-        # This focuses the 100 bins on the meat of the distribution
+        # Linear Mode: Bin the clipped data
         data_clipped = path_finals[path_finals <= p95_val * 1.05]
-        data_clipped = data_clipped[data_clipped >= 0] # Safety
+        data_clipped = data_clipped[data_clipped >= 0] 
         
         counts, bin_edges = np.histogram(data_clipped, bins=100)
+        widths = np.diff(bin_edges)
         x_plot = (bin_edges[:-1] + bin_edges[1:]) / 2
         y_plot = counts
+        bar_widths = widths
         
         xaxis_config = dict(
             tickformat='$.2s', 
             gridcolor='rgba(128,128,128,0.2)',
             type='linear',
-            range=[0, p95_val * 1.05] # Explicit zoom
+            range=[0, p95_val * 1.05] 
         )
     
+    # Calculate Manual Ticks for Histogram (to fix 'G')
+    hist_min = np.min(x_plot) if use_log else 0
+    hist_max = np.max(x_plot) if use_log else p95_val * 1.05
+    hist_ticks = calculate_nice_ticks(hist_min, hist_max, use_log)
+    hist_tickdata = [fmt_currency_custom(x) for x in hist_ticks]
+    
+    # Enable manual ticks
+    xaxis_config["tickmode"] = "array"
+    xaxis_config["tickvals"] = hist_ticks
+    xaxis_config["ticktext"] = hist_tickdata
+
     fig_hist = go.Figure()
     
-    # Render as Filled Area (Step Plot) -> Looks like Histogram
-    # Generate custom labels for the area chart trace 
+    # Render as Explicit Bar Chart (for Separator Lines)
     hist_custom_labels = [fmt_currency_custom(v) for v in x_plot]
     
-    fig_hist.add_trace(go.Scatter(
+    fig_hist.add_trace(go.Bar(
         x=x_plot, y=y_plot,
-        mode='lines',
-        line_shape='hvh', # Step shape
-        fill='tozeroy',
-        line=dict(color='rgba(100, 255, 255, 1)', width=1), # Cyan outline
-        fillcolor='rgba(100, 255, 255, 0.4)', # Semi-transparent fill
+        width=bar_widths, # Explicit widths for log scale correctness
+        marker_color='rgba(0, 150, 150, 0.6)', # Darker Cyan Fill
+        marker_line_color='rgba(200, 255, 255, 0.8)', # Bright separation lines
+        marker_line_width=1,
         name='Frequency',
         customdata=hist_custom_labels,
         hovertemplate="<b>Value</b>: %{customdata}<br><b>Count</b>: %{y}<extra></extra>"
