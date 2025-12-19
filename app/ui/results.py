@@ -378,7 +378,7 @@ def render(results, config):
             
     st.markdown("---")
     
-    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔮 Monte Carlo", "🔧 Debug"])
+    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔮 Monte Carlo", "🔧 Debug"])
     
     with res_tab_tax:
         st.markdown("### Annual Tax Impact Analysis")
