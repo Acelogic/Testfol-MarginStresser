@@ -186,7 +186,7 @@ else:
                     
                     # Run Shadow for Tax Lots ONLY (using API series for alignment)
                     if not port_series.empty:
-                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, _ = cached_run_shadow_backtest_v2(
+                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
                             allocation=alloc_preview, 
                             start_val=config['start_val'],
                             start_date=start_date,
@@ -237,8 +237,12 @@ else:
                     "unrealized_pl_df": unrealized_pl_df,
                     "logs": logs,
                     "sim_range": sim_range_str,
-                    "shadow_range": shadow_range_str
+                    "shadow_range": shadow_range_str,
+                    "twr_series": twr_series, # Add TWR for Monte Carlo
+                    "cashflow": config.get('cashflow', 0.0),
+                    "cashfreq": config.get('cashfreq', 'None')
                 }
+
                 
             except Exception as e:
                 st.error(f"Error running backtest: {e}")

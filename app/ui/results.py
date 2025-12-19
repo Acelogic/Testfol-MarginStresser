@@ -3,7 +3,8 @@ import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
 from app.common import utils
-from app.core import calculations, tax_library
+from app.core import run_shadow_backtest, calculations, tax_library
+from app.core import monte_carlo # Import Monte Carlo module
 from app.services import testfol_api as api
 from app.reporting import report_generator
 from app.ui import charts
@@ -370,7 +371,7 @@ def render(results, config):
             
     st.markdown("---")
 
-    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔧 Debug"])
+    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔮 Monte Carlo", "🔧 Debug"])
     
     with res_tab_tax:
         st.markdown("### Annual Tax Impact Analysis")
@@ -717,6 +718,96 @@ def render(results, config):
             pay_tax_cash=pay_tax_cash,
             pay_tax_margin=pay_tax_margin
         )
+        
+    with res_tab_mc:
+        st.markdown("### 🔮 Monte Carlo Simulation (Historical Bootstrap)")
+        st.info("Simulating **10-year future performance** based on your strategy's historical daily volatility. Assumes reinvestment of all returns.")
+        
+        
+        # 1. Get Returns Data
+        twr_series = results.get("twr_series")
+        if twr_series is None or twr_series.empty:
+            # Fallback for old cache or if Standard mode missed it (shouldn't happen now)
+            # Use portfolio series but warn about cashflows
+            series_to_use = results.get("port_series")
+            if series_to_use is not None and not series_to_use.empty:
+                st.warning("⚠️ Using Portfolio Equity for simulation (TWR not found). If you have cashflows, this may be inaccurate.")
+                daily_rets = series_to_use.pct_change()
+            else:
+                st.error("No return data available for Monte Carlo.")
+                st.stop()
+        else:
+            daily_rets = twr_series.pct_change()
+            
+        # 2. Configuration
+        c_sims, c_start, c_flow = st.columns(3)
+        n_sims = c_sims.slider("Scenarios", 100, 5000, 1000, 100, help="More scenarios = smoother cone")
+        
+        # Start Value Default
+        def_start = results.get("start_val", 10000.0)
+        sim_start = c_start.number_input("Start Value ($)", value=float(def_start), step=1000.0)
+        
+        # Cashflow Default (Normalize to Monthly)
+        cf_amt = results.get("cashflow", 0.0)
+        cf_freq = results.get("cashfreq", "None")
+        def_monthly = 0.0
+        if cf_freq == 'Monthly': def_monthly = cf_amt
+        elif cf_freq == 'Quarterly': def_monthly = cf_amt / 3
+        elif cf_freq == 'Yearly': def_monthly = cf_amt / 12
+        
+        sim_monthly_add = c_flow.number_input("Monthly Add ($)", value=float(def_monthly), step=100.0, help="Monthly contribution injected into simulation")
+
+        # 3. Run Simulation
+        with st.spinner(f"Running {n_sims:,} Simulations..."):
+             mc_results = monte_carlo.run_monte_carlo(
+                 daily_rets, 
+                 n_sims=n_sims, 
+                 n_years=10, 
+                 initial_val=sim_start,
+                 monthly_cashflow=sim_monthly_add
+             )
+        
+        # Log detailed scenario results to .csv file
+        try:
+            import os
+            import csv
+            
+            os.makedirs("debug_tools", exist_ok=True)
+            log_path = "debug_tools/monte_carlo_scenarios.csv"
+            
+            # Extract data
+            paths_df = mc_results["paths"]
+            final_vals = paths_df.iloc[-1]
+            tot_inv = mc_results["metrics"]["total_invested"]
+            
+            # New Metrics
+            path_metrics = mc_results.get("path_metrics", {})
+            max_dds = path_metrics.get("max_dd", [0]*n_sims)
+            twrs = path_metrics.get("final_twr", [1]*n_sims)
+            
+            # Calculate Percentiles (Rank within distribution)
+            # pct=True gives 0.0 to 1.0
+            ranks = final_vals.rank(pct=True)
+            
+            with open(log_path, "w", newline='') as f:
+                writer = csv.writer(f)
+                # CSV Header
+                writer.writerow(["Scenario_ID", "Final_Value", "Max_Drawdown", "CAGR_Strategy", "Total_Invested", "Percentile_Rank"])
+                
+                for i, col in enumerate(paths_df.columns):
+                    val = final_vals[col]
+                    dd = max_dds[i]
+                    twr_mult = twrs[i]
+                    cagr = (twr_mult ** (1/10)) - 1
+                    pct_rank = ranks[col]
+                    
+                    writer.writerow([i+1, round(val, 2), f"{dd:.2%}", f"{cagr:.2%}", round(tot_inv, 2), f"{pct_rank:.2%}"])
+                
+        except Exception as e:
+            st.error(f"Failed to write detailed CSV: {e}")
+
+        # 3. Render
+        charts.render_monte_carlo_view(mc_results)
         
     with res_tab_debug:
         st.subheader("Debug Info")

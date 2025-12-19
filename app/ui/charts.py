@@ -1653,3 +1653,297 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate,
     )
 
 
+# -----------------------------------------------------------------------------
+# Monte Carlo Visualization
+# -----------------------------------------------------------------------------
+def render_monte_carlo_view(mc_results):
+    """
+    Renders the Monte Carlo 'Cone of Uncertainty' chart.
+    """
+    if not mc_results or mc_results.get("percentiles").empty:
+        st.info("Insufficient data for Monte Carlo simulation.")
+        return
+
+    df = mc_results["percentiles"]
+    m = mc_results["metrics"]
+    initial_val = m["initial_val"]
+    
+    # 1. Metrics Header
+    # Row 1: Performance Range
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Median Final Value", f"${m['median_final']:,.0f}", help="50th Percentile Outcome")
+    c2.metric("Median CAGR", f"{m['cagr_median']:.1%}", help="Annualized return of the median path")
+    
+    multiplier = m['median_final'] / m.get('total_invested', initial_val)
+    c3.metric("Growth Multiple", f"{multiplier:.1f}x", help="Final Value / Total Invested Capital (Initial + Monthly Adds)")
+    c4.metric("CAGR Range (P10-P90)", f"{m['cagr_p10']:.1%} - {m['cagr_p90']:.1%}", help="Pessimistic to Optimistic Annual Return")
+
+    # Row 2: Risk Analysis
+    st.markdown("##### ⚠️ Risk Analysis")
+    r1, r2, r3, r4 = st.columns(4)
+    
+    r1.metric("Median Max Drawdown", f"{m['max_dd_median']:.1%}", help="Expected peak-to-trough decline")
+    r2.metric("Worst Case DD (P90)", f"{m['max_dd_p90']:.1%}", help="90th Percentile Max Drawdown (Severe Crash)")
+    r3.metric("Chance of Loss", f"{m['prob_loss']:.1%}", help="Probability of ending lower than starting value")
+    r4.metric("Best Case DD (P10)", f"{m['max_dd_p10']:.1%}", help="10th Percentile Max Drawdown (Mild Correction)")
+    
+    # 2. Options
+    c1, c2 = st.columns([1, 4])
+    use_log = c1.toggle("Log Scale", help="Use logarithmic scale to see percentage changes better")
+    show_paths = c1.toggle("Show Paths", help="Display 100 random individual simulation paths (Spaghetti Chart)")
+    
+    # 3. Plotly Fan Chart
+    fig = go.Figure()
+    
+    x = df.index
+    
+    # Optional: Spaghetti Paths (Behind the cone)
+    if show_paths and "paths" in mc_results:
+        paths_df = mc_results["paths"]
+        # Sample up to 100 paths (Visual sampling cap for performance)
+        n_sample = min(100, paths_df.shape[1])
+        if n_sample > 0:
+            sample_cols = np.random.choice(paths_df.columns, n_sample, replace=False)
+            sample_paths = paths_df[sample_cols]
+            
+            for col in sample_cols:
+                fig.add_trace(go.Scatter(
+                    x=x, y=sample_paths[col],
+                    mode='lines',
+                    line=dict(width=1, color='rgba(100, 255, 255, 0.15)'), # Faint cyan (increased opacity)
+                    showlegend=False,
+                    hoverinfo='skip' # Don't hover on spaghetti
+                ))
+    
+    # --- Background Fill (Invisible Helper Traces) ---
+    # Draw P10 then P90 to create the shaded cone "behind" everything
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P10"],
+        mode='lines',
+        line=dict(width=0),
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P90"],
+        mode='lines',
+        line=dict(width=0),
+        fill='tonexty',
+        fillcolor='rgba(255, 215, 0, 0.15)', # Faint Gold
+        showlegend=False,
+        hoverinfo='skip'
+    ))
+
+    # --- Helper & Pre-calc ---
+    def fmt_currency_custom(val):
+        if abs(val) >= 1e9: return f"${val/1e9:.2f}B"
+        if abs(val) >= 1e6: return f"${val/1e6:.2f}M"
+        if abs(val) >= 1e3: return f"${val/1e3:.0f}k"
+        return f"${val:.0f}"
+
+    # Pre-calculate custom labels for tooltips
+    chart_cols = ["Median", "P10", "P90", "P25", "P75"]
+    for col in chart_cols:
+        df[f"{col}_chk"] = df[col].apply(fmt_currency_custom)
+
+    # --- Visible Lines (Ordered Bottom-to-Top for Z-Order) ---
+    
+    # 1. P10 (Red) - Bottom
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P10"],
+        mode='lines',
+        line=dict(width=1, color='rgba(255, 100, 100, 0.5)', dash='dash'),
+        name='P10',
+        customdata=df["P10_chk"],
+        hovertemplate="<b>P10 (Pessimistic)</b>: %{customdata}<extra></extra>",
+        showlegend=True
+    ))
+
+    # 2. P25 (Orange)
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P25"],
+        mode='lines',
+        line=dict(width=1, color='rgba(255, 165, 0, 0.5)', dash='dot'),
+        name='P25',
+        customdata=df["P25_chk"],
+        hovertemplate="<b>P25 (Mod. Downside)</b>: %{customdata}<extra></extra>"
+    ))
+
+    # 3. Median (Cyan)
+    fig.add_trace(go.Scatter(
+        x=x, y=df["Median"],
+        mode='lines',
+        line=dict(color='cyan', width=2),
+        name='Median',
+        customdata=df["Median_chk"],
+        hovertemplate="<b>Median</b>: %{customdata}<extra></extra>"
+    ))
+
+    # 4. P75 (Silver)
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P75"],
+        mode='lines',
+        line=dict(width=1, color='silver', dash='dot'),
+        name='P75',
+        customdata=df["P75_chk"],
+        hovertemplate="<b>P75 (Mod. Upside)</b>: %{customdata}<extra></extra>"
+    ))
+
+    # 5. P90 (Gold) - Top
+    fig.add_trace(go.Scatter(
+        x=x, y=df["P90"],
+        mode='lines',
+        line=dict(width=1, color='#FFD700', dash='dash'), 
+        name='P90',
+        customdata=df["P90_chk"],
+        hovertemplate="<b>P90 (Optimistic)</b>: %{customdata}<extra></extra>"
+    ))
+    
+    fig.update_layout(
+        title=f"Monte Carlo Simulation (10 Years)",
+        yaxis_title="Portfolio Value ($)",
+        xaxis_title="Date",
+        hovermode="x unified", # Force sort by Value (descending)
+        height=600,
+        yaxis=dict(
+            type='log' if use_log else 'linear', 
+            tickformat='$.2s', # Compact currency format
+            gridcolor='rgba(128,128,128,0.2)'
+        ),
+        xaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
+        template="plotly_dark",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    st.caption("""
+    **Methodology:** Historical Bootstrap using your strategy's daily volatility.
+    *   **Median Path:** The central outcome (50% probability).
+    *   **Outer Cone (Shaded):** The broad range of probable outcomes (**10th** to **90th** percentile).
+    *   **Inner Lines (Dashed):** The "likely" zone (**25th** to **75th** percentile), capturing the middle 50% of scenarios.
+    *   **Visualization:** For browser performance, we display a random sample of **up to 100 paths** (spaghetti), but metrics use all simulated scenarios.
+    *   **Assumptions:** Projection based on the 'Start Value' and 'Monthly Add' configured above. Reinvests all dividends/returns.
+    """)
+    
+    # 4. Distribution Chart (Histogram) (Clipped to P95 for better focus)
+    st.markdown("##### 📊 Distribution of Outcomes (Year 10)")
+    path_finals = mc_results["paths"].iloc[-1]
+    
+    # Clip outliers for visualization (Show up to P95)
+    p95_val = np.percentile(path_finals, 95)
+    
+    # --- Manual Binning for Robust Scale Handling ---
+    if use_log:
+        # Log Mode: Bin in log-space, then map back to dollars
+        # This ensures the "bars" (steps) look uniform on a log axis
+        safe_data = path_finals[path_finals > 0] # Filter <= 0
+        log_data = np.log10(safe_data)
+        counts, bin_edges = np.histogram(log_data, bins=100)
+        
+        # Calculate centers in log space, convert to dollars
+        ctrs_log = (bin_edges[:-1] + bin_edges[1:]) / 2
+        x_plot = 10**ctrs_log
+        y_plot = counts
+        
+        xaxis_config = dict(
+            tickformat='$.2s', 
+            gridcolor='rgba(128,128,128,0.2)',
+            type='log',
+            # Let Plotly auto-range the explicit points
+        )
+    else:
+        # Linear Mode: Bin the clipped data (0 to P95)
+        # This focuses the 100 bins on the meat of the distribution
+        data_clipped = path_finals[path_finals <= p95_val * 1.05]
+        data_clipped = data_clipped[data_clipped >= 0] # Safety
+        
+        counts, bin_edges = np.histogram(data_clipped, bins=100)
+        x_plot = (bin_edges[:-1] + bin_edges[1:]) / 2
+        y_plot = counts
+        
+        xaxis_config = dict(
+            tickformat='$.2s', 
+            gridcolor='rgba(128,128,128,0.2)',
+            type='linear',
+            range=[0, p95_val * 1.05] # Explicit zoom
+        )
+    
+    fig_hist = go.Figure()
+    
+    # Render as Filled Area (Step Plot) -> Looks like Histogram
+    # Generate custom labels for the area chart trace 
+    hist_custom_labels = [fmt_currency_custom(v) for v in x_plot]
+    
+    fig_hist.add_trace(go.Scatter(
+        x=x_plot, y=y_plot,
+        mode='lines',
+        line_shape='hvh', # Step shape
+        fill='tozeroy',
+        line=dict(color='rgba(100, 255, 255, 1)', width=1), # Cyan outline
+        fillcolor='rgba(100, 255, 255, 0.4)', # Semi-transparent fill
+        name='Frequency',
+        customdata=hist_custom_labels,
+        hovertemplate="<b>Value</b>: %{customdata}<br><b>Count</b>: %{y}<extra></extra>"
+    ))
+    
+    # Add Percentile Lines
+    df_pct = mc_results["percentiles"]
+    
+    # Stagger labels to avoid overlap (3 tiers)
+    annotations = [
+        (m['median_final'], 'cyan', 'Median', 1.20),      # Top Tier
+        (df_pct['P25'].iloc[-1], 'orange', 'P25', 1.12),  # Mid Tier
+        (df_pct['P75'].iloc[-1], 'silver', 'P75', 1.12),  # Mid Tier
+        (df_pct['P10'].iloc[-1], 'red', 'P10', 1.05),     # Low Tier
+        (df_pct['P90'].iloc[-1], '#FFD700', 'P90', 1.05)  # Low Tier
+    ]
+    
+    # Calculate max frequency for line height scaling
+    max_freq = np.max(y_plot) if len(y_plot) > 0 else 1
+    
+    for val, color, label, y_pos in annotations:
+        # Use dot for P25/P75 to match main chart, dash for others
+        dash_style = "dot" if "P25" in label or "P75" in label else "dash"
+        
+        # 1. Interactive Line (Trace) for Tooltip
+        fmt_val = fmt_currency_custom(val)
+        fig_hist.add_trace(go.Scatter(
+            x=[val, val], 
+            y=[0, max_freq], # Draw line up to the peak frequency
+            mode='lines',
+            line=dict(color=color, width=2, dash=dash_style),
+            name=label,
+            hovertemplate=f"<b>{label}</b>: {fmt_val}<extra></extra>", # Use pre-formatted string
+            showlegend=False
+        ))
+        
+        # 2. Text Label (Annotation)
+        fig_hist.add_annotation(
+            x=val, y=y_pos, yref="paper", # Staggered positions
+            text=f"<b>{label}</b>", 
+            showarrow=False,
+            font=dict(color=color, size=11),
+            yshift=0
+        )
+
+    fig_hist.update_layout(
+        height=350,
+        xaxis_title="Final Portfolio Value ($)",
+        yaxis_title="Frequency (Scenarios)",
+        template="plotly_dark",
+        bargap=0.1,
+        xaxis=xaxis_config,
+        yaxis=dict(gridcolor='rgba(128,128,128,0.2)'),
+        margin=dict(t=60) # More space for 3-tier annotations
+    )
+    
+    st.plotly_chart(fig_hist, use_container_width=True)
+
+
