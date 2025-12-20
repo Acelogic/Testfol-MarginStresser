@@ -20,8 +20,14 @@ def render(results, config):
     """
         
     # Extract Data from Results
+    # Defensive Import to prevent UnboundLocalError
+    import plotly.graph_objects as go
+    
     port_series = results["port_series"]
     stats = results["stats"]
+    
+    # Initialize optional chart variables to prevent UnboundLocalError
+    fig_tax_impact = None
     
     if port_series.empty or not isinstance(port_series.index, pd.DatetimeIndex):
         st.error("No valid simulation data generated. Check inputs or API connection.")
