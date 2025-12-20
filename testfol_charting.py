@@ -46,6 +46,91 @@ def fetch_component_data(tickers, start_date, end_date):
             if base in combined_prices.columns:
                 continue
                 
+            # SPECIAL: Load NDXMEGASIM from local CSV + Splice with QBIG (Defiance Nasdaq 100 Enhanced Options & Growth ETF)
+            if base == "NDXMEGASIM":
+                try:
+                    # 1. Load Simulation Data
+                    csv_path = "data/NDXMEGASIM.csv"
+                    df_sim = pd.DataFrame()
+                    if os.path.exists(csv_path):
+                        df_sim = pd.read_csv(csv_path)
+                        if 'Date' in df_sim.columns:
+                            df_sim['Date'] = pd.to_datetime(df_sim['Date'])
+                            df_sim = df_sim.set_index('Date')
+                        if 'Close' not in df_sim.columns:
+                            st.warning("NDXMEGASIM.csv missing 'Close' column")
+                            df_sim = pd.DataFrame()
+                        else:
+                            df_sim = df_sim['Close'].sort_index() # Convert to Series
+                    else:
+                        st.warning(f"NDXMEGASIM requested but {csv_path} not found.")
+
+                    # 2. Fetch QBIG (Live Proxy)
+                    # Use a cache-friendly fetch or direct download?
+                    # Let's use direct download to ensure we get "Latest" data regardless of cache
+                    try:
+                        import yfinance as yf
+                        qbig_df = yf.download("QBIG", period="max", auto_adjust=True, progress=False)
+                        if 'Close' in qbig_df:
+                             qbig_series = qbig_df['Close']
+                        elif 'Adj Close' in qbig_df:
+                             qbig_series = qbig_df['Adj Close']
+                        else:
+                             # Fallback for yfinance structure changes
+                             qbig_series = qbig_df.iloc[:,0] if not qbig_df.empty else pd.Series()
+                        
+                        if isinstance(qbig_series, pd.DataFrame):
+                            qbig_series = qbig_series.iloc[:,0] # Handle multi-index if single ticker
+                            
+                        qbig_series.index = pd.to_datetime(qbig_series.index)
+                        qbig_series = qbig_series.sort_index()
+                    except Exception as e:
+                        st.warning(f"Failed to fetch QBIG data: {e}")
+                        qbig_series = pd.Series(dtype=float)
+
+                    # 3. Splice
+                    if not qbig_series.empty and not df_sim.empty:
+                        # Find splice point (Start of QBIG)
+                        splice_date = qbig_series.index[0]
+                        
+                        # Get Sim Data UP TO Splice Date
+                        sim_part = df_sim[df_sim.index < splice_date]
+                        
+                        if not sim_part.empty:
+                            # Scale Sim to match QBIG start
+                            # Need Sim Price at Splice Date? (Or last available date)
+                            # Actually, look for overlap?
+                            # Sim ends at splice_date (approx).
+                            # Let's align the END of Sim Part to the START of QBIG using last available value.
+                            
+                            sim_end_val = sim_part.iloc[-1]
+                            qbig_start_val = qbig_series.iloc[0]
+                            
+                            # Scaling Factor: We heavily simulated "Growth of $100" in sim.
+                            # QBIG starts at ~$20?
+                            # We scale SIM DOWN/UP to match QBIG.
+                            scale_factor = qbig_start_val / sim_end_val
+                            
+                            sim_part_scaled = sim_part * scale_factor
+                            
+                            # Combine
+                            combined = pd.concat([sim_part_scaled, qbig_series])
+                            combined_prices[base] = combined
+                            # st.info(f"Spliced NDXMEGASIM with QBIG at {splice_date.date()} (Scale: {scale_factor:.4f})")
+                        else:
+                             # Overlap issue? Just use QBIG?
+                             combined_prices[base] = qbig_series
+                             
+                    elif not df_sim.empty:
+                        combined_prices[base] = df_sim
+                    elif not qbig_series.empty:
+                        combined_prices[base] = qbig_series
+                        
+                    continue
+                    
+                except Exception as e:
+                    st.error(f"Failed to load/splice local NDXMEGASIM: {e}")
+                    
             # Fetch Data (Universal Cache handles hits/misses)
             # We still request broad history to maximize cache utility across diff ranges?
             # Actually, with Hash Caching, exact params matter.
@@ -127,6 +212,14 @@ else:
                 
                 sim_engine = config.get('sim_engine', 'standard')
                 
+                # GUARD RAIL: NDXMEGASIM requires Local/Hybrid engine
+                # The public API does not know about this custom local ticker.
+                has_ndxmega = any("NDXMEGASIM" in t for t in alloc_preview.keys())
+                
+                if has_ndxmega and sim_engine != 'hybrid':
+                     st.info("💎 'NDXMEGASIM' detected. Automatically enabling Local Simulation (Hybrid Mode) since this ticker is not available via public API.")
+                     sim_engine = 'hybrid'
+                
                 if sim_engine == 'hybrid':
                     # --- Hybrid (Local) Simulation ---
                     from app.core import calculations
@@ -170,6 +263,8 @@ else:
                         cashflow=shadow_cashflow,
                         cashflow_freq=config['cashfreq'],
                         # prices_df NOT passed - forces yFinance usage for realistic taxes
+                        # UNLESS it's NDXMEGASIM, which needs the local data
+                        prices_df=prices_df if has_ndxmega else None,
                         rebalance_month=config.get('rebalance_month', 1),
                         rebalance_day=config.get('rebalance_day', 1),
                         custom_freq=config.get('custom_freq', 'Yearly')
@@ -290,19 +385,49 @@ else:
                              if api_rebal == "Custom":
                                  # Fallback to the custom_freq (e.g. Monthly/Yearly) or default to Yearly
                                  api_rebal = config.get('custom_freq', 'Yearly')
-
-                             b_series, b_stats, _ = cached_fetch_backtest(
-                                start_date=start_date,
-                                end_date=end_date,
-                                start_val=config['start_val'],
-                                cashflow=0.0, # Pure performance
-                                cashfreq="Monthly",
-                                rolling=60,
-                                invest_div=True, 
-                                rebalance=api_rebal, 
-                                allocation=bench_port_map,
-                                return_raw=False
-                             )
+                             
+                             # GUARD: Check for NDXMEGASIM in Benchmark
+                             bench_has_ndx = any("NDXMEGASIM" in t for t in bench_port_map.keys())
+                             
+                             if bench_has_ndx:
+                                 # Use Local Shadow Engine for Benchmark
+                                 st.info("💎 'NDXMEGASIM' detected in Benchmark. Running Local Simulation.")
+                                 b_tickers = list(bench_port_map.keys())
+                                 # Reuse fetch_component_data to get local CSV + Splice
+                                 b_prices = fetch_component_data(b_tickers, start_date, end_date)
+                                 
+                                 # Map rebalance freq for shadow engine
+                                 shadow_rebal = "Custom" if config['rebalance'] == "Custom" else config['rebalance']
+                                 
+                                 _, _, _, _, _, b_port_series, b_twr_series = cached_run_shadow_backtest_v2(
+                                    allocation=bench_port_map,
+                                    start_val=config['start_val'],
+                                    start_date=start_date,
+                                    end_date=end_date,
+                                    api_port_series=None,
+                                    rebalance_freq=shadow_rebal,
+                                    cashflow=0.0,
+                                    cashflow_freq="Monthly",
+                                    prices_df=b_prices,
+                                    rebalance_month=config.get('rebalance_month', 1),
+                                    rebalance_day=config.get('rebalance_day', 1), 
+                                    custom_freq=config.get('custom_freq', 'Yearly')
+                                 )
+                                 b_series = b_port_series
+                                 b_stats = calculations.generate_stats(b_series)
+                             else:
+                                 b_series, b_stats, _ = cached_fetch_backtest(
+                                    start_date=start_date,
+                                    end_date=end_date,
+                                    start_val=config['start_val'],
+                                    cashflow=0.0, # Pure performance
+                                    cashfreq="Monthly",
+                                    rolling=60,
+                                    invest_div=True, 
+                                    rebalance=api_rebal, 
+                                    allocation=bench_port_map,
+                                    return_raw=False
+                                 )
                              bench_series = b_series
                              
                              # Rename for clear chart labels

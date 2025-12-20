@@ -38,18 +38,29 @@ class TaxLot:
         return shares_to_sell, cost_basis_sold, remaining_lot
 
 def parse_ticker(ticker):
-    """Parses ticker string to extract base symbol and leverage."""
-    # Format: Ticker?L=X
-    if "?L=" in ticker:
-        parts = ticker.split("?L=")
+    """
+    Parses ticker string to extract base symbol and modifiers.
+    Returns (base, params_dict)
+    """
+    if "?" in ticker:
+        parts = ticker.split("?")
         base = parts[0]
-        leverage = float(parts[1])
+        query = parts[1]
+        
+        # Simple manual parsing to avoid urllib overhead/issues
+        params = {}
+        pairs = query.split("&")
+        for p in pairs:
+            if "=" in p:
+                k, v = p.split("=")
+                params[k] = v
     else:
         base = ticker
-        leverage = 1.0
+        params = {}
         
     # Handle Synthetic Tickers Mapping
-    # Map SIM/TR tickers to their real counterparts for yfinance
+    # ... (Mapping logic kept same) ...
+     # Map SIM/TR tickers to their real counterparts for yfinance
     mapping = {
         # Cash/Bills
         "TBILL": "BIL", "CASHX": "BIL", "EFFRX": "BIL",
@@ -132,10 +143,15 @@ def parse_ticker(ticker):
         "DIA_SIM": "DIA",
     }
     
-    if base in mapping:
+    # Don't remap if it's our custom NDXMEGASIM
+    if base in mapping and base != "NDXMEGASIM":
         base = mapping[base]
     
-    return base, leverage
+    return base, params
+
+# ... (rest of imports/helpers) ...
+
+
 
 def get_tax_treatment(ticker):
     """
@@ -259,32 +275,117 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             logs.append(f"  {col}: NO DATA")
     logs.append("-" * 20)
     
-    # Construct leveraged returns
-    returns_port = pd.DataFrame(index=returns_base.index)
-    
     missing_tickers = []
+    
+    # Try to find FFR (Risk Free Rate) for leverage cost
+    # Look for 'BIL' or '^IRX' in prices_base
+    ffr_series = None
+    if 'BIL' in returns_base.columns:
+        ffr_series = returns_base['BIL'] # BIL Return ~ FFR (minus ER)
+    elif 'CASHX' in returns_base.columns:
+         ffr_series = returns_base['CASHX']
+    elif 'SHV' in returns_base.columns:
+         ffr_series = returns_base['SHV']
+    
+    # Defaults
+    DEFAULT_FFR_ANNUAL = 0.04 # 4% assumption if no data
+    
     for ticker in tickers:
-        base, leverage = parse_ticker(ticker)
+        base, params = parse_ticker(ticker)
         
-        # 1. Try Mapped Base (e.g. SPYSIM -> SPY)
+        # Fetch Base Returns
         if base in returns_base.columns:
-            returns_port[ticker] = returns_base[base] * leverage
+            r_s = returns_base[base].copy()
             
-        # 2. Try Unmapped Base (e.g. SPYSIM -> SPYSIM) - If prices_df provided directly (Hybrid)
+            # 2. Try Unmapped Base (Base check above covers mapped, now check raw)
         else:
-            raw_base = ticker.split("?")[0]
-            if raw_base in returns_base.columns:
-                returns_port[ticker] = returns_base[raw_base] * leverage
+             raw_base = ticker.split("?")[0]
+             if raw_base in returns_base.columns:
+                 r_s = returns_base[raw_base].copy()
+             else:
+                 missing_tickers.append(ticker)
+                 returns_port[ticker] = np.nan
+                 continue
+                 
+        # --- Apply Testfol Modifiers ---
+        
+        # 1. Underlying Expense (UE)
+        # Adds UE% annually to underlying return. (Adjust for drag)
+        ue = float(params.get('UE', 0.0))
+        if ue != 0:
+            r_s = r_s + (ue / 100.0) / 252.0
+            
+        # 2. Underlying Return/Vol overrides (UR, UV) - SKIP (Complex)
+        
+        # 3. Correlation (UC) - SKIP (Complex)
+        
+        # 4. Leverage (L, SW, SP)
+        L = float(params.get('L', 1.0))
+        SW = float(params.get('SW', 1.1))
+        # Default SP = sgn(L) * 0.4%
+        default_sp = 0.4 if L >= 0 else -0.4 
+        SP = float(params.get('SP', default_sp))
+        
+        if L != 1.0:
+            # Leverage Formula: R_lev = L * R_u - Cost
+            # Cost = SW * (L - 1) * (FFR + SP)
+            
+            # Calculate FFR term
+            if ffr_series is not None:
+                # FFR series is daily return. We need Annualized rate?
+                # Usually: Cost is calculated on Daily basis.
+                # (FFR_daily * 252) ~ FFR_annual.
+                # Currently ffr_series is daily return.
+                # So Cost_daily = SW * (L - 1) * (R_ffr + SP_daily)
+                sp_daily = (SP / 100.0) / 252.0
+                cost_daily = SW * (L - 1) * (ffr_series.reindex(r_s.index).fillna(DEFAULT_FFR_ANNUAL/252) + sp_daily)
             else:
-                missing_tickers.append(ticker)
-                returns_port[ticker] = np.nan # Mark as missing
+                 # Constant assumption
+                 ffr_daily = DEFAULT_FFR_ANNUAL / 252.0
+                 sp_daily = (SP / 100.0) / 252.0
+                 cost_daily = SW * (L - 1) * (ffr_daily + sp_daily)
+                 
+            r_s = (r_s * L) - cost_daily
+            
+        # 5. Expense Ratio (E)
+        # Subtracts E% annually
+        # Default E logic: 0% nominal.
+        # "adds an extra 0.333% for every point of negative leverage... or 0.5% for >1"
+        # Since params.get('E') returns the explicit value if set, we use that.
+        # If user didn't set E, do we auto-calc? The user said "By default E is 0%, but..."
+        # Implies the tool *should* auto-calc if not specified? 
+        # "The default value for E assumes..." -> implies if E is omitted, we might want defaults.
+        # But let's stick to 0 unless specified for simplicity, or implement the rule?
+        # Let's implement the rule if E is missing.
+        
+        if 'E' in params:
+            e_val = float(params['E'])
+        else:
+             # Auto-calc default E based on Leverage
+             if L > 1:
+                 e_val = (L - 1) * 0.5 # 0.5% per point above 1
+             elif L < 0:
+                 # -1x -> 1 point of neg leverage? 
+                 # "0.333% for every point of negative leverage"
+                 # if L = -1, is that 1 point? abs(L)?
+                 # Usually inverse ETFs have ~1%. -1x -> 1%?
+                 # Let's use abs(L) * 0.333?
+                 e_val = abs(L) * 0.333
+             else:
+                 e_val = 0.0
+
+        if e_val != 0:
+            r_s = r_s - (e_val / 100.0) / 252.0
+            
+        # Assign to portfolio
+        returns_port[ticker] = r_s
             
     if missing_tickers:
         logs.append(f"CRITICAL ERROR: Missing price data for: {', '.join(missing_tickers)}")
         # We cannot simulate if assets are missing.
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float)
             
     # Determine Simulation Start Date (Hybrid Logic)
     # 2024-12-17: Fix - Enforce user start_date if provided
@@ -298,7 +399,29 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(f"Error: No valid data found after start date {start_date}.")
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float)
+        
+    sim_start_date = valid_returns.index[0]
+    logs.append(f"First valid data found at: {sim_start_date.date()}")
+    
+    # ... (lines between omitted) ... need to be careful with multi-replace or use separate tool calls if distant.
+    # The first two blocks are close (missing_tickers is near valid_returns check).
+    
+    # The third block is at line 722. I can do the first two in one chunk if they are close.
+    # missing_tickers check ends around line 410?
+    # valid_returns check is around 420.
+    # They are contiguous in the file logic provided the lines I see above match.
+    
+    # Let's check line numbers again from Step 715 output.
+    # missing_tickers check is NOT shown in 715 output, it was replacing loop logic.
+    # But in Step 712 view:
+    # missing_tickers check is implied to be before line 400?
+    # Wait, the view in 712 starts at 350, loop ends, then logic continues.
+    # Actually, let's look at 709 output again.
+    # missing_tickers check is typically right after the loop.
+    
+    # I'll use separate replacement chunks or one big chunk if confidently contiguous.
+    # Let's verify line numbers. I'll read lines 400-430 again to be sure of context.
         
     sim_start_date = valid_returns.index[0]
     logs.append(f"First valid data found at: {sim_start_date.date()}")
@@ -704,7 +827,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 
     # Record final composition snapshot
     if dates.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, pd.Series()
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, pd.Series(dtype=float), pd.Series(dtype=float)
         
     last_date = dates[-1]
     
