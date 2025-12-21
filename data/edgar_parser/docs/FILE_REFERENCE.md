@@ -198,3 +198,69 @@ MAX_CAP_ITERATIONS = 20         # Convergence limit
 |------|-------------|
 | `../NDXMEGASIM.csv` | Daily price series for Mega 1.0 simulation (used by app) |
 | `../NDXMEGA2SIM.csv` | Daily price series for Mega 2.0 simulation (used by app) |
+
+---
+
+## Integration with Main Application
+
+This module produces CSV files consumed by the main Streamlit app:
+
+```mermaid
+graph TB
+    subgraph edgar_parser
+        BT1[backtest_ndx_mega.py]
+        BT2[backtest_ndx_mega2.py]
+        VAL[validate_ndx.py]
+    end
+
+    subgraph data/
+        SIM1[NDXMEGASIM.csv]
+        SIM2[NDXMEGA2SIM.csv]
+    end
+
+    subgraph Main App - testfol_charting.py
+        FCD[fetch_component_data]
+        SH[Shadow Engine]
+        API[testfol_api.py]
+    end
+
+    subgraph External
+        QBIG[QBIG ETF via yfinance]
+        TF[testfol.io API]
+    end
+
+    subgraph Output
+        CH[Charts & Results]
+        TX[Tax Analysis]
+    end
+
+    BT1 --> SIM1
+    BT2 --> SIM2
+    VAL --> QBIG
+
+    SIM1 --> FCD
+    SIM2 --> FCD
+    FCD --> |Splice| QBIG
+    FCD --> SH --> TX
+    API --> TF
+    API --> CH
+    SH --> CH
+```
+
+### Data Flow
+
+1. **EDGAR Parser** generates `NDXMEGASIM.csv` and `NDXMEGA2SIM.csv`
+2. **Main App** detects these tickers and enables **Hybrid Mode**
+3. **fetch_component_data()** loads CSV and splices with live QBIG data
+4. **Shadow Engine** runs local tax lot simulation
+5. **Results** displayed with full tax analysis
+
+### Ticker Detection
+
+When user enters `NDXMEGASIM` or `NDXMEGA2SIM` in the app:
+```python
+# From testfol_charting.py
+if base in ["NDXMEGASIM", "NDXMEGA2SIM"]:
+    csv_path = f"data/{base}.csv"
+    # Load local simulation + splice with QBIG
+```
