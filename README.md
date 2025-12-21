@@ -35,7 +35,7 @@ graph TB
     subgraph Data Sources
         TF[testfol.io API]
         YF[yfinance]
-        CSV[NDXMEGASIM.csv]
+        CSV[NDXMEGASIM.csv<br>NDXMEGA2SIM.csv]
     end
 
     subgraph Output
