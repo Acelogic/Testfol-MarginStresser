@@ -414,7 +414,8 @@ else:
                                     custom_freq=config.get('custom_freq', 'Yearly')
                                  )
                                  b_series = b_port_series
-                                 b_stats = calculations.generate_stats(b_series)
+                                 # Use TWR series for stats to get accurate CAGR (ignores cashflow timing)
+                                 b_stats = calculations.generate_stats(b_twr_series if b_twr_series is not None and not b_twr_series.empty else b_series)
                              else:
                                  b_series, b_stats, _ = cached_fetch_backtest(
                                     start_date=start_date,
@@ -466,7 +467,7 @@ else:
                              c_tickers = list(alloc_map.keys())
                              c_prices = fetch_component_data(c_tickers, start_date, end_date)
                              
-                             _, _, _, _, _, c_port_series, _ = cached_run_shadow_backtest_v2(
+                             _, _, _, _, _, c_port_series, c_twr_series = cached_run_shadow_backtest_v2(
                                     allocation=alloc_map,
                                     start_val=config['start_val'],
                                     start_date=start_date,
@@ -481,7 +482,8 @@ else:
                                     custom_freq="Yearly"
                              )
                              c_series = c_port_series
-                             c_stats = calculations.generate_stats(c_series)
+                             # Use TWR series for stats to get accurate CAGR (ignores cashflow timing)
+                             c_stats = calculations.generate_stats(c_twr_series if c_twr_series is not None and not c_twr_series.empty else c_series)
                         else:
                              c_series, c_stats, _ = cached_fetch_backtest(
                                 start_date=start_date,
