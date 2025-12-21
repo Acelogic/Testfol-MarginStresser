@@ -2,48 +2,73 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
+import os
+import config
+import chart_style
+import price_manager
+import changes_parser
 
-# Configuration
-WEIGHTS_FILE = "nasdaq_quarterly_weights.csv"
-BENCHMARK_TICKER = "^NDX"
-MEGA_TARGET_THRESHOLD = 0.47 # Target 47% for selection
-MEGA_BUFFER_THRESHOLD = 0.50 # Keep existing if within 50%
-SINGLE_STOCK_CAP = 0.35
-
+# Configuration (Loaded from config.py)
 
 # Iterative Capping
 def apply_caps(w_series, cap):
     w = w_series.copy()
+    if w.sum() == 0: return w
+    
+    # Normalize first
     w = w / w.sum()
-    for _ in range(5):
+    
+    for _ in range(config.MAX_CAP_ITERATIONS):
         excess = w[w > cap]
         if excess.empty: break
+        
         surplus = (excess - cap).sum()
         w[w > cap] = cap
+        
         others = w[w < cap]
         if others.empty: break
+        
+        # Redistributions
         w[w < cap] = others + (surplus * others / others.sum())
+    
+    # Validation Check
+    if (w > cap + 0.001).any():
+        print(f"Warning: Capping failed to converge for some stocks > {cap}")
+    if abs(w.sum() - 1.0) > 0.001:
+         print(f"Warning: Weights sum to {w.sum():.4f}, expected 1.0")
+         
     return w
 
 def backtest():
     print("Loading data...")
-    weights_df = pd.read_csv(WEIGHTS_FILE)
+    weights_df = pd.read_csv(config.WEIGHTS_FILE)
     weights_df['Date'] = pd.to_datetime(weights_df['Date'])
     
     # Get all tickers needed
     tickers = weights_df[weights_df['IsMapped'] == True]['Ticker'].unique().tolist()
-    if BENCHMARK_TICKER not in tickers:
-        tickers.append(BENCHMARK_TICKER)
+    
+    # Add Tickers from Changes File (to ensure we have data for mid-quarter adds)
+    changes_df = changes_parser.load_changes()
+    if not changes_df.empty:
+        added_tickers = changes_df['Added Ticker'].dropna().unique().tolist()
+        tickers.extend(added_tickers)
+        
+    tickers = list(set(tickers))
+    
+    if config.BENCHMARK_TICKER not in tickers:
+        tickers.append(config.BENCHMARK_TICKER)
         
     print(f"Fetching prices for {len(tickers)} tickers...")
     start_date = weights_df['Date'].min().strftime('%Y-%m-%d')
-    try:
-        data = yf.download(tickers, start=start_date, auto_adjust=True, progress=True)['Close']
-        data.index = pd.to_datetime(data.index)
-        print(f"Data Shape: {data.shape}")
-    except Exception as e:
-        print(f"Error fetching data: {e}")
+    
+    data = price_manager.get_price_data(tickers, start_date)
+    
+    if data is None or data.empty:
+        print("Data fetch failed.")
         return
+        
+    data.index = pd.to_datetime(data.index)
+    print(f"Data Shape: {data.shape}")
 
     # Simulation Variables
     dates = sorted(weights_df['Date'].unique())
@@ -76,18 +101,11 @@ def backtest():
         
         if is_annual_recon or not current_constituents:
             # Annual Reconstitution or First Run: Strict 47% Selection
-            # Select from the FULL list until 47% cumulative weight is reached.
-            # ONLY add if IsMapped is True (if we pick an unmapped stock, we technically "select" it but can't hold it -> gap).
-            # But the methodology says "Top companies".
-            # If #10 is unmapped, we select it. We just can't trade it.
-            # So our portfolio will hold #1-#9, skip #10, hold #11...
-            # The weights of #1-#9 should be re-normalized to 100% of the *Held* portfolio (capped at 35%).
             
-            cutoff_mask = q_weights['CumWeight'] <= (MEGA_TARGET_THRESHOLD + 0.10) 
-            
+            # Using MEGA1 constants
             curr_sum = 0.0
             for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum + w <= MEGA_TARGET_THRESHOLD + 0.01: # Small tolerance
+                if curr_sum + w <= config.MEGA1_TARGET_THRESHOLD + 0.01: # Small tolerance
                     if mapped:
                         selected_tickers.append(ticks)
                     # We count the weight towards the threshold regardless of mapping
@@ -110,9 +128,9 @@ def backtest():
             buffer_set = set() # Companies in Top 50%
             
             for ticks, w, cw, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['CumWeight'], q_weights['IsMapped']):
-                if cw <= MEGA_TARGET_THRESHOLD + 0.05:
+                if cw <= config.MEGA1_TARGET_THRESHOLD + 0.05:
                     if mapped: target_set.add(ticks)
-                if cw <= MEGA_BUFFER_THRESHOLD + 0.05:
+                if cw <= config.MEGA1_BUFFER_THRESHOLD + 0.05:
                     if mapped: buffer_set.add(ticks)
             
             next_portfolio = set()
@@ -146,18 +164,32 @@ def backtest():
             continue
             
         # Stats
+        # Final Weights (Cap 35%)
+        # Note: We re-normalize to 100% of the HELD portfolio here.
+        final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA1_SINGLE_STOCK_CAP)
+
+        # Check for Mid-Quarter Changes (Pre-emptive Replacement)
+        replacements = changes_parser.get_replacement_map(start_dt, end_dt)
+        for old, new in replacements.items():
+            if old in final_weights.index:
+                # Only swap if we have data for the new one
+                if new in data.columns:
+                    print(f"  [Rebal Event] Replacing {old} with {new} (Pre-emptive)")
+                    # Assign old weight to new ticker
+                    final_weights[new] = final_weights[old]
+                    final_weights = final_weights.drop(old)
+                else:
+                    print(f"  Warning: Cannot replace {old} -> {new}: Price data missing for {new}")
+
+        # Stats
         constituents_history.append({
             "Date": start_dt,
-            "Count": len(mega_subset),
-            "Top": mega_subset['Ticker'].iloc[0] if not mega_subset.empty else "",
-            "Bottom": mega_subset['Ticker'].iloc[-1] if not mega_subset.empty else "",
-            "Type": "Recon" if is_annual_recon else "Rebal"
+            "Count": len(final_weights),
+            "Top": final_weights.idxmax() if not final_weights.empty else "N/A",
+            "Type": "Recon" if is_annual_recon else "Rebal",
+            "Tickers": "|".join(final_weights.index),
+            "Weights": "|".join([f"{w:.6f}" for w in final_weights])
         })
-
-
-
-        # Final Weights (Cap 35%)
-        final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], SINGLE_STOCK_CAP)
         
         # 3. Perf Simulation (Buy and Hold for Quarter)
         try:
@@ -189,19 +221,30 @@ def backtest():
     mega_values = mega_values.dropna()
     
     # Validation against NDX
-    if BENCHMARK_TICKER in data.columns:
-        ndx = data[BENCHMARK_TICKER].reindex(mega_values.index).ffill()
+    if config.BENCHMARK_TICKER in data.columns:
+        ndx = data[config.BENCHMARK_TICKER].reindex(mega_values.index).ffill()
         ndx = ndx / ndx.iloc[0] * mega_values.iloc[0]
         
-        plt.figure(figsize=(12, 6))
-        plt.plot(mega_values, label='NDX Mega (Simulated)', linewidth=1.5)
-        plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.7)
+        # Apply Styling
+        chart_style.apply_style()
+        
+        plt.figure(figsize=(14, 8))
+        ax = plt.gca()
+        
+        plt.plot(mega_values, label='NDX Mega (Simulated)', linewidth=2.5)
+        plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.8, color='#555555')
+        
         plt.title('NDX Mega Strategy vs Nasdaq-100 (2000-2025)')
         plt.yscale('log')
         plt.legend()
-        plt.grid(True, alpha=0.3)
-        plt.savefig("ndx_mega_backtest.png")
-        print("Chart saved to ndx_mega_backtest.png")
+        
+        chart_style.format_date_axis(ax)
+        chart_style.format_y_axis(ax, log=True)
+        chart_style.add_watermark(ax, "NDX Mega 1.0")
+        
+        out_img = "validation_charts/ndx_mega_backtest.png"
+        plt.savefig(out_img, dpi=300, bbox_inches='tight')
+        print(f"Chart saved to {out_img}")
         
         # Stats
         tot_ret_mega = mega_values.iloc[-1] / mega_values.iloc[0] - 1
@@ -210,13 +253,12 @@ def backtest():
         print(f"Total Return NDX:  {tot_ret_ndx:.2%}")
         
     # Save Constituents History
-    pd.DataFrame(constituents_history).to_csv("ndx_mega_constituents.csv", index=False)
+    pd.DataFrame(constituents_history).to_csv("output/ndx_mega_constituents.csv", index=False)
     
     # Save Daily Data for Testfol
     # Format: Date, Close (header implied or explicit)
     # Target: ../NDXMEGASIM.csv (Parent directory)
     # Make sure directory exists (it should, as we are in it)
-    import os
     
     # Assuming run from data/edgar_parser
     output_path = "../NDXMEGASIM.csv"

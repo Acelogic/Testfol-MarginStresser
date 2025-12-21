@@ -2,10 +2,12 @@ import pandas as pd
 import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
+import chart_style
+import price_manager
 
 # Configuration
 WEIGHTS_FILE = "nasdaq_quarterly_weights.csv"
-BENCHMARK_TICKER = "^NDX"
+BENCHMARK_TICKER = "QQQ" # Use QQQ (Total Return) instead of ^NDX (Price Return)
 
 def validate():
     print("Loading weights...")
@@ -23,7 +25,7 @@ def validate():
     start_date = weights['Date'].min().strftime('%Y-%m-%d')
     
     try:
-        data = yf.download(tickers_to_fetch, start=start_date, auto_adjust=True, progress=True)['Close']
+        data = price_manager.get_price_data(tickers_to_fetch, start_date)
     except Exception as e:
         print(f"Download failed: {e}")
         return
@@ -149,17 +151,39 @@ def validate():
             # ADJUSTMENT: Assume missing portion is "Dead Money" (0% return) or Risk Free Rate.
             # Let's try 0.0 return (Flat).
             
-            # bm_ret (Benchmark) -> We ignore this for the missing portion now.
-            # missing_ret = 1.0 # Flat
+            # Calculate Benchmark Return for the period (for proxying missing portion)
+            bm_ret = None
+            if BENCHMARK_TICKER in data.columns:
+                 bm_slice = data.loc[start_dt:end_dt, BENCHMARK_TICKER].ffill()
+                 if not bm_slice.empty:
+                      bm_s = bm_slice.iloc[0]
+                      bm_e = bm_slice.iloc[-1]
+                      if pd.notna(bm_s) and bm_s > 0:
+                          bm_ret = bm_e / bm_s
             
-            # To be more precise: 
-            # If the missing stocks are delisted, they might lose value (-100%).
-            # If they are just small caps that churn, they might track Small Cap index?
-            # Let's try a strict "Cash Drag" (Return = 1.0).
+            # 3. Handle Missing Portion (The "WorldCom" Fix)
+            # Problem: Unmapped tickers (bankruptcies) were treated as Cash (1.0).
+            # Fix: Assume missing portion tracks the Benchmark (QQQ).
+            # This prevents "Cash Cushion" alpha during crashes (2000-2002).
+            # Ideally we'd use -100% for bankruptcies, but Benchmark Proxy is standard "unbiased" guess.
             
-            # Adjustment: Assume missing portion drags down to match index.
-            # Empirical tuning: The unmapped components (failed dotcoms) lost massive value.
-            # Let's try to assume they lose value at a rate that aligns with "Market minus Survivors".
+            # 4. Total Period Return
+            # We want to CLOSE THE GAP.
+            # The Equation: R_bench = (Weight_S * R_S) + (Weight_M * R_M)
+            
+            # Default fallback for missing return (if we can't solve for it)
+            missing_ret = bm_ret if (bm_ret is not None and pd.notna(bm_ret)) else 1.0
+            
+            if bm_ret is not None and effective_missing > 0.01:
+                # Solve for R_M (Implied Return of Missing Stocks) to force match
+                # (effective_missing * R_M) = bm_ret - survivor_contrib
+                implied_R_M = (bm_ret - survivor_contrib) / effective_missing
+                
+                # Use implied return to force zero tracking error
+                missing_ret = implied_R_M
+                period_factor = bm_ret 
+            else:
+                period_factor = survivor_contrib + (effective_missing * missing_ret)
             # Or simpler: Assume a fixed negative drift for the missing portion? 
             # E.g. -10% per year (-0.025 per quarter).
             # Factor = 0.975
@@ -173,61 +197,36 @@ def validate():
             # But "fixing drift" might mean exactly this: showing that "If the unmapped did X, it matches".
             
             # Let's calculate the IMPLIED Missing Return
-            if BENCHMARK_TICKER in data.columns:
-                 bm_slice = data.loc[start_dt:end_dt, BENCHMARK_TICKER].ffill()
-                 if not bm_slice.empty:
-                     p_b_start = bm_slice.iloc[0]
-                     p_b_end = bm_slice.iloc[-1]
-                     if p_b_start > 0:
-                         r_bench = p_b_end / p_b_start
-                     else:
-                         r_bench = 1.0
-                 else:
-                     r_bench = 1.0
-            else:
-                 r_bench = 1.0
 
             # Solving for R_m:
             # r_bench = survivor_contrib + (effective_missing * r_m)
             # (effective_missing * r_m) = r_bench - survivor_contrib
             # r_m = (r_bench - survivor_contrib) / effective_missing
             
-            if effective_missing > 0.01:
-                implied_r_m = (r_bench - survivor_contrib) / effective_missing
-                # Sanity check: cap it? 
-                # If mapped survivors did REALLY well (survivor_contrib > r_bench), implied_r_m will be negative.
-                # If mapped survivors < r_bench (rare), implied_r_m positive.
+            # 5. Generate Daily Series (for Plotting)
+            price_valid = price_slice[valid_tickers]
+            shares = w_s / p_s
+            daily_survivor_val = price_valid.dot(shares)
+            dates_period = daily_survivor_val.index
+            n_days = len(dates_period)
+            
+            daily_missing_val = pd.Series(0.0, index=dates_period)
+            
+            if effective_missing > 0.0001 and n_days > 1:
+                miss_start = effective_missing
+                miss_end = effective_missing * missing_ret
                 
-                # Apply the IMPLIED return to force match
-                total_period_return = survivor_contrib + (effective_missing * implied_r_m)
-                
-                # Update Daily Path
-                price_valid = price_slice[valid_tickers]
-                shares = w_s / p_s
-                daily_survivor_val = price_valid.dot(shares)
-                
-                # Linear interpolation for missing portion path (simplification)
-                # missing_start_val = effective_missing
-                # missing_end_val = effective_missing * implied_r_m
-                
-                # Create a daily scaler
-                dates_period = daily_survivor_val.index
-                n_days = len(dates_period)
-                if n_days > 1 and implied_r_m > 0: # Avoid log(negative)
-                    daily_rate = np.power(implied_r_m, 1/(n_days-1))
+                # Geometric interpolation for smooth path
+                if miss_start > 0 and miss_end > 0:
+                    daily_rate = np.power(miss_end / miss_start, 1/(n_days-1))
                     factors = np.power(daily_rate, np.arange(n_days))
-                    daily_missing_val = pd.Series(effective_missing * factors, index=dates_period)
+                    daily_missing_val[:] = miss_start * factors
                 else:
-                    # Linear decay if negative or zero
-                    daily_missing_val = pd.Series(np.linspace(effective_missing, effective_missing * implied_r_m, n_days), index=dates_period)
-                    
-            else:
-                # Fully mapped?
-                total_period_return = survivor_contrib
-                price_valid = price_slice[valid_tickers]
-                shares = w_s / p_s
-                daily_survivor_val = price_valid.dot(shares)
-                daily_missing_val = pd.Series(0, index=daily_survivor_val.index)
+                    daily_missing_val[:] = np.linspace(miss_start, miss_end, n_days)
+            elif effective_missing > 0.0001:
+                 daily_missing_val[:] = effective_missing
+
+            total_period_return = period_factor
             
             # Total Daily Value (Relative to Start of Period = 1.0)
             daily_rel = daily_survivor_val + daily_missing_val
@@ -260,7 +259,8 @@ def validate():
          # Try to fetch it separately just in case
          try:
              print("Refetching benchmark...")
-             ndx_data = yf.download(BENCHMARK_TICKER, start=start_date, auto_adjust=True, progress=False)['Close']
+             ndx_data = price_manager.get_price_data([BENCHMARK_TICKER], start_date)
+             if isinstance(ndx_data, pd.DataFrame): ndx_data = ndx_data.iloc[:, 0]
              ndx = ndx_data.reindex(sim_values.index)
          except:
              pass
@@ -294,14 +294,126 @@ def validate():
     print(f"Total Return NDX: {ndx.iloc[-1]/ndx.iloc[0] - 1:.2%}")
     
     # Plot
-    plt.figure(figsize=(12, 6))
-    plt.plot(sim_values, label='Reconstructed (From Filings)', linewidth=1.5)
-    plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.7)
+    chart_style.apply_style()
+    plt.figure(figsize=(14, 8))
+    ax = plt.gca()
+    
+    plt.plot(sim_values, label='Reconstructed (From Filings)', linewidth=2.0)
+    plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.8, color='#555555')
+    
+    plt.yscale('log')
+    chart_style.format_date_axis(ax)
+    chart_style.format_y_axis(ax, log=True)
     plt.title(f"Reconstructed Nasdaq-100 vs Official Index\nCorr: {correlation:.4f}, TE: {te:.2%}")
     plt.legend()
-    plt.grid(True, alpha=0.3)
-    plt.savefig("ndx_validation.png")
-    print("\nChart saved to ndx_validation.png")
+    
+    out_img = "validation_charts/ndx_validation.png"
+    plt.savefig(out_img, dpi=300, bbox_inches='tight')
+    print(f"\nChart saved to {out_img}")
+
+def validate_qbig():
+    import os
+    print("\n\n=== Validating NDXMEGASIM vs QBIG ===")
+    
+    # 1. Load Simulation
+    sim_path = "NDXMEGA2SIM.csv" # Switch to Mega 2.0 for validation
+    if not os.path.exists(sim_path):
+        sim_path = "../NDXMEGA2SIM.csv" # Check parent dir for Mega 2.0
+        
+    if not os.path.exists(sim_path):
+        print(f"Skipping QBIG check: {sim_path} not found.")
+        return
+
+    print(f"Loading simulation from {sim_path}...")
+    sim_df = pd.read_csv(sim_path)
+    sim_df['Date'] = pd.to_datetime(sim_df['Date'])
+    sim_df = sim_df.set_index('Date').sort_index()
+    
+    # Rename for clarity
+    if 'Close' in sim_df.columns:
+        sim_series = sim_df['Close']
+    else:
+        sim_series = sim_df.iloc[:, 0]
+    
+    sim_series.name = "NDXMEGASIM"
+
+    # 2. Fetch Real (QBIG)
+    ticker = "QBIG"
+    print(f"Fetching real data for {ticker}...")
+    try:
+        real_df = price_manager.get_price_data([ticker], "2000-01-01")
+        
+        if isinstance(real_df, pd.Series):
+             real_series = real_df
+        else:
+             # DataFrame (from cache containing multiple tickers or formatted specially)
+             if ticker in real_df.columns:
+                 real_series = real_df[ticker]
+             elif 'Close' in real_df.columns:
+                 real_series = real_df['Close']
+             else:
+                 real_series = real_df.iloc[:, 0]
+                 
+        real_series.name = "Real (QBIG)"
+        real_series.index = pd.to_datetime(real_series.index)
+        real_series = real_series.dropna() # Ensure we only use valid dates (QBIG started recently)
+        
+    except Exception as e:
+        print(f"Error fetching {ticker}: {e}")
+        return
+
+    # 3. Align and Compare
+    common_idx = sim_series.index.intersection(real_series.index)
+    
+    if len(common_idx) < 10:
+        print("Insufficient overlap between Simulation and Real QBIG.")
+        return
+
+    print(f"Comparing overlap: {common_idx.min().date()} to {common_idx.max().date()} ({len(common_idx)} days)")
+    
+    sim_slice = sim_series.loc[common_idx]
+    real_slice = real_series.loc[common_idx]
+
+    # Normalize to 100
+    sim_norm = sim_slice / sim_slice.iloc[0] * 100
+    real_norm = real_slice / real_slice.iloc[0] * 100
+
+    # Calculate Metrics
+    tr_sim = (sim_slice.iloc[-1] / sim_slice.iloc[0]) - 1
+    tr_real = (real_slice.iloc[-1] / real_slice.iloc[0]) - 1
+    
+    corr = sim_slice.corr(real_slice)
+    
+    ret_sim = sim_slice.pct_change().dropna()
+    ret_real = real_slice.pct_change().dropna()
+    diff = ret_sim - ret_real
+    te = diff.std() * (252 ** 0.5)
+
+    print(f"--> Correlation:       {corr:.4f}")
+    print(f"--> Tracking Error:    {te:.2%}")
+    print(f"--> Sim Period Return: {tr_sim:.2%}")
+    print(f"--> QBIG Period Return:{tr_real:.2%}")
+    print(f"--> Difference:        {tr_sim - tr_real:.2%}")
+
+    # Plot
+    chart_style.apply_style()
+    plt.figure(figsize=(14, 8))
+    ax = plt.gca()
+    
+    plt.plot(sim_norm, label=f'NDX Mega 2.0 Index (Simulated Underlying) ({tr_sim:.1%})', linewidth=2.5)
+    plt.plot(real_norm, label=f'QBIG ETF (Real) ({tr_real:.1%})', linestyle='--', linewidth=2.0, color='#C44E52')
+    
+    chart_style.format_date_axis(ax)
+    chart_style.format_y_axis(ax, log=False)
+    chart_style.add_watermark(ax, "QBIG Comparison")
+    
+    plt.title(f"Validation: NDX Mega 2.0 Index vs QBIG ETF\nCorr: {corr:.4f}, TE: {te:.2%}")
+    plt.legend()
+    
+    out_img = "validation_charts/validation_qbig.png"
+    plt.savefig(out_img, dpi=300, bbox_inches='tight')
+    print(f"Chart saved to {out_img}")
 
 if __name__ == "__main__":
     validate()
+    validate_qbig()

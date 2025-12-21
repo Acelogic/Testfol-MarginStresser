@@ -5,9 +5,11 @@ import logging
 import sys
 from html.parser import HTMLParser
 
+import config
+
 # Configuration
-DOWNLOAD_DIR = "downloads"
-OUTPUT_FILE = "nasdaq_components.csv"
+DOWNLOAD_DIR = config.DOWNLOAD_DIR
+OUTPUT_FILE = config.COMPONENTS_FILE
 
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
@@ -152,7 +154,8 @@ def parse_html_file(filepath):
                 continue
 
             holdings.append((name, shares_str, val_str))
-        except:
+        except Exception as e:
+            # logging.debug(f"Skipping row: {cleaned_row} - Error: {e}")
             continue
             
     return holdings

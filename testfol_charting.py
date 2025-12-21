@@ -46,11 +46,11 @@ def fetch_component_data(tickers, start_date, end_date):
             if base in combined_prices.columns:
                 continue
                 
-            # SPECIAL: Load NDXMEGASIM from local CSV + Splice with QBIG (Defiance Nasdaq 100 Enhanced Options & Growth ETF)
-            if base == "NDXMEGASIM":
+            # SPECIAL: Load NDX Mega simulations from local CSV + Splice with QBIG
+            if base in ["NDXMEGASIM", "NDXMEGA2SIM"]:
                 try:
-                    # 1. Load Simulation Data
-                    csv_path = "data/NDXMEGASIM.csv"
+                    # 1. Load Simulation Data (dynamic path based on ticker)
+                    csv_path = f"data/{base}.csv"
                     df_sim = pd.DataFrame()
                     if os.path.exists(csv_path):
                         df_sim = pd.read_csv(csv_path)
@@ -58,12 +58,12 @@ def fetch_component_data(tickers, start_date, end_date):
                             df_sim['Date'] = pd.to_datetime(df_sim['Date'])
                             df_sim = df_sim.set_index('Date')
                         if 'Close' not in df_sim.columns:
-                            st.warning("NDXMEGASIM.csv missing 'Close' column")
+                            st.warning(f"{base}.csv missing 'Close' column")
                             df_sim = pd.DataFrame()
                         else:
                             df_sim = df_sim['Close'].sort_index() # Convert to Series
                     else:
-                        st.warning(f"NDXMEGASIM requested but {csv_path} not found.")
+                        st.warning(f"{base} requested but {csv_path} not found.")
 
                     # 2. Fetch QBIG (Live Proxy)
                     # Use a cache-friendly fetch or direct download?
@@ -129,7 +129,7 @@ def fetch_component_data(tickers, start_date, end_date):
                     continue
                     
                 except Exception as e:
-                    st.error(f"Failed to load/splice local NDXMEGASIM: {e}")
+                    st.error(f"Failed to load/splice local {base}: {e}")
                     
             # Fetch Data (Universal Cache handles hits/misses)
             # We still request broad history to maximize cache utility across diff ranges?
@@ -212,12 +212,12 @@ else:
                 
                 sim_engine = config.get('sim_engine', 'standard')
                 
-                # GUARD RAIL: NDXMEGASIM requires Local/Hybrid engine
-                # The public API does not know about this custom local ticker.
-                has_ndxmega = any("NDXMEGASIM" in t for t in alloc_preview.keys())
+                # GUARD RAIL: NDX Mega simulations require Local/Hybrid engine
+                # The public API does not know about these custom local tickers.
+                has_ndxmega = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in alloc_preview.keys())
                 
                 if has_ndxmega and sim_engine != 'hybrid':
-                     st.info("💎 'NDXMEGASIM' detected. Automatically enabling Local Simulation (Hybrid Mode) since this ticker is not available via public API.")
+                     st.info("💎 NDX Mega simulation detected. Automatically enabling Local Simulation (Hybrid Mode) since this ticker is not available via public API.")
                      sim_engine = 'hybrid'
                 
                 if sim_engine == 'hybrid':
@@ -386,12 +386,12 @@ else:
                                  # Fallback to the custom_freq (e.g. Monthly/Yearly) or default to Yearly
                                  api_rebal = config.get('custom_freq', 'Yearly')
                              
-                             # GUARD: Check for NDXMEGASIM in Benchmark
-                             bench_has_ndx = any("NDXMEGASIM" in t for t in bench_port_map.keys())
+                             # GUARD: Check for NDX Mega simulations in Benchmark
+                             bench_has_ndx = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in bench_port_map.keys())
                              
                              if bench_has_ndx:
                                  # Use Local Shadow Engine for Benchmark
-                                 st.info("💎 'NDXMEGASIM' detected in Benchmark. Running Local Simulation.")
+                                 st.info("💎 NDX Mega simulation detected in Benchmark. Running Local Simulation.")
                                  b_tickers = list(bench_port_map.keys())
                                  # Reuse fetch_component_data to get local CSV + Splice
                                  b_prices = fetch_component_data(b_tickers, start_date, end_date)
@@ -457,12 +457,12 @@ else:
                         # Use same allocation but standard Yearly rebalance
                         alloc_map = alloc_preview
                         
-                        # Check for NDXMEGASIM in Comparison Allocation
-                        has_ndx_comp = any("NDXMEGASIM" in t for t in alloc_map.keys())
+                        # Check for NDX Mega simulations in Comparison Allocation
+                        has_ndx_comp = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in alloc_map.keys())
                         
                         if has_ndx_comp:
                              # Use Local Shadow Engine
-                             st.info("💎 'NDXMEGASIM' detected in Comparison. Running Local Simulation.")
+                             st.info("💎 NDX Mega simulation detected in Comparison. Running Local Simulation.")
                              c_tickers = list(alloc_map.keys())
                              c_prices = fetch_component_data(c_tickers, start_date, end_date)
                              
