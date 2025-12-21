@@ -18,24 +18,51 @@ For specific guides, please refer to the detailed documentation:
 
 ## Architecture
 
-The application operates using a "Hybrid Engine" approach:
+The application operates using a **Hybrid Engine** approach:
 
-1.  **Macro Engine (Remote)**: `testfol_api.py`
-    -   Fetches daily total return series for the portfolio from Testfol.io.
-    -   Used as the "Market Truth" source.
-    -   Handles rebalancing friction and expense ratios natively.
+```mermaid
+graph TB
+    subgraph User Interface
+        ST[Streamlit App<br>testfol_charting.py]
+    end
 
-2.  **Shadow Engine (Local)**: `shadow_backtest.py`
-    -   Runs in parallel on your local machine.
-    -   **Reconstructs the portfolio trade-by-trade** to track **Tax Lots**.
-    -   Instead of just tracking total value, it tracks every single share bought, its date, and its cost basis.
-    -   Calculates exact Short-Term vs. Long-Term capital gains based on holding periods.
+    subgraph Engines
+        ME[Macro Engine<br>testfol_api.py]
+        SE[Shadow Engine<br>shadow_backtest.py]
+        MS[Margin Simulator<br>calculations.py]
+    end
 
-3.  **Margin Simulator (Local)**: `testfol_charting.py`
-    -   Takes the cash flows (taxes, draws) and applies them to a recursive margin loan model.
-    -   Calculates daily interest, equity percentages, and margin call risks.
+    subgraph Data Sources
+        TF[testfol.io API]
+        YF[yfinance]
+        CSV[NDXMEGASIM.csv]
+    end
 
----
+    subgraph Output
+        CH[Charts & Reports]
+        TX[Tax Analysis]
+        MC[Monte Carlo]
+    end
+
+    ST --> ME --> TF
+    ST --> SE
+    SE --> YF
+    SE --> CSV
+    SE --> TX
+    ME --> MS
+    MS --> CH
+    SE --> MC
+```
+
+### Engine Responsibilities
+
+| Engine | Location | Purpose |
+|--------|----------|---------|
+| **Macro Engine** | `app/services/testfol_api.py` | Fetches total return series from testfol.io. Acts as "Market Truth" source. |
+| **Shadow Engine** | `app/core/shadow_backtest.py` | Reconstructs portfolio trade-by-trade. Tracks every tax lot (date, cost basis, quantity). Calculates ST vs LT gains. |
+| **Margin Simulator** | `testfol_charting.py` | Applies margin loan model. Calculates daily interest, equity %, margin call risk. |
+
+
 
 ## The Shadow Backtest Engine
 
