@@ -406,8 +406,8 @@ else:
                                     end_date=end_date,
                                     api_port_series=None,
                                     rebalance_freq=shadow_rebal,
-                                    cashflow=0.0,
-                                    cashflow_freq="Monthly",
+                                    cashflow=config.get('cashflow', 0.0), # Use user cashflow
+                                    cashflow_freq=config.get('cashfreq', 'Monthly'), # Use user freq
                                     prices_df=b_prices,
                                     rebalance_month=config.get('rebalance_month', 1),
                                     rebalance_day=config.get('rebalance_day', 1), 
@@ -420,8 +420,8 @@ else:
                                     start_date=start_date,
                                     end_date=end_date,
                                     start_val=config['start_val'],
-                                    cashflow=0.0, # Pure performance
-                                    cashfreq="Monthly",
+                                    cashflow=config.get('cashflow', 0.0), # Use user cashflow
+                                    cashfreq=config.get('cashfreq', 'Monthly'), # Use user freq
                                     rolling=60,
                                     invest_div=True, 
                                     rebalance=api_rebal, 
@@ -457,18 +457,44 @@ else:
                         # Use same allocation but standard Yearly rebalance
                         alloc_map = alloc_preview
                         
-                        c_series, c_stats, _ = cached_fetch_backtest(
-                            start_date=start_date,
-                            end_date=end_date,
-                            start_val=config['start_val'],
-                            cashflow=config.get('cashflow', 0.0), # Use user defined cashflow
-                            cashfreq=config.get('cashfreq', "Monthly"),
-                            rolling=60,
-                            invest_div=config['invest_div'],
-                            rebalance="Yearly", # Force Yearly Standard
-                            allocation=alloc_map,
-                            return_raw=False
-                        )
+                        # Check for NDXMEGASIM in Comparison Allocation
+                        has_ndx_comp = any("NDXMEGASIM" in t for t in alloc_map.keys())
+                        
+                        if has_ndx_comp:
+                             # Use Local Shadow Engine
+                             st.info("💎 'NDXMEGASIM' detected in Comparison. Running Local Simulation.")
+                             c_tickers = list(alloc_map.keys())
+                             c_prices = fetch_component_data(c_tickers, start_date, end_date)
+                             
+                             _, _, _, _, _, c_port_series, _ = cached_run_shadow_backtest_v2(
+                                    allocation=alloc_map,
+                                    start_val=config['start_val'],
+                                    start_date=start_date,
+                                    end_date=end_date,
+                                    api_port_series=None,
+                                    rebalance_freq="Yearly", # Comparison is Standard Yearly
+                                    cashflow=config.get('cashflow', 0.0), 
+                                    cashflow_freq=config.get('cashfreq', "Monthly"),
+                                    prices_df=c_prices,
+                                    rebalance_month=config.get('rebalance_month', 1),
+                                    rebalance_day=config.get('rebalance_day', 1),
+                                    custom_freq="Yearly"
+                             )
+                             c_series = c_port_series
+                             c_stats = calculations.generate_stats(c_series)
+                        else:
+                             c_series, c_stats, _ = cached_fetch_backtest(
+                                start_date=start_date,
+                                end_date=end_date,
+                                start_val=config['start_val'],
+                                cashflow=config.get('cashflow', 0.0), # Use user defined cashflow
+                                cashfreq=config.get('cashfreq', "Monthly"),
+                                rolling=60,
+                                invest_div=config['invest_div'],
+                                rebalance="Yearly", # Force Yearly Standard
+                                allocation=alloc_map,
+                                return_raw=False
+                            )
                         c_series.name = "Standard (Yearly)"
                         st.session_state.bt_results["comparison_series"] = c_series
                         st.session_state.bt_results["comparison_stats"] = c_stats

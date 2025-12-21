@@ -7,7 +7,7 @@ import datetime
 # Configuration
 CIK = "1067839"
 FORM_TYPE = "485BPOS"
-START_DATE = datetime.date(2000, 1, 1)
+START_DATE = datetime.date(1999, 1, 1)
 USER_AGENT = "Antigravity/1.0 (antigravity_agent@google.com)" # SEC requires a User-Agent with contact info
 DOWNLOAD_DIR = "downloads"
 

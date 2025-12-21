@@ -45,4 +45,21 @@ def check_msft():
         print(f"Error: {e}")
 
 if __name__ == "__main__":
-    check_msft()
+    import sys
+    
+    if len(sys.argv) > 1:
+        tickers = sys.argv[1:]
+    else:
+        tickers = ["MSFT", "BIIB", "MXIM", "YHOO"]
+        
+    for ticker in tickers:
+        print(f"\nChecking {ticker}...")
+        try:
+            df = yf.download(ticker, start="2005-01-01", end="2006-01-01", progress=False)
+            if not df.empty:
+                print(f"  Found data: {len(df)} rows. First: {df.index[0].date()}")
+            else:
+                print(f"  No data found.")
+        except Exception as e:
+            print(f"  Error: {e}")
+

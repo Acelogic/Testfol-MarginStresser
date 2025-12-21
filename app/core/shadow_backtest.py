@@ -250,6 +250,14 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     if prices_df is not None and not prices_df.empty:
         logs.append("Using pre-fetched price data (Hybrid Simulation).")
         prices_base = prices_df
+        # FORCE SLICE to respect start/end dates
+        # Ensure index is datetime
+        if not isinstance(prices_base.index, pd.DatetimeIndex):
+             prices_base.index = pd.to_datetime(prices_base.index)
+        
+        # Slicing
+        prices_base = prices_base.loc[start_date:end_date]
+        
         yf_output = None
     else:
         prices_base, yf_output = fetch_prices(tickers, start_date, end_date)
