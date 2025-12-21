@@ -1,6 +1,7 @@
 import pandas as pd
 import argparse
 import sys
+import os
 from datetime import datetime
 
 # Configuration matching backtest_ndx_mega.py
@@ -126,6 +127,29 @@ def get_mega2_holdings(df_date):
     mega_df['FinalWeight'] = mega_df['Ticker'].map(final_weights)
     return mega_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
 
+CONST_FILE_M1 = "output/ndx_mega_constituents.csv"
+CONST_FILE_M2 = "output/ndx_mega2_constituents.csv"
+
+def get_holdings_from_history(history_df, target_date):
+    """
+    Retrieves holdings from backtest history if available.
+    """
+    target_str = target_date.strftime('%Y-%m-%d')
+    match = history_df[history_df['Date'] == target_str]
+    
+    if match.empty:
+        return None
+        
+    row = match.iloc[0]
+    if 'Tickers' not in row or pd.isna(row['Tickers']):
+        return None
+        
+    tickers = row['Tickers'].split('|')
+    weights = [float(w) for w in row['Weights'].split('|')]
+    
+    df = pd.DataFrame({'Ticker': tickers, 'FinalWeight': weights})
+    return df
+
 def main():
     print("Loading data...")
     try:
@@ -135,11 +159,26 @@ def main():
         print(f"Error: {WEIGHTS_FILE} not found. Run reconstruct_weights.py first.")
         sys.exit(1)
         
+    # Load Histories
+    hist_m1 = pd.DataFrame()
+    hist_m2 = pd.DataFrame()
+    try:
+        if os.path.exists(CONST_FILE_M1):
+            hist_m1 = pd.read_csv(CONST_FILE_M1)
+    except: pass
+    
+    try:
+        if os.path.exists(CONST_FILE_M2):
+            hist_m2 = pd.read_csv(CONST_FILE_M2)
+    except: pass
+        
     available_dates = sorted(df['Date'].unique())
     min_year = available_dates[0].year
     max_year = available_dates[-1].year
     
     print(f"\nData available from {min_year} to {max_year}.")
+    if not hist_m1.empty: print(f"Loaded Mega 1.0 History ({len(hist_m1)} periods)")
+    if not hist_m2.empty: print(f"Loaded Mega 2.0 History ({len(hist_m2)} periods)")
     
     while True:
         print("\n" + "="*50)
@@ -173,23 +212,45 @@ def main():
             print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['Weight']:.2%}")
             
         # 2. NDX Mega 1.0
-        m1 = get_mega_holdings(full_slice)
+        # Try History First
+        m1 = get_holdings_from_history(hist_m1, target_date)
+        source_m1 = "Backtest History (Accurate)"
+        
+        if m1 is None:
+            m1 = get_mega_holdings(full_slice)
+            source_m1 = "Strict Calculation (Approx)"
+        else:
+            # Join Name
+            m1 = m1.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
+            m1['Name'] = m1['Name'].fillna('Unknown')
+            
         print(f"\n--- NDX Mega 1.0 Holdings ({target_date.date()}) ---")
+        print(f"Source: {source_m1}")
         print(f"Constituents: {len(m1)}")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10} {'(Orig Wgt)'}")
+        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
         print("-" * 75)
-        for _, row in m1.iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}      ({row['OriginalWeight']:.2%})")
+        for _, row in m1.sort_values('FinalWeight', ascending=False).iterrows():
+            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
         print("-" * 75)
         
         # 3. NDX Mega 2.0
-        m2 = get_mega2_holdings(full_slice)
+        m2 = get_holdings_from_history(hist_m2, target_date)
+        source_m2 = "Backtest History (Accurate)"
+        
+        if m2 is None:
+            m2 = get_mega2_holdings(full_slice)
+            source_m2 = "Strict Calculation (Approx)"
+        else:
+             m2 = m2.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
+             m2['Name'] = m2['Name'].fillna('Unknown')
+
         print(f"\n--- NDX Mega 2.0 Holdings ({target_date.date()}) ---")
+        print(f"Source: {source_m2}")
         print(f"Constituents: {len(m2)}")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10} {'(Orig Wgt)'}")
+        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
         print("-" * 75)
-        for _, row in m2.iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}      ({row['OriginalWeight']:.2%})")
+        for _, row in m2.sort_values('FinalWeight', ascending=False).iterrows():
+            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
         print("-" * 75)
 
 if __name__ == "__main__":
