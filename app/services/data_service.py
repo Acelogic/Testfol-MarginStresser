@@ -1,0 +1,120 @@
+import pandas as pd
+import streamlit as st
+import os
+import yfinance as yf
+from app.services import testfol_api as api
+
+@st.cache_data(show_spinner="Fetching Component Data...", ttl=3600)
+def fetch_component_data(tickers, start_date, end_date):
+    """
+    Fetches historical data for each ticker individually via Testfol API (or local).
+    Handles composite tickers like NDXMEGASIM by splicing local CSVs with live data.
+    """
+    combined_prices = pd.DataFrame()
+    unique_tickers = list(set(tickers))
+    
+    for ticker in unique_tickers:
+        try:
+            # Parse Ticker
+            base = ticker.split("?")[0]
+            if base in combined_prices.columns:
+                continue
+                
+            # SPECIAL: Load NDX Mega simulations from local CSV + Splice with QBIG
+            if base in ["NDXMEGASIM", "NDXMEGA2SIM"]:
+                try:
+                    # 1. Load Simulation Data (dynamic path based on ticker)
+                    csv_path = f"data/{base}.csv"
+                    df_sim = pd.DataFrame()
+                    if os.path.exists(csv_path):
+                        df_sim = pd.read_csv(csv_path)
+                        if 'Date' in df_sim.columns:
+                            df_sim['Date'] = pd.to_datetime(df_sim['Date'])
+                            df_sim = df_sim.set_index('Date')
+                        if 'Close' not in df_sim.columns:
+                            st.warning(f"{base}.csv missing 'Close' column")
+                            df_sim = pd.DataFrame()
+                        else:
+                            df_sim = df_sim['Close'].sort_index() # Convert to Series
+                    else:
+                        st.warning(f"{base} requested but {csv_path} not found.")
+
+                    # 2. Fetch QBIG (Live Proxy) using yfinance
+                    try:
+                        qbig_df = yf.download("QBIG", period="max", auto_adjust=True, progress=False)
+                        
+                        # Handle varied yfinance return structures
+                        qbig_series = pd.Series(dtype=float)
+                        if not qbig_df.empty:
+                            if 'Close' in qbig_df:
+                                 qbig_series = qbig_df['Close']
+                            elif 'Adj Close' in qbig_df:
+                                 qbig_series = qbig_df['Adj Close']
+                            else:
+                                 qbig_series = qbig_df.iloc[:,0]
+                        
+                        if isinstance(qbig_series, pd.DataFrame):
+                            qbig_series = qbig_series.iloc[:,0]
+                            
+                        qbig_series.index = pd.to_datetime(qbig_series.index)
+                        qbig_series = qbig_series.sort_index()
+                    except Exception as e:
+                        st.warning(f"Failed to fetch QBIG data: {e}")
+                        qbig_series = pd.Series(dtype=float)
+
+                    # 3. Splice
+                    if not qbig_series.empty and not df_sim.empty:
+                        # Find splice point (Start of QBIG)
+                        splice_date = qbig_series.index[0]
+                        
+                        # Get Sim Data UP TO Splice Date
+                        sim_part = df_sim[df_sim.index < splice_date]
+                        
+                        if not sim_part.empty:
+                            # Align Sim End to QBIG Start
+                            sim_end_val = sim_part.iloc[-1]
+                            qbig_start_val = qbig_series.iloc[0]
+                            scale_factor = qbig_start_val / sim_end_val if sim_end_val != 0 else 1.0
+                            
+                            sim_part_scaled = sim_part * scale_factor
+                            
+                            combined = pd.concat([sim_part_scaled, qbig_series])
+                            combined_prices[base] = combined
+                        else:
+                             combined_prices[base] = qbig_series
+                             
+                    elif not df_sim.empty:
+                        combined_prices[base] = df_sim
+                    elif not qbig_series.empty:
+                        combined_prices[base] = qbig_series
+                        
+                    continue
+                    
+                except Exception as e:
+                    st.error(f"Failed to load/splice local {base}: {e}")
+                    
+            # API Fetch for standard tickers
+            # We can use the api.fetch_backtest directly as it has disk caching.
+            # No need for the extra st.cache_data layer here since specific args change often,
+            # but this function is cached with st.cache_data at the top level anyway.
+            
+            broad_start = "1900-01-01" 
+            broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
+            
+            series, _, _ = api.fetch_backtest(
+                start_date=broad_start,
+                end_date=broad_end,
+                start_val=10000,
+                cashflow=0,
+                cashfreq="Monthly",
+                rolling=1,
+                invest_div=True, # Total Return
+                rebalance="Yearly",
+                allocation={base: 100.0}
+            )
+            combined_prices[base] = series
+            
+        except Exception as e:
+            st.warning(f"Failed to fetch data for {ticker}: {e}")
+            
+    return combined_prices

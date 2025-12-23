@@ -7,6 +7,7 @@ import datetime as dt
 from app.core import tax_library
 import os
 from app.common.utils import color_return
+from plotly.subplots import make_subplots
 
 
 # --- Multi-Portfolio Chart ---
@@ -535,9 +536,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
     # Volume proxy (range of price movement)
     volume_proxy = (ohlc_df['High'] - ohlc_df['Low']).fillna(0)
     
-    # Create subplots - main chart and optionally volume
-    from plotly.subplots import make_subplots
-    
+
     if show_volume:
         fig = make_subplots(
             rows=2, cols=1,
@@ -857,10 +856,9 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             if i not in pivot.columns: pivot[i] = float("nan")
         pivot = pivot.sort_index(ascending=True)
         
+
+
         quarter_names = ["Q1", "Q2", "Q3", "Q4"]
-        from plotly.subplots import make_subplots
-        
-        # Averages & Yearly
         quarterly_avgs = pivot.mean()
         z_data = pivot.values
         z_avgs = quarterly_avgs.values.reshape(1, -1)
@@ -960,9 +958,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             if i not in pivot.columns: pivot[i] = float("nan")
         pivot = pivot.sort_index(ascending=True)
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        
-        from plotly.subplots import make_subplots
         monthly_avgs = pivot.mean()
+
         z_data = pivot.values
         z_combined_main = np.concatenate([z_data, monthly_avgs.values.reshape(1, -1)], axis=0)
         
@@ -1267,10 +1264,7 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
     # Calculate Total Value per date for hover display
     totals = df.groupby('Date Label')['Value'].sum().rename('Total Value')
     df = df.merge(totals, on='Date Label')
-    
-    import plotly.express as px
-    
-    # Sort by Value (Smallest to Largest) for the stack order
+
     df = df.sort_values(["Date Label", "Value"], ascending=[True, True])
     
     fig = px.bar(

@@ -7,6 +7,12 @@ The application is powered by **[testfol.io](https://testfol.io)**.
 - **Historical Data**: Price data is sourced from Testfol's extensive database, covering stocks and ETFs back to 1885.
 - **Backtesting Engine**: The core portfolio performance (total return, rebalancing) is calculated by the Testfol API.
 
+### Data Service Layer
+For advanced simulations (e.g., `NDXMEGASIM`), the application uses a custom **Data Service** (`app/services/data_service.py`) that acts as a hybrid bridge:
+-   **Live Data**: Fetches real-time pricing from `yfinance` to fill gaps up to the present day.
+-   **Simulated Data**: Loads local CSV files (e.g., `NDXMEGASIM.csv`) for extended historical simulations that predate publicly available tickers.
+-   **Splicing**: Automatically splices historical simulation data with live ticker data to create a seamless continuous dataset.
+
 ## Margin Simulation Logic
 The margin simulation is applied *on top* of the unleveraged portfolio performance returned by the API.
 
