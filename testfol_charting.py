@@ -221,58 +221,140 @@ else:
                      sim_engine = 'hybrid'
                 
                 if sim_engine == 'hybrid':
-                    # --- Hybrid (Local) Simulation ---
+                    # --- Hybrid Simulation ---
                     from app.core import calculations
                     
-                    # 1. Fetch Component Data (Testfol API for extended history)
-                    tickers = list(alloc_preview.keys())
-                    prices_df = fetch_component_data(tickers, start_date, end_date)
+                    # Decisions: use API with Offsets OR Pure Local?
+                    use_api_hybrid = not has_ndxmega
                     
-                    if prices_df.empty:
-                        st.error("Failed to fetch price data for tickers.")
-                        st.stop()
+                    if use_api_hybrid:
+                        # --- API Hybrid (Custom Dates via API Offsets) ---
+                        # Calculate Offsets
+                        calc_rebal_offset = 0
                         
-                    # 2. Generate Chart using Testfol Data (Extended Simulated History)
-                    _, _, _, _, _, port_series, _ = cached_run_shadow_backtest_v2(
-                        allocation=alloc_preview, 
-                        start_val=config['start_val'],
-                        start_date=start_date,
-                        end_date=end_date,
-                        api_port_series=None, # Pure local
-                        rebalance_freq="Custom",
-                        cashflow=shadow_cashflow,
-                        cashflow_freq=config['cashfreq'],
-                        prices_df=prices_df,  # Use Testfol data for chart
-                        rebalance_month=config.get('rebalance_month', 1),
-                        rebalance_day=config.get('rebalance_day', 1),
-                        custom_freq=config.get('custom_freq', 'Yearly')
-                    )
-                    
-                    if port_series.empty:
-                        st.error("Hybrid Simulation Failed (Chart Generation).")
-                        st.stop()
-                    
-                    # 3. Generate Taxes using yFinance (Real Market Data Only)
-                    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
-                        allocation=alloc_preview, 
-                        start_val=config['start_val'],
-                        start_date=start_date,
-                        end_date=end_date,
-                        api_port_series=port_series, # Use Testfol chart for alignment
-                        rebalance_freq="Custom",
-                        cashflow=shadow_cashflow,
-                        cashflow_freq=config['cashfreq'],
-                        # prices_df NOT passed - forces yFinance usage for realistic taxes
-                        # UNLESS it's NDXMEGASIM, which needs the local data
-                        prices_df=prices_df if has_ndxmega else None,
-                        rebalance_month=config.get('rebalance_month', 1),
-                        rebalance_day=config.get('rebalance_day', 1),
-                        custom_freq=config.get('custom_freq', 'Yearly')
-                    )
+                        r_freq = config.get('custom_freq', 'Yearly')
+                        r_month = config.get('rebalance_month', 1)
+                        r_day = config.get('rebalance_day', 1)
                         
-                    # Package results for render_results
-                    stats = calculations.generate_stats(twr_series) # Local Stats (TWR based)
-                    extra_data = {"rebalancing_events": []} # No native events for custom yet
+                        try:
+                            if r_freq == "Yearly":
+                                # API Offset Logic: "Days BEFORE the end of the period" (in Trading Days)
+                                # So we need to calculate how far 'target_date' is from Dec 31st.
+                                
+                                # Use 2024 (Leap Year) for calculation key
+                                end_of_year = pd.Timestamp("2024-12-31")
+                                target_date = pd.Timestamp(f"2024-{r_month}-{r_day}")
+                                
+                                # 1. Calculate Calendar Days Remaining in Year
+                                days_remaining = (end_of_year - target_date).days
+                                
+                                # 2. Convert to Approx Trading Days (252 trading days / 365 calendar days)
+                                # Factor = 0.69
+                                calc_rebal_offset = int(days_remaining * (252.0 / 366.0)) # Using 366 for leap year
+                                
+                                # Guard against negative (if user picks Dec 32?? impossible via UI)
+                                calc_rebal_offset = max(0, calc_rebal_offset)
+                                
+                            else:
+                                # For Monthly/Quarterly
+                                # If User picks Day 1: We want start of month.
+                                # End of Month - Day 1 = ~29 days.
+                                # 29 * (21/30) = ~20 trading days.
+                                # API goes back 20 days -> Day 1. Correct.
+                                
+                                # We assume standardized 31 day month for simplicity to avoid month-specific logic in loop
+                                # This is an approximation.
+                                days_remaining = 31 - r_day
+                                calc_rebal_offset = int(days_remaining * (21.0 / 31.0))
+                                
+                        except Exception as e:
+                            st.warning(f"Offset Calc Error: {e}. Defaulting to 0.")
+                            calc_rebal_offset = 0
+
+                        # Fetch Chart from API
+                        port_series, stats, extra_data = cached_fetch_backtest(
+                            start_date=start_date,
+                            end_date=end_date,
+                            start_val=config['start_val'],
+                            cashflow=bt_cashflow, 
+                            cashfreq="Monthly",
+                            rolling=60, 
+                            invest_div=config['invest_div'],
+                            rebalance=r_freq,
+                            rebalance_offset=calc_rebal_offset,
+                            allocation=alloc_preview, 
+                            return_raw=False,
+                            include_raw=True
+                        )
+                        
+                        # Run Shadow for Taxes (using API chart for alignment)
+                        # We pass prices_df=None to force yFinance real data for taxes
+                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
+                            allocation=alloc_preview, 
+                            start_val=config['start_val'],
+                            start_date=start_date,
+                            end_date=end_date,
+                            api_port_series=port_series,
+                            rebalance_freq="Custom",
+                            cashflow=shadow_cashflow,
+                            cashflow_freq=config['cashfreq'],
+                            prices_df=None, 
+                            rebalance_month=r_month,
+                            rebalance_day=r_day,
+                            custom_freq=r_freq
+                        )
+                        
+                    else:
+                        # --- Pure Local Simulation (Required for NDXMEGASIM) ---
+                        # 1. Fetch Component Data (Testfol API for extended history)
+                        tickers = list(alloc_preview.keys())
+                        prices_df = fetch_component_data(tickers, start_date, end_date)
+                        
+                        if prices_df.empty:
+                            st.error("Failed to fetch price data for tickers.")
+                            st.stop()
+                            
+                        # 2. Generate Chart using Testfol Data (Extended Simulated History)
+                        _, _, _, _, _, port_series, _ = cached_run_shadow_backtest_v2(
+                            allocation=alloc_preview, 
+                            start_val=config['start_val'],
+                            start_date=start_date,
+                            end_date=end_date,
+                            api_port_series=None, # Pure local
+                            rebalance_freq="Custom",
+                            cashflow=shadow_cashflow,
+                            cashflow_freq=config['cashfreq'],
+                            prices_df=prices_df,  # Use Testfol data for chart
+                            rebalance_month=config.get('rebalance_month', 1),
+                            rebalance_day=config.get('rebalance_day', 1),
+                            custom_freq=config.get('custom_freq', 'Yearly')
+                        )
+                        
+                        if port_series.empty:
+                            st.error("Hybrid Simulation Failed (Chart Generation).")
+                            st.stop()
+                        
+                        # 3. Generate Taxes using yFinance (Real Market Data Only)
+                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
+                            allocation=alloc_preview, 
+                            start_val=config['start_val'],
+                            start_date=start_date,
+                            end_date=end_date,
+                            api_port_series=port_series, # Use Testfol chart for alignment
+                            rebalance_freq="Custom",
+                            cashflow=shadow_cashflow,
+                            cashflow_freq=config['cashfreq'],
+                            # prices_df NOT passed - forces yFinance usage for realistic taxes
+                            # UNLESS it's NDXMEGASIM, which needs the local data
+                            prices_df=prices_df, 
+                            rebalance_month=config.get('rebalance_month', 1),
+                            rebalance_day=config.get('rebalance_day', 1),
+                            custom_freq=config.get('custom_freq', 'Yearly')
+                        )
+                            
+                        # Package results for render_results
+                        stats = calculations.generate_stats(twr_series) # Local Stats (TWR based)
+                        extra_data = {"rebalancing_events": []} # No native events for custom yet
                     
                     
                 else:

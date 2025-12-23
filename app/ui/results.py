@@ -581,7 +581,9 @@ When yFinance data starts later than your chart, the tax engine initializes your
                 tax_adj_equity_pct_series, tax_adj_usage_series, 
                 wmaint, stats, log_opts,
                 bench_series=bench_resampled,
-                comparison_series=comp_resampled
+                comparison_series=comp_resampled,
+                start_val=start_val,
+                rate_annual=rate_annual
             )
         else: # Candlestick
             charts.render_candlestick_chart(
