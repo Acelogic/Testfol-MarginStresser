@@ -9,124 +9,274 @@ def render():
     
     st.subheader("Strategy Configuration")
     
-    tab_port, tab_margin, tab_bench, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "📊 Benchmark", "🧩 Asset Explorer", "⚙️ Settings"])
+    tab_port, tab_margin, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "⚙️ Settings"])
     
     config = {}
 
     with tab_port:
-        # --- Top Settings Grid ---
-        c_set1, c_set2, c_set3 = st.columns(3)
+        # --- initialize state ---
+        if "portfolios" not in st.session_state:
+            # Default to 1 empty or basic portfolio
+            _default_alloc = pd.DataFrame([
+                {"Ticker":"SPY", "Weight %": 60, "Maint %": 25},
+                {"Ticker":"TLT", "Weight %": 40, "Maint %": 25}
+            ])
+            st.session_state.portfolios = [{
+                "id": "p1",
+                "name": "Portfolio 1",
+                "alloc_df": _default_alloc,
+                "rebalance": {
+                    "mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False
+                },
+                "cashflow": {
+                     "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
+                }
+            }]
+            
+        # --- Global Cashflow Settings ---
+        if "global_cashflow" not in st.session_state:
+            st.session_state.global_cashflow = {
+                "start_val": 10000.0,
+                "amount": 0.0, 
+                "freq": "Monthly", 
+                "invest_div": True,
+                "pay_down_margin": False
+            }
+            
+        # --- Sync & Determine Active Portfolio ---
+        if "active_tab_idx" not in st.session_state:
+            st.session_state.active_tab_idx = 0
+            
+        portfolio_names = [port["name"] for port in st.session_state.portfolios]
         
-        with c_set1:
-            st.markdown("##### 💰 Capital & Cashflow")
-            config['start_val'] = utils.num_input("Start Value ($)", "start_val", 10000.0, 1000.0, on_change=utils.sync_equity)
-            config['cashflow'] = utils.num_input("Cashflow ($)", "cashflow", 0.0, 100.0)
+        # Sync index with widget state if available
+        if "portfolio_selector" in st.session_state and st.session_state.portfolio_selector:
+            sel = st.session_state.portfolio_selector
+            if sel in portfolio_names:
+                st.session_state.active_tab_idx = portfolio_names.index(sel)
+        
+        # Determine Current Portfolio 'p'
+        idx = st.session_state.active_tab_idx
+        if idx >= len(st.session_state.portfolios): 
+            idx = 0
+            st.session_state.active_tab_idx = 0
             
-            sc1, sc2 = st.columns(2)
-            with sc1:
-                config['cashfreq'] = st.selectbox("Freq", ["Monthly", "Quarterly", "Yearly"], index=0, label_visibility="collapsed")
-            with sc2:
-                 config['invest_div'] = st.checkbox("Re-invest Divs", value=True)
+        p = st.session_state.portfolios[idx]
 
-        with c_set2:
-            st.markdown("##### 📅 Rebalancing")
-            sim_mode = st.radio(
-                "Mode",
-                ["Standard", "Custom"],
-                index=0,
-                horizontal=True,
-                label_visibility="collapsed",
-                help="**Standard**: End of Period (API).\n**Custom**: Specific Date (Hybrid)."
-            )
-            config['sim_engine'] = "hybrid" if "Custom" in sim_mode else "standard"
-            
-            if config['sim_engine'] == "hybrid":
-                # Layout for Custom Date
-                rc1, rc2 = st.columns([1, 1])
-                with rc1:
-                    config['custom_freq'] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=0)
-                with rc2:
-                    if config['custom_freq'] == "Yearly":
-                        config['rebalance_month'] = st.selectbox("Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), index=0)
-                    else:
-                        config['rebalance_month'] = 1
-                
-                config['rebalance_day'] = st.number_input("Day of Month", 1, 31, 15)
-                config['rebalance'] = "Custom"
-                config['compare_standard'] = st.checkbox("Vs Standard", value=True)
-            else:
-                config['rebalance'] = st.selectbox("Freq", ["Yearly", "Quarterly", "Monthly"], index=0, label_visibility="collapsed")
-                config['rebalance_month'] = 1
-                config['rebalance_day'] = 1
-                config['compare_standard'] = False
-                
-            config['pay_down_margin'] = st.checkbox("Pay Down Margin", value=False)
-
-        with c_set3:
-            st.markdown("##### 🏛️ Tax Settings")
-            config['use_std_deduction'] = st.checkbox("Standard Deduction", value=True)
-            
-            tax_method_selection = st.selectbox(
-                "Method",
-                ["Historical Smart", "Historical Max Rate", "2025 Fixed Brackets"],
-                index=0,
-                help="**Historical Smart**: Uses actual tax brackets and inclusion rates from each specific year.\n**Historical Max**: Applies the highest historical capital gains rate for that year.\n**2025 Fixed**: Applies today's (2025) tax brackets to all past years."
-            )
-            
-            with st.expander("Details", expanded=False):
-                config['filing_status'] = st.selectbox("Status", ["Single", "Married Joint", "Head of Household"], index=0)
-                config['state_tax_rate'] = st.number_input("State Tax %", 0.0, 20.0, 0.0, 0.1) / 100.0
-                config['other_income'] = st.number_input("Other Income", 0.0, 10000000.0, 100000.0, 5000.0)
-
-            if "Smart" in tax_method_selection:
-                config['tax_method'] = "smart"
-            elif "Max" in tax_method_selection:
-                config['tax_method'] = "historical_max"
-            else:
-                config['tax_method'] = "2025_fixed"
+        # --- Render Global Section ---
+        st.markdown("##### 💰 Global Capital & Cashflow")
+        gc1, gc2, gc3, gc4, gc5 = st.columns([2, 2, 2, 1.5, 1.5])
+        
+        with gc1:
+            st.session_state.global_cashflow["start_val"] = utils.num_input("Start Value ($)", "g_start", st.session_state.global_cashflow["start_val"], 1000.0)
+        with gc2:
+            st.session_state.global_cashflow["amount"] = utils.num_input("Cashflow ($)", "g_cf", st.session_state.global_cashflow["amount"], 100.0)
+        with gc3:
+             st.session_state.global_cashflow["freq"] = st.selectbox("Freq", ["Monthly", "Quarterly", "Yearly"], index=["Monthly", "Quarterly", "Yearly"].index(st.session_state.global_cashflow["freq"]), key="g_freq")
+        with gc4:
+             st.markdown("<br>", unsafe_allow_html=True)
+             st.session_state.global_cashflow["invest_div"] = st.checkbox("Re-invest Divs", st.session_state.global_cashflow["invest_div"], key="g_div")
+        with gc5:
+             st.markdown("<br>", unsafe_allow_html=True)
+             st.session_state.global_cashflow["pay_down_margin"] = st.checkbox("Pay Down Margin", st.session_state.global_cashflow["pay_down_margin"], key="g_paydown")
 
         st.divider()
+
+        # --- Portfolio Management Toolbar ---
+        c_tool1, c_tool2, c_tool3 = st.columns([1, 2, 1])
         
-        # --- Allocation Table (Full Width) ---
+        # 1. New Portfolio
+        with c_tool1:
+            if st.button("➕ Add Empty", use_container_width=True):
+                if len(st.session_state.portfolios) < 5:
+                    import uuid
+                    new_id = f"p_{uuid.uuid4().hex[:8]}"
+                    st.session_state.portfolios.append({
+                        "id": new_id,
+                        "name": f"Portfolio {len(st.session_state.portfolios) + 1}",
+                        "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25}]),
+                        "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False}
+                    })
+                    st.rerun()
+                else:
+                    st.warning("Max 5 portfolios.")
+
+        # 2. Load Preset
+        import json
+        import os
+        try:
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            preset_path = os.path.join(base_dir, "../../data/presets.json")
+            
+            preset_names = []
+            presets = []
+            if os.path.exists(preset_path):
+                with open(preset_path, "r") as f:
+                    presets = json.load(f)
+                preset_names = [p["name"] for p in presets]
+            
+            with c_tool2:
+                selected_preset = st.selectbox(
+                    "Select Preset", 
+                    preset_names if preset_names else ["No Presets"], 
+                    key="preset_selector", 
+                    label_visibility="collapsed"
+                )
+            
+            with c_tool3:
+                if st.button("⬇️ Load Preset", use_container_width=True):
+                    if preset_names and selected_preset and selected_preset != "No Presets":
+                        if len(st.session_state.portfolios) < 5:
+                            p_data = next(p for p in presets if p["name"] == selected_preset)
+                            import uuid
+                            new_id = f"p_pre_{uuid.uuid4().hex[:8]}"
+                            
+                            reb = p_data.get("rebalance", {})
+                            month_map = {"Jan":1, "Feb":2, "Mar":3, "Apr":4, "May":5, "Jun":6, "Jul":7, "Aug":8, "Sep":9, "Oct":10, "Nov":11, "Dec":12}
+                            r_month = month_map.get(reb.get("month_str", "Jan"), 1)
+                            
+                            st.session_state.portfolios.append({
+                                "id": new_id,
+                                "name": p_data["name"],
+                                "alloc_df": pd.DataFrame(p_data["allocation"]),
+                                "rebalance": {
+                                    "mode": reb.get("mode", "Standard"),
+                                    "freq": reb.get("freq", "Yearly"),
+                                    "month": r_month,
+                                    "day": reb.get("day", 1),
+                                    "compare_std": False
+                                }
+                            })
+                            st.rerun()
+                        else:
+                            st.warning("Max 5 portfolios.")
+        except Exception as e:
+            st.error(f"Error: {e}")
+            
+        st.divider()
+
+        # --- Portfolio Selector & Management ---
+        
+        # Use segmented control (radio with pills) - this properly syncs state
+        # Note: We rely on key="portfolio_selector" to manage state, and synced it at the top.
+        selected = st.segmented_control(
+            "Portfolio",
+            portfolio_names,
+            default=portfolio_names[idx],
+            key="portfolio_selector"
+        )
+        
+        # -- Header & Actions --
+        with st.container():
+            c_name, c_save, c_del = st.columns([6, 1, 1])
+            with c_name:
+                p["name"] = st.text_input("Portfolio Name", p["name"], key=f"name_{p['id']}", label_visibility="collapsed")
+            
+            with c_save:
+                # Save Button
+                if st.button("💾", key=f"save_{p['id']}", help="Save as new Preset", use_container_width=True):
+                    alloc_list = p["alloc_df"].to_dict("records")
+                    preset_data = {
+                        "name": p["name"],
+                        "allocation": alloc_list,
+                        "rebalance": {
+                            "mode": p["rebalance"]["mode"],
+                            "freq": p["rebalance"]["freq"],
+                            "day": p["rebalance"]["day"]
+                        }
+                    }
+                    month_map_inv = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun", 7:"Jul", 8:"Aug", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dec"}
+                    preset_data["rebalance"]["month_str"] = month_map_inv.get(p["rebalance"].get("month", 1), "Jan")
+                    utils.save_preset(preset_data)
+                    st.success(f"Saved!")
+                    st.rerun()
+            
+            with c_del:
+                # Delete Button
+                if st.button("🗑️", key=f"del_{p['id']}", help="Delete Portfolio", use_container_width=True):
+                    if len(st.session_state.portfolios) > 1:
+                        st.session_state.portfolios.pop(idx)
+                        st.session_state.active_tab_idx = max(0, idx-1)
+                        st.rerun()
+                    else:
+                        st.warning("Last portfolio")
+        
+        # --- Rebalancing Strategy (Moved Back) ---
+        with st.expander("📅 Rebalancing Strategy", expanded=False):
+            # Row 1: Mode Selection
+            mode_idx = 0 if p["rebalance"]["mode"] == "Standard" else 1
+            r_mode = st.radio("Mode", ["Standard", "Custom"], index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
+            p["rebalance"]["mode"] = r_mode
+
+            # Row 2: Controls distributed horizontally
+            c_r1, c_r2, c_r3, c_r4 = st.columns(4)
+            
+            if r_mode == "Custom":
+                with c_r1:
+                    freq_opts = ["Yearly", "Quarterly", "Monthly"]
+                    try: f_idx = freq_opts.index(p["rebalance"]["freq"])
+                    except: f_idx = 0
+                    p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
+                
+                with c_r2:
+                    if p["rebalance"]["freq"] == "Yearly":
+                        p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"rmon_{p['id']}")
+                    else: 
+                        p["rebalance"]["month"] = 1
+                        # Placeholder or empty
+                        st.markdown("") 
+
+                with c_r3:
+                    p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"rday_{p['id']}")
+
+                with c_r4:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"cmp_{p['id']}")
+
+            else: # Standard Mode
+                with c_r1:
+                    p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"rfreq_std_{p['id']}")
+                
+                # Reset custom vars implicitly
+                p["rebalance"]["month"] = 1
+                p["rebalance"]["day"] = 1
+
         st.markdown("##### 🥧 Asset Allocation")
-        
-        _default = [
-            {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
-            {"Ticker":"GLD","Weight %":20,"Maint %":25},
-            {"Ticker":"VXUS","Weight %":15,"Maint %":25},
-            {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
-        ]
-
-        if "alloc_df" not in st.session_state:
-            st.session_state.alloc_df = pd.DataFrame(_default)
-
-        # Use full container width
-        edited_df = st.data_editor(
-            st.session_state.alloc_df,
-            key=f"alloc_editor_{st.session_state.get('reload_counter', 0)}",
+        p["alloc_df"] = st.data_editor(
+            p["alloc_df"],
+            key=f"editor_{p['id']}",
             num_rows="dynamic",
             column_order=["Ticker", "Weight %", "Maint %"],
             column_config={
-                "Weight %": st.column_config.NumberColumn(
-                    min_value=0.0, max_value=100.0, step=0.01, format="%.2f"
-                ),
-                "Maint %": st.column_config.NumberColumn(
-                    min_value=0.0, max_value=100.0, step=0.1, format="%.1f"
-                ),
+                "Weight %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
+                "Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
             },
             use_container_width=True
         )
+
+        # Validation & Metrics
+        try:
+            p_alloc_preview, p_maint_preview = api.table_to_dicts(p["alloc_df"])
+            p_total_weight = sum(p_alloc_preview.values())
+            d_maint = config.get('default_maint', 25.0)
+            p_wmaint = sum(
+                (wt/100) * (p_maint_preview.get(t.split("?")[0], d_maint)/100)
+                for t, wt in p_alloc_preview.items()
+            )
+        except Exception:
+            p_total_weight = 0.0
+            p_wmaint = 0.0
+
+        st.markdown("---")
+        mc1, mc2 = st.columns(2)
+        mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
+        mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
         
-        # Store edited data for save functionality
-        st.session_state.current_edited_df = edited_df
-        config['edited_df'] = edited_df
+        # Export for Charting
+        config['portfolios'] = st.session_state.portfolios
+        config['global_cashflow'] = st.session_state.get('global_cashflow', {
+            "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
+        })
 
     with tab_margin:
         # Move Tax Simulation to top to control state of other inputs
@@ -162,8 +312,9 @@ def render():
             )
             
             # Calculate leverage for display (handle zero division)
-            if config['start_val'] != config['starting_loan']:
-                current_lev = config['start_val'] / (config['start_val'] - config['starting_loan'])
+            curr_start_val = config.get('global_cashflow', {}).get('start_val', 10000.0)
+            if curr_start_val != config['starting_loan']:
+                current_lev = curr_start_val / (curr_start_val - config['starting_loan'])
             else:
                 current_lev = 0.0
                 
@@ -179,28 +330,6 @@ def render():
             config['pm_enabled'] = st.checkbox("Enable Portfolio Margin (PM)", value=False, help="Enforces $100k Minimum Equity requirement.", disabled=margin_disabled)
 
 
-    with tab_bench:
-        st.markdown("##### Benchmark Configuration")
-        st.info("Compare your strategy against a benchmark (Gross Total Return).")
-        
-        config['bench_mode'] = st.radio("Benchmark Mode", ["None", "Single Ticker", "Custom Portfolio"], horizontal=True)
-        
-        if config['bench_mode'] == "Single Ticker":
-            config['bench_ticker'] = st.text_input("Benchmark Ticker", "SPY", help="Enter a single ticker symbol (e.g. SPY, VTI, QQQ).")
-            st.caption("Standard 100% allocation to this ticker.")
-            
-        elif config['bench_mode'] == "Custom Portfolio":
-            st.markdown("Define Benchmark Allocation:")
-            
-            if "bench_alloc_df" not in st.session_state:
-                st.session_state.bench_alloc_df = pd.DataFrame([{"Ticker":"SPY","Weight %":60}, {"Ticker":"O","Weight %":40}])
-                
-            config['bench_edited_df'] = st.data_editor(
-                st.session_state.bench_alloc_df,
-                num_rows="dynamic",
-                use_container_width=True,
-                key="bench_editor"
-            )
 
     with tab_asset:
         # Asset Explorer is self-contained.
@@ -244,47 +373,5 @@ def render():
                     st.success("Cache cleared!")
                 else:
                     st.info("Cache is already empty.")
-            
-    # --- Validation ---
-    # Handle case where data editor is empty or hasn't populated yet (e.g., after loading)
-    edited_df = config.get('edited_df')
-    working_df = pd.DataFrame()
-    try:
-        if isinstance(edited_df, pd.DataFrame) and not edited_df.empty and "Ticker" in edited_df.columns:
-            working_df = edited_df.dropna(subset=["Ticker"]).loc[lambda df: df["Ticker"].str.strip() != ""]
-        else:
-            # Use session state data if editor data isn't ready
-            if "alloc_df" in st.session_state and not st.session_state.alloc_df.empty:
-                working_df = st.session_state.alloc_df.dropna(subset=["Ticker"]).loc[lambda df: df["Ticker"].str.strip() != ""]
-    except (KeyError, AttributeError):
-        pass # Fallback
 
-    # Ensure working_df has the required columns before passing to API
-    if working_df.empty or "Ticker" not in working_df.columns:
-        # Create empty but valid DataFrame with required columns
-        working_df = pd.DataFrame(columns=["Ticker", "Weight %", "Maint %"])
-
-    alloc_preview, maint_preview = api.table_to_dicts(working_df)
-    total_weight = sum(alloc_preview.values())
-    
-    # Calculate wmaint for display
-    # Use default_maint from config
-    d_maint = config.get('default_maint', 25.0)
-    wmaint = sum(
-        (wt/100) * (maint_preview.get(t.split("?")[0], d_maint)/100)
-        for t, wt in alloc_preview.items()
-    )
-
-    with tab_port:
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        c1.metric("Total Allocation", f"{total_weight:.2f}%", delta=None if total_weight == 100 else "Must be 100%", delta_color="off" if total_weight == 100 else "inverse")
-        c2.metric("Weighted Maint Req", f"{wmaint*100:.2f}%")
-        
-    config['working_df'] = working_df
-    config['alloc_preview'] = alloc_preview
-    config['maint_preview'] = maint_preview
-    config['total_weight'] = total_weight
-    config['wmaint'] = wmaint
-    
     return config

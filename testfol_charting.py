@@ -2,7 +2,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # testfol_charting.py
 #
-# New Streamlit App for Testfol Backtesting with Multi-Timeframe Candlesticks
+# New Streamlit App for Testfol Backtesting with Multi-Portfolio Support
 # ─────────────────────────────────────────────────────────────────────────────
 
 import pandas as pd
@@ -12,7 +12,7 @@ import os
 from app.services import fetch_backtest
 from app.core import run_shadow_backtest, calculations
 from app.common import utils
-from app.ui import render_sidebar, render_config, render_results, asset_explorer
+from app.ui import render_sidebar, render_config, render_results, asset_explorer, charts
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Caching Wrappers
@@ -31,13 +31,10 @@ def cached_run_shadow_backtest_v2(*args, **kwargs):
 @st.cache_data(show_spinner="Fetching Component Data...", ttl=3600)
 def fetch_component_data(tickers, start_date, end_date):
     """
-    Fetches historical data for each ticker individually via Testfol API.
-    Uses universal API caching in testfol_api.py
+    Fetches historical data for each ticker individually via Testfol API (or local).
     """
     combined_prices = pd.DataFrame()
     unique_tickers = list(set(tickers))
-    
-    # Pre-fetch check or parallelize? For now sequential.
     
     for ticker in unique_tickers:
         try:
@@ -65,22 +62,23 @@ def fetch_component_data(tickers, start_date, end_date):
                     else:
                         st.warning(f"{base} requested but {csv_path} not found.")
 
-                    # 2. Fetch QBIG (Live Proxy)
-                    # Use a cache-friendly fetch or direct download?
-                    # Let's use direct download to ensure we get "Latest" data regardless of cache
+                    # 2. Fetch QBIG (Live Proxy) using yfinance
                     try:
                         import yfinance as yf
                         qbig_df = yf.download("QBIG", period="max", auto_adjust=True, progress=False)
-                        if 'Close' in qbig_df:
-                             qbig_series = qbig_df['Close']
-                        elif 'Adj Close' in qbig_df:
-                             qbig_series = qbig_df['Adj Close']
-                        else:
-                             # Fallback for yfinance structure changes
-                             qbig_series = qbig_df.iloc[:,0] if not qbig_df.empty else pd.Series()
+                        
+                        # Handle varied yfinance return structures
+                        qbig_series = pd.Series(dtype=float)
+                        if not qbig_df.empty:
+                            if 'Close' in qbig_df:
+                                 qbig_series = qbig_df['Close']
+                            elif 'Adj Close' in qbig_df:
+                                 qbig_series = qbig_df['Adj Close']
+                            else:
+                                 qbig_series = qbig_df.iloc[:,0]
                         
                         if isinstance(qbig_series, pd.DataFrame):
-                            qbig_series = qbig_series.iloc[:,0] # Handle multi-index if single ticker
+                            qbig_series = qbig_series.iloc[:,0]
                             
                         qbig_series.index = pd.to_datetime(qbig_series.index)
                         qbig_series = qbig_series.sort_index()
@@ -97,28 +95,16 @@ def fetch_component_data(tickers, start_date, end_date):
                         sim_part = df_sim[df_sim.index < splice_date]
                         
                         if not sim_part.empty:
-                            # Scale Sim to match QBIG start
-                            # Need Sim Price at Splice Date? (Or last available date)
-                            # Actually, look for overlap?
-                            # Sim ends at splice_date (approx).
-                            # Let's align the END of Sim Part to the START of QBIG using last available value.
-                            
+                            # Align Sim End to QBIG Start
                             sim_end_val = sim_part.iloc[-1]
                             qbig_start_val = qbig_series.iloc[0]
-                            
-                            # Scaling Factor: We heavily simulated "Growth of $100" in sim.
-                            # QBIG starts at ~$20?
-                            # We scale SIM DOWN/UP to match QBIG.
-                            scale_factor = qbig_start_val / sim_end_val
+                            scale_factor = qbig_start_val / sim_end_val if sim_end_val != 0 else 1.0
                             
                             sim_part_scaled = sim_part * scale_factor
                             
-                            # Combine
                             combined = pd.concat([sim_part_scaled, qbig_series])
                             combined_prices[base] = combined
-                            # st.info(f"Spliced NDXMEGASIM with QBIG at {splice_date.date()} (Scale: {scale_factor:.4f})")
                         else:
-                             # Overlap issue? Just use QBIG?
                              combined_prices[base] = qbig_series
                              
                     elif not df_sim.empty:
@@ -131,14 +117,7 @@ def fetch_component_data(tickers, start_date, end_date):
                 except Exception as e:
                     st.error(f"Failed to load/splice local {base}: {e}")
                     
-            # Fetch Data (Universal Cache handles hits/misses)
-            # We still request broad history to maximize cache utility across diff ranges?
-            # Actually, with Hash Caching, exact params matter.
-            # If user asks for 2020-2024, hash includes 2020-2024.
-            # If next user asks for 2019-2024, it's a MISS.
-            # To make cache EFFECTIVE, we should normalize the request dates here.
-            # Requesting 1900-Present matches the universal cache strategy best.
-            
+            # API Fetch for standard tickers
             broad_start = "1900-01-01" 
             broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
             
@@ -153,22 +132,7 @@ def fetch_component_data(tickers, start_date, end_date):
                 rebalance="Yearly",
                 allocation={base: 100.0}
             )
-            
-            # Slice to requested range? Or handled by caller/simulation?
-            # Returns are usually sliced by common index intersection in simulation.
-            
             combined_prices[base] = series
-            
-            # Rate limit might still be needed on MISS, but API layer doesn't sleep.
-            # We can sleep here just in case, or sleep in API layer?
-            # If it's a CACHE HIT, loop is fast.
-            # If MISS, we might spam.
-            # Let's keep a small sleep just to be safe, but only if we suspect it was a hit?
-            # We don't know if hit/miss here.
-            # Adding small delay won't hurt much if cached (0.1s?), but 2.0s is annoying.
-            # Let's sleep 0.1s. If miss, we rely on having few tickers or API handling it.
-            # Rate limit is handled internally by testfol_api on Cache MISS (2.0s)
-            # No sleep needed here.
             
         except Exception as e:
             st.warning(f"Failed to fetch data for {ticker}: {e}")
@@ -195,401 +159,244 @@ start_date, end_date, run_placeholder = render_sidebar()
 config = render_config()
 
 # --- Validation & Run ---
-working_df = config['working_df']
-alloc_preview = config['alloc_preview']
-total_weight = config['total_weight']
+# Note: With multi-portfolio, we validate per portfolio inside the loop or pre-check.
+# We trust configuration.py to manage weight validation visually.
 
-if total_weight != 100:
-    run_placeholder.error("Fix allocation (must be 100%)")
-else:
-    if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True):
-        st.divider()
-        with st.spinner("Running Simulation..."):
-            try:
-                # Logic for Pay Down Margin
-                bt_cashflow = 0.0 if config['pay_down_margin'] else config['cashflow']
-                shadow_cashflow = 0.0 if config['pay_down_margin'] else config['cashflow']
+if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True):
+    st.divider()
+    with st.spinner("Running Simulations..."):
+        try:
+            results_list = []
+            
+            # Default to current config as single portfolio if 'portfolios' missing (Legacy Support)
+            portfolios = config.get('portfolios', [])
+            if not portfolios:
+                # Construct pseudo-portfolio from legacy config keys
+                portfolios = [{
+                    "id": "legacy",
+                    "name": "Portfolio 1",
+                    "alloc_df": config.get('edited_df', pd.DataFrame([{"Ticker":"SPY", "Weight %":100, "Maint %":25}])), 
+                    "rebalance": {
+                        "mode": "Custom" if config.get('sim_engine') == 'hybrid' else "Standard",
+                        "freq": config.get('custom_freq', 'Yearly'),
+                        "month": config.get('rebalance_month', 1),
+                        "day": config.get('rebalance_day', 1),
+                        "compare_std": config.get('compare_standard', False)
+                    },
+                    "cashflow": {
+                        "start_val": config.get('start_val', 10000),
+                        "amount": config.get('cashflow', 0),
+                        "freq": config.get('cashfreq', 'Monthly'),
+                        "invest_div": config.get('invest_div', True), 
+                        "pay_down_margin": config.get('pay_down_margin', False)
+                    }
+                }]
+            
+            bench_series_list = []
+
+            for p in portfolios:
+                # Prepare params
+                if 'alloc_df' in p and not p['alloc_df'].empty:
+                     alloc_map = dict(zip(p['alloc_df']['Ticker'], p['alloc_df']['Weight %']))
+                     
+                     # Calculate Weighted Maintenance for this portfolio
+                     # Need to normalize weights first
+                     total_w = sum(alloc_map.values())
+                     d_maint = config.get('default_maint', 25.0)
+                     
+                     current_wmaint = 0.0
+                     if total_w > 0:
+                         for idx, row in p['alloc_df'].iterrows():
+                             w = row['Weight %']
+                             m = row.get('Maint %', d_maint)
+                             current_wmaint += (w/100) * (m/100)
+                     else:
+                         current_wmaint = d_maint / 100.0
+                else:
+                     continue
+
+                # Determine Engine
+                has_ndxmega = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in alloc_map.keys())
+                use_local_engine = has_ndxmega
                 
-                sim_engine = config.get('sim_engine', 'standard')
+                # Extract Settings (Global Cashflow)
+                gcf = config.get('global_cashflow', {})
+                pay_down = gcf.get('pay_down_margin', False)
+                bt_cashflow = 0.0 if pay_down else gcf.get('amount', 0.0)
+                shadow_cashflow = 0.0 if pay_down else gcf.get('amount', 0.0)
+                start_val = gcf.get('start_val', 10000.0)
+                cf_freq = gcf.get('freq', 'Monthly')
+                invest_div = gcf.get('invest_div', True)
+
+
+                # Rebalance
+                reb = p.get('rebalance', {})
+                r_mode = reb.get('mode', 'Standard')
+                r_freq = reb.get('freq', 'Yearly')
                 
-                # GUARD RAIL: NDX Mega simulations require Local/Hybrid engine
-                # The public API does not know about these custom local tickers.
-                has_ndxmega = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in alloc_preview.keys())
+                port_series = pd.Series(dtype=float)
+                stats = {}
+                trades_df = pd.DataFrame()
                 
-                if has_ndxmega and sim_engine != 'hybrid':
-                     st.info("💎 NDX Mega simulation detected. Automatically enabling Local Simulation (Hybrid Mode) since this ticker is not available via public API.")
-                     sim_engine = 'hybrid'
-                
-                if sim_engine == 'hybrid':
-                    # --- Hybrid Simulation ---
-                    from app.core import calculations
+                if not use_local_engine:
+                    # --- API Path ---
                     
-                    # Decisions: use API with Offsets OR Pure Local?
-                    use_api_hybrid = not has_ndxmega
+                    # Calculate Offsets
+                    calc_rebal_offset = 0
                     
-                    if use_api_hybrid:
-                        # --- API Hybrid (Custom Dates via API Offsets) ---
-                        # Calculate Offsets
-                        calc_rebal_offset = 0
-                        
-                        r_freq = config.get('custom_freq', 'Yearly')
-                        r_month = config.get('rebalance_month', 1)
-                        r_day = config.get('rebalance_day', 1)
+                    if r_mode == "Custom":
+                        r_month = reb.get('month', 1)
+                        r_day = reb.get('day', 1)
                         
                         try:
                             if r_freq == "Yearly":
-                                # API Offset Logic: "Days BEFORE the end of the period" (in Trading Days)
-                                # So we need to calculate how far 'target_date' is from Dec 31st.
-                                
-                                # Use 2024 (Leap Year) for calculation key
                                 end_of_year = pd.Timestamp("2024-12-31")
                                 target_date = pd.Timestamp(f"2024-{r_month}-{r_day}")
-                                
-                                # 1. Calculate Calendar Days Remaining in Year
                                 days_remaining = (end_of_year - target_date).days
-                                
-                                # 2. Convert to Approx Trading Days (252 trading days / 365 calendar days)
-                                # Factor = 0.69
-                                calc_rebal_offset = int(days_remaining * (252.0 / 366.0)) # Using 366 for leap year
-                                
-                                # Guard against negative (if user picks Dec 32?? impossible via UI)
+                                calc_rebal_offset = int(days_remaining * (252.0 / 366.0))
                                 calc_rebal_offset = max(0, calc_rebal_offset)
-                                
                             else:
-                                # For Monthly/Quarterly
-                                # If User picks Day 1: We want start of month.
-                                # End of Month - Day 1 = ~29 days.
-                                # 29 * (21/30) = ~20 trading days.
-                                # API goes back 20 days -> Day 1. Correct.
-                                
-                                # We assume standardized 31 day month for simplicity to avoid month-specific logic in loop
-                                # This is an approximation.
                                 days_remaining = 31 - r_day
                                 calc_rebal_offset = int(days_remaining * (21.0 / 31.0))
-                                
                         except Exception as e:
-                            st.warning(f"Offset Calc Error: {e}. Defaulting to 0.")
+                            # st.warning(f"Offset Error: {e}")
                             calc_rebal_offset = 0
-
-                        # Fetch Chart from API
-                        port_series, stats, extra_data = cached_fetch_backtest(
-                            start_date=start_date,
-                            end_date=end_date,
-                            start_val=config['start_val'],
-                            cashflow=bt_cashflow, 
-                            cashfreq="Monthly",
-                            rolling=60, 
-                            invest_div=config['invest_div'],
-                            rebalance=r_freq,
-                            rebalance_offset=calc_rebal_offset,
-                            allocation=alloc_preview, 
-                            return_raw=False,
-                            include_raw=True
-                        )
-                        
-                        # Run Shadow for Taxes (using API chart for alignment)
-                        # We pass prices_df=None to force yFinance real data for taxes
-                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
-                            allocation=alloc_preview, 
-                            start_val=config['start_val'],
-                            start_date=start_date,
-                            end_date=end_date,
-                            api_port_series=port_series,
-                            rebalance_freq="Custom",
-                            cashflow=shadow_cashflow,
-                            cashflow_freq=config['cashfreq'],
-                            prices_df=None, 
-                            rebalance_month=r_month,
-                            rebalance_day=r_day,
-                            custom_freq=r_freq
-                        )
-                        
-                    else:
-                        # --- Pure Local Simulation (Required for NDXMEGASIM) ---
-                        # 1. Fetch Component Data (Testfol API for extended history)
-                        tickers = list(alloc_preview.keys())
-                        prices_df = fetch_component_data(tickers, start_date, end_date)
-                        
-                        if prices_df.empty:
-                            st.error("Failed to fetch price data for tickers.")
-                            st.stop()
-                            
-                        # 2. Generate Chart using Testfol Data (Extended Simulated History)
-                        _, _, _, _, _, port_series, _ = cached_run_shadow_backtest_v2(
-                            allocation=alloc_preview, 
-                            start_val=config['start_val'],
-                            start_date=start_date,
-                            end_date=end_date,
-                            api_port_series=None, # Pure local
-                            rebalance_freq="Custom",
-                            cashflow=shadow_cashflow,
-                            cashflow_freq=config['cashfreq'],
-                            prices_df=prices_df,  # Use Testfol data for chart
-                            rebalance_month=config.get('rebalance_month', 1),
-                            rebalance_day=config.get('rebalance_day', 1),
-                            custom_freq=config.get('custom_freq', 'Yearly')
-                        )
-                        
-                        if port_series.empty:
-                            st.error("Hybrid Simulation Failed (Chart Generation).")
-                            st.stop()
-                        
-                        # 3. Generate Taxes using yFinance (Real Market Data Only)
-                        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
-                            allocation=alloc_preview, 
-                            start_val=config['start_val'],
-                            start_date=start_date,
-                            end_date=end_date,
-                            api_port_series=port_series, # Use Testfol chart for alignment
-                            rebalance_freq="Custom",
-                            cashflow=shadow_cashflow,
-                            cashflow_freq=config['cashfreq'],
-                            # prices_df NOT passed - forces yFinance usage for realistic taxes
-                            # UNLESS it's NDXMEGASIM, which needs the local data
-                            prices_df=prices_df, 
-                            rebalance_month=config.get('rebalance_month', 1),
-                            rebalance_day=config.get('rebalance_day', 1),
-                            custom_freq=config.get('custom_freq', 'Yearly')
-                        )
-                            
-                        # Package results for render_results
-                        stats = calculations.generate_stats(twr_series) # Local Stats (TWR based)
-                        extra_data = {"rebalancing_events": []} # No native events for custom yet
                     
-                    
-                else:
-                    # --- Standard (API) Simulation ---
-                    port_series, stats, extra_data = cached_fetch_backtest(
+                    # Fetch
+                    port_series, stats_api, extra_data = cached_fetch_backtest(
                         start_date=start_date,
                         end_date=end_date,
-                        start_val=config['start_val'],
+                        start_val=start_val,
                         cashflow=bt_cashflow, 
-                        cashfreq="Monthly",
+                        cashfreq=cf_freq,
                         rolling=60, 
-                        invest_div=config['invest_div'],
-                        rebalance=config['rebalance'],
-                        allocation=alloc_preview, 
+                        invest_div=invest_div,
+                        rebalance=r_freq,
+                        rebalance_offset=calc_rebal_offset,
+                        allocation=alloc_map, 
                         return_raw=False,
                         include_raw=True
                     )
+                    stats = stats_api
                     
-                    # Run Shadow for Tax Lots ONLY (using API series for alignment)
+                    # Run Shadow (Tax Only) - Using Global Tax Config for now
                     if not port_series.empty:
                         trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
-                            allocation=alloc_preview, 
-                            start_val=config['start_val'],
+                            allocation=alloc_map, 
+                            start_val=start_val,
                             start_date=start_date,
                             end_date=end_date,
                             api_port_series=port_series,
-                            rebalance_freq=config['rebalance'], 
+                            rebalance_freq="Custom", # Force logic to not skip
                             cashflow=shadow_cashflow,
-                            cashflow_freq=config['cashfreq']
+                            cashflow_freq=cf_freq,
+                            invest_dividends=invest_div,
+                            pay_down_margin=pay_down,
+                            tax_config=config, 
+                            custom_rebal_config=reb if r_mode == "Custom" else {}
                         )
-                    else:
-                        st.error("API returned empty portfolio data.")
-                        st.stop()
-                
-                # Ranges for UI display
-                sim_range_str = "N/A"
-                if not port_series.empty:
-                    s = port_series.index[0].strftime("%b %d, %Y")
-                    e = port_series.index[-1].strftime("%b %d, %Y")
-                    sim_range_str = f"{s} - {e}"
+                else:
+                    # --- Pure Local Path (NDXMEGASIM) ---
+                     tickers = list(alloc_map.keys())
+                     prices_df = fetch_component_data(tickers, start_date, end_date)
 
-                shadow_range_str = "N/A"
-                if not composition_df.empty:
-                     if "Date" in composition_df.columns:
-                         s_shadow = composition_df["Date"].iloc[0].strftime("%b %d, %Y")
-                         e_shadow = composition_df["Date"].iloc[-1].strftime("%b %d, %Y")
-                         shadow_range_str = f"{s_shadow} - {e_shadow}"
+                     trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = cached_run_shadow_backtest_v2(
+                        allocation=alloc_map, 
+                        start_val=start_val,
+                        start_date=start_date,
+                        end_date=end_date,
+                        api_port_series=None,
+                        rebalance_freq=reb.get('freq', 'Yearly'),
+                        cashflow=shadow_cashflow,
+                        cashflow_freq=cf_freq,
+                        invest_dividends=invest_div,
+                        pay_down_margin=pay_down,
+                        tax_config=config,
+                        custom_rebal_config=reb if r_mode == "Custom" else {},
+                        prices_df=prices_df,
+                        rebalance_month=reb.get('month', 1),
+                        rebalance_day=reb.get('day', 1),
+                        custom_freq=reb.get('freq', 'Yearly')
+                    )
+
+                     # Generate Stats locally
+                     if not port_series.empty:
+                        stats = calculations.generate_stats(twr_series if twr_series is not None else port_series)
                      else:
-                         shadow_range_str = "Invalid Composition"
-                elif sim_engine == 'hybrid' and not prices_df.empty:
-                    # Fallback if composition failed but prices existed (e.g. all filtered out?)
-                    try:
-                        shadow_range_str = f"{prices_df.index[0].strftime('%b %d, %Y')} - {prices_df.index[-1].strftime('%b %d, %Y')}"
-                    except:
-                        pass
+                        stats = {}
 
-
-                # Initialize results
-                st.session_state.bt_results = {
-                    "port_series": port_series,
+                # Add result
+                # Add result
+                results_list.append({
+                    "name": p.get('name', 'Portfolio'),
+                    "series": port_series,
+                    "port_series": port_series, # Alias for results.py
                     "stats": stats,
-                    "extra_data": extra_data,
-                    "raw_response": extra_data.get("raw_response", {}),
-                    "wmaint": config['wmaint'],
-                    "start_val": config['start_val'],
-                    "trades_df": trades_df,
+                    "trades": trades_df,
+                    "trades_df": trades_df, # Alias for results.py
                     "pl_by_year": pl_by_year,
-                    "composition_df": composition_df,
                     "unrealized_pl_df": unrealized_pl_df,
-                    "logs": logs,
-                    "sim_range": sim_range_str,
-                    "shadow_range": shadow_range_str,
-                    "twr_series": twr_series, # Add TWR for Monte Carlo
-                    "cashflow": config.get('cashflow', 0.0),
-                    "cashfreq": config.get('cashfreq', 'None')
-                }
-
+                    "logs": logs if 'logs' in locals() else [],
+                    "composition": composition_df if 'composition_df' in locals() else pd.DataFrame(),
+                    "composition_df": composition_df if 'composition_df' in locals() else pd.DataFrame(),
+                    "raw_response": extra_data if 'extra_data' in locals() else {},
+                    "start_val": start_val,
+                    "twr_series": twr_series if 'twr_series' in locals() else None,
+                    "sim_range": f"{start_date} to {end_date}",
+                    "shadow_range": f"{start_date} to {end_date}",
+                    "wmaint": current_wmaint
+                })
                 
-            except Exception as e:
-                st.error(f"Error running backtest: {e}")
-                st.stop()
-                
-            # --- Benchmark Backtest ---
-            # Run only if enabled and primary backtest succeeded
-            bench_series = None
-            bench_stats = None
-            
-            # Logic for Comparison Override
-            # Logic for Comparison Override
-            # 2024-12-17: Prioritize explicit Benchmark Tab settings over Hybrid Default
-            
-            # 1. Explicit Benchmark (from Tab)
-            if config['bench_mode'] != "None":
-                with st.spinner("Fetching Benchmark Data..."):
+                # --- Comparisons (Vs Standard) ---
+                if reb.get("compare_std", False) and r_mode == "Custom": 
+                    # Run a Standard Version of this same portfolio
                     try:
-                        bench_port_map = {}
-                        if config['bench_mode'] == "Single Ticker":
-                             if config['bench_ticker'].strip():
-                                 bench_port_map = {config['bench_ticker'].strip(): 100.0}
-                        elif config['bench_mode'] == "Custom Portfolio":
-                             # Check if bench_edited_df is in config (from data editor)
-                             edited = config.get('bench_edited_df')
-                             if isinstance(edited, pd.DataFrame) and not edited.empty:
-                                 b_df = edited.dropna(subset=["Ticker"])
-                                 bench_port_map = {r["Ticker"]: r["Weight %"] for _,r in b_df.iterrows()}
-                        
-                        if bench_port_map:
-                             # Validate rebalance freq for API (Custom is not allowed in API)
-                             api_rebal = config['rebalance']
-                             if api_rebal == "Custom":
-                                 # Fallback to the custom_freq (e.g. Monthly/Yearly) or default to Yearly
-                                 api_rebal = config.get('custom_freq', 'Yearly')
-                             
-                             # GUARD: Check for NDX Mega simulations in Benchmark
-                             bench_has_ndx = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in bench_port_map.keys())
-                             
-                             if bench_has_ndx:
-                                 # Use Local Shadow Engine for Benchmark
-                                 st.info("💎 NDX Mega simulation detected in Benchmark. Running Local Simulation.")
-                                 b_tickers = list(bench_port_map.keys())
-                                 # Reuse fetch_component_data to get local CSV + Splice
-                                 b_prices = fetch_component_data(b_tickers, start_date, end_date)
-                                 
-                                 # Map rebalance freq for shadow engine
-                                 shadow_rebal = "Custom" if config['rebalance'] == "Custom" else config['rebalance']
-                                 
-                                 _, _, _, _, _, b_port_series, b_twr_series = cached_run_shadow_backtest_v2(
-                                    allocation=bench_port_map,
-                                    start_val=config['start_val'],
-                                    start_date=start_date,
-                                    end_date=end_date,
-                                    api_port_series=None,
-                                    rebalance_freq=shadow_rebal,
-                                    cashflow=config.get('cashflow', 0.0), # Use user cashflow
-                                    cashflow_freq=config.get('cashfreq', 'Monthly'), # Use user freq
-                                    prices_df=b_prices,
-                                    rebalance_month=config.get('rebalance_month', 1),
-                                    rebalance_day=config.get('rebalance_day', 1), 
-                                    custom_freq=config.get('custom_freq', 'Yearly')
-                                 )
-                                 b_series = b_port_series
-                                 # Use TWR series for stats to get accurate CAGR (ignores cashflow timing)
-                                 b_stats = calculations.generate_stats(b_twr_series if b_twr_series is not None and not b_twr_series.empty else b_series)
-                             else:
-                                 b_series, b_stats, _ = cached_fetch_backtest(
-                                    start_date=start_date,
-                                    end_date=end_date,
-                                    start_val=config['start_val'],
-                                    cashflow=config.get('cashflow', 0.0), # Use user cashflow
-                                    cashfreq=config.get('cashfreq', 'Monthly'), # Use user freq
-                                    rolling=60,
-                                    invest_div=True, 
-                                    rebalance=api_rebal, 
-                                    allocation=bench_port_map,
-                                    return_raw=False
-                                 )
-                             bench_series = b_series
-                             
-                             # Rename for clear chart labels
-                             if config['bench_mode'] == "Single Ticker":
-                                 bench_series.name = f"Benchmark ({config.get('bench_ticker', 'Ticker').strip()})"
-                             else:
-                                 bench_series.name = "Benchmark (Custom)"
-                             
-                             # Fallback: Calculate stats locally if API didn't return them
-                             from_api = True
-                             if not b_stats:
-                                 b_stats = calculations.generate_stats(b_series)
-                                 from_api = False
-                                 
-                             bench_stats = b_stats
-                             st.session_state.bt_results["bench_stats_from_api"] = from_api
-                          
+                        std_series, std_stats, _ = cached_fetch_backtest(
+                            start_date=start_date,
+                            end_date=end_date,
+                            start_val=start_val,
+                            cashflow=bt_cashflow, 
+                            cashfreq=cf_freq,
+                            rolling=60, 
+                            invest_div=invest_div,
+                            rebalance="Yearly", # Force Yearly Standard
+                            allocation=alloc_map, 
+                            return_raw=False
+                        )
+                        std_series.name = f"{p.get('name')} (Standard)"
+                        bench_series_list.append(std_series)
                     except Exception as e:
-                        st.warning(f"Benchmark Fetch Failed: {e}")
-                        bench_stats = None
+                        print(f"Comparison failed: {e}")
 
-            # 2. Hybrid Standard Comparison (Secondary Benchmark)
-            # Independent check - can coexist with primary benchmark
-            if sim_engine == 'hybrid' and config.get('compare_standard', False):
-                 with st.spinner("Fetching Standard Rebalance Benchmark..."):
-                    try:
-                        # Use same allocation but standard Yearly rebalance
-                        alloc_map = alloc_preview
-                        
-                        # Check for NDX Mega simulations in Comparison Allocation
-                        has_ndx_comp = any(("NDXMEGASIM" in t or "NDXMEGA2SIM" in t) for t in alloc_map.keys())
-                        
-                        if has_ndx_comp:
-                             # Use Local Shadow Engine
-                             st.info("💎 NDX Mega simulation detected in Comparison. Running Local Simulation.")
-                             c_tickers = list(alloc_map.keys())
-                             c_prices = fetch_component_data(c_tickers, start_date, end_date)
-                             
-                             _, _, _, _, _, c_port_series, c_twr_series = cached_run_shadow_backtest_v2(
-                                    allocation=alloc_map,
-                                    start_val=config['start_val'],
-                                    start_date=start_date,
-                                    end_date=end_date,
-                                    api_port_series=None,
-                                    rebalance_freq="Yearly", # Comparison is Standard Yearly
-                                    cashflow=config.get('cashflow', 0.0), 
-                                    cashflow_freq=config.get('cashfreq', "Monthly"),
-                                    prices_df=c_prices,
-                                    rebalance_month=config.get('rebalance_month', 1),
-                                    rebalance_day=config.get('rebalance_day', 1),
-                                    custom_freq="Yearly"
-                             )
-                             c_series = c_port_series
-                             # Use TWR series for stats to get accurate CAGR (ignores cashflow timing)
-                             c_stats = calculations.generate_stats(c_twr_series if c_twr_series is not None and not c_twr_series.empty else c_series)
-                        else:
-                             c_series, c_stats, _ = cached_fetch_backtest(
-                                start_date=start_date,
-                                end_date=end_date,
-                                start_val=config['start_val'],
-                                cashflow=config.get('cashflow', 0.0), # Use user defined cashflow
-                                cashfreq=config.get('cashfreq', "Monthly"),
-                                rolling=60,
-                                invest_div=config['invest_div'],
-                                rebalance="Yearly", # Force Yearly Standard
-                                allocation=alloc_map,
-                                return_raw=False
-                            )
-                        c_series.name = "Standard (Yearly)"
-                        st.session_state.bt_results["comparison_series"] = c_series
-                        st.session_state.bt_results["comparison_stats"] = c_stats
-                        
-                    except Exception as e:
-                        st.warning(f"Comparison Benchmark failed: {e}")
+            # Store for Rendering
+            st.session_state.results_list = results_list
+            st.session_state.bench_series_list = bench_series_list
             
-            # Add benchmark to results
-            st.session_state.bt_results["bench_series"] = bench_series
-            st.session_state.bt_results["bench_stats"] = bench_stats
+        except Exception as e:
+            st.error(f"Error running backtest: {e}")
+            import traceback
+            st.code(traceback.format_exc())
+            # Don't stop here, let it try to render what it has or nothing
 
-    # Check if we have results to display
-    if "bt_results" in st.session_state:
-        render_results(st.session_state.bt_results, config)
+# --- Render Results (Outside Button Logic to Persist) ---
+if "results_list" in st.session_state and st.session_state.results_list:
+    results_list = st.session_state.results_list
+    bench_series_list = st.session_state.get("bench_series_list", [])
+
+    st.divider()
+    
+    # --- Render Main Chart ---
+    charts.render_multi_portfolio_chart(results_list, benchmarks=bench_series_list, log_scale=config.get('log_scale', True))
+    
+    # --- Render Detailed Results (synced with config tab) ---
+    st.divider()
+    
+    # Use the active tab index from configuration tabs
+    active_idx = st.session_state.get('active_tab_idx', 0)
+    # Validate index
+    if active_idx >= len(results_list):
+        active_idx = 0
+        
+    res = results_list[active_idx]
+    st.markdown(f"### 📋 {res['name']} Details")
+    render_results(res, config, portfolio_name=res['name'])

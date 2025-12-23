@@ -8,70 +8,241 @@ from app.core import tax_library
 import os
 from app.common.utils import color_return
 
-@st.cache_data(show_spinner=False)
-def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale, bench_series=None, comparison_series=None):
+
+# --- Multi-Portfolio Chart ---
+def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
+    """
+    Renders a performance chart for multiple portfolios.
+    results_list: List of dicts {'name': str, 'series': pd.Series, 'stats': dict}
+    """
+    st.markdown("### Multi-Portfolio Performance Comparison")
+
     fig = go.Figure()
-    TRACES = {
-        "Portfolio":       (port.index, port, {"width":2}, "$%{y:,.0f}"),
-        "Equity":          (equity.index, equity, {"dash":"dot"}, "$%{y:,.0f}"),
-        "Loan":            (loan.index, loan, {"dash":"dot","width":1,"color":"lime"}, "$%{y:,.0f}"),
-        "Margin usage %":  (usage_pct.index, usage_pct*100, {"width":2,"color":"yellow"}, "%{y:.2f}%"),
-        "Equity %":        (equity_pct.index, equity_pct*100, {"dash":"dash"}, "%{y:.2f}%"),
-    }
+
+    # Colors for portfolios
+    colors = ['#2E86C1', '#28B463', '#D35400', '#884EA0', '#F1C40F', '#1F618D', '#148F77', '#B03A2E']
     
-    for key in series_opts:
-        if key in TRACES:
-            x, y, line, fmt = TRACES[key]
-            fig.add_scatter(
-                x=x, y=y, name=key,
-                line=line,
-                hovertemplate=fmt+"<extra></extra>",
-                yaxis="y2" if "%" in key else "y"
-            )
+    # 1. Determine Common Date Range (Intersection)
+    start_dates = []
+    
+    # Collect start dates from portfolios
+    for res in results_list:
+        series = res.get('series')
+        if series is not None and not series.empty:
+            start_dates.append(series.index.min())
             
-    # Add Benchmark Trace if available (Moved to end for Z-order visibility)
-    if bench_series is not None:
-         bench_name = bench_series.name if hasattr(bench_series, 'name') and bench_series.name else "Benchmark (Gross)"
-         fig.add_scatter(
-             x=bench_series.index, y=bench_series, 
-             name=bench_name,
-             line=dict(color="#FFD700", width=2, dash="dash"),
-             hovertemplate="$%{y:,.0f}<extra></extra>"
-         )
-         
-    # Add Comparison Trace if available
-    if comparison_series is not None:
-         comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
-         fig.add_scatter(
-             x=comparison_series.index, y=comparison_series, 
-             name=comp_name,
-             line=dict(color="#00FFFF", width=2, dash="dot"), # Cyan Dot
-             hovertemplate="$%{y:,.0f}<extra></extra>"
-         )
-         
-    fig.add_hline(y=100, yref="y2", line={"dash":"dot"},
-                  annotation_text="Margin call", annotation_position="top right")
+    # Collect start dates from benchmarks
+    if benchmarks:
+        for bench in benchmarks:
+            if bench is not None and not bench.empty:
+                start_dates.append(bench.index.min())
+                
+    # Find the Latest Start Date (to clip all to common range)
+    if start_dates:
+        common_start = max(start_dates)
+        st.caption(f"ℹ️ Chart aligned to common start date: {common_start.date()}")
+    else:
+        common_start = None
+
+    # Add Portfolios
+    for i, res in enumerate(results_list):
+        name = res['name']
+        series = res['series']
+        
+        if series is None or series.empty:
+            continue
+            
+        # Align Series
+        if common_start:
+            series = series[series.index >= common_start]
+            if series.empty: continue
+            
+        color = colors[i % len(colors)]
+        
+        # Calculate Stats for Legend (simple re-calc or use passed stats)
+        # We use passed stats usually
+        stats = res.get('stats', {})
+        cagr_raw = stats.get('cagr', 0.0)
+        cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
+        max_dd = stats.get('max_drawdown', 0.0)
+        
+        label = f"{name} (CAGR: {cagr_display:.1f}%, DD: {max_dd:.1f}%)"
+        
+        fig.add_trace(go.Scatter(
+            x=series.index, 
+            y=series.values, 
+            mode='lines', 
+            name=label,
+            line=dict(color=color, width=2),
+            hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
+        ))
+
+    # Add Benchmarks
+    if benchmarks:
+        for i, bench in enumerate(benchmarks):
+            if bench is None or bench.empty: continue
+            
+            # Align Benchmark
+            if common_start:
+                bench = bench[bench.index >= common_start]
+                if bench.empty: continue
+            
+            # Name
+            b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
+            
+            fig.add_trace(go.Scatter(
+                x=bench.index,
+                y=bench.values,
+                mode='lines',
+                name=b_name,
+                line=dict(color='#BDC3C7', width=1.5, dash='dash'),
+                hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
+            ))
+            
     fig.update_layout(
-        template="plotly_white",
+        template="plotly_dark",
+        xaxis_title="Date",
+        xaxis_hoverformat="%b %d, %Y",
+        yaxis_title="Portfolio Value ($)",
+        yaxis_type="log" if log_scale else "linear",
+        height=500,
         hovermode="x unified",
-        xaxis=dict(
-            showgrid=True, gridcolor="rgba(0,0,0,0.05)",
-            showspikes=True, spikemode="across", spikesnap="cursor",
-            spikecolor="rgba(0,0,0,0.3)", spikethickness=1
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
         ),
-        yaxis=dict(
-            title="Portfolio value", showgrid=True,
-            gridcolor="rgba(0,0,0,0.05)",
-            type="log" if log_scale else "linear", rangemode="tozero"
-        ),
-        yaxis2=dict(
-            overlaying="y", side="right",
-            title="% of portfolio / allowance", rangemode="tozero"
-        ),
-        legend=dict(orientation="h", yanchor="top", y=-0.25,
-                    xanchor="center", x=0.5),
-        margin=dict(t=48, b=100, l=60, r=60)
+        margin=dict(l=40, r=40, t=60, b=40)
     )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    # Comparison Table
+    if results_list:
+        st.markdown("### Statistics")
+        
+        stats_data = []
+        for res in results_list:
+            s = res.get('stats', {})
+            # Handle CAGR: may be decimal (0.61) or percentage (61.41)
+            cagr_raw = s.get('cagr', 0)
+            cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
+            
+            # Handle volatility: may be decimal (0.20) or percentage (20.0)
+            vol_raw = s.get('volatility', 0)
+            vol_display = vol_raw * 100 if abs(vol_raw) <= 1 else vol_raw
+            
+            row = {
+                "Name": res['name'],
+                "CAGR": f"{cagr_display:.2f}%",
+                "Stdev": f"{vol_display:.2f}%",
+                "Sharpe": f"{s.get('sharpe', 0):.2f}",
+                "Max DD": f"{s.get('max_drawdown', 0):.2f}%",
+                "End Balance": f"${res['series'].iloc[-1]:,.2f}" if not res['series'].empty else "$0"
+            }
+            stats_data.append(row)
+            
+        st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
+
+@st.cache_data(show_spinner=False)
+def render_classic_chart(port_series, final_adj_series, loan_series, 
+                        equity_pct_series, usage_series, 
+                        series_opts, log_scale,
+                        bench_series=None, comparison_series=None):
+    """
+    Renders the classic line chart with toggleable traces.
+    """
+    fig = go.Figure()
+    
+    # 1. Total Portfolio Value
+    if "Portfolio" in series_opts:
+        fig.add_trace(go.Scatter(
+            x=port_series.index, y=port_series,
+            name="Portfolio Value (Gross)",
+            line=dict(color='#2E86C1', width=2),
+            hovertemplate="Portfolio: $%{y:,.0f}<extra></extra>"
+        ))
+        
+    # 2. Net Equity
+    if "Equity" in series_opts:
+        # If paying taxes from cash, final_adj_series is Net Equity
+        # If paying with margin, final_adj_series is also Net Equity (simulated)
+        fig.add_trace(go.Scatter(
+            x=final_adj_series.index, y=final_adj_series,
+            name="Net Equity",
+            line=dict(color='#28B463', width=2),
+            fill='tozeroy',
+            fillcolor='rgba(40, 180, 99, 0.1)',
+            hovertemplate="Net Equity: $%{y:,.0f}<extra></extra>"
+        ))
+
+    # 3. Margin Loan
+    if "Loan" in series_opts:
+        fig.add_trace(go.Scatter(
+            x=loan_series.index, y=loan_series,
+            name="Margin Loan",
+            line=dict(color='#E74C3C', width=1.5, dash='dot'),
+            hovertemplate="Loan: $%{y:,.0f}<extra></extra>"
+        ))
+        
+    # 4. Benchmarks
+    if bench_series is not None and not bench_series.empty:
+        fig.add_trace(go.Scatter(
+            x=bench_series.index, y=bench_series,
+            name=bench_series.name or "Benchmark",
+            line=dict(color='#F1C40F', width=1.5, dash='dash'),
+            hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", bench_series.name or "Benchmark")
+        ))
+        
+    if comparison_series is not None and not comparison_series.empty:
+        fig.add_trace(go.Scatter(
+            x=comparison_series.index, y=comparison_series,
+            name=comparison_series.name or "Comparison",
+            line=dict(color='#9B59B6', width=1.5, dash='dash'),
+            hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", comparison_series.name or "Comparison")
+        ))
+        
+    # Secondary Axis for Percentages
+    if "Margin usage %" in series_opts or "Equity %" in series_opts:
+        fig.update_layout(yaxis2=dict(
+            title="Percentage (%)",
+            overlaying="y",
+            side="right",
+            range=[0, max(usage_series.max()*1.2 if not usage_series.empty else 1, 1.5)] # Some headroom
+        ))
+
+    if "Margin usage %" in series_opts:
+        fig.add_trace(go.Scatter(
+            x=usage_series.index, y=usage_series,
+            name="Margin Usage %",
+            line=dict(color='#FFD700', width=1),
+            yaxis="y2",
+            hovertemplate="Usage: %{y:.1%}<extra></extra>"
+        ))
+        
+    if "Equity %" in series_opts:
+        fig.add_trace(go.Scatter(
+            x=equity_pct_series.index, y=equity_pct_series,
+            name="Equity %",
+            line=dict(color='#148F77', width=1),
+            yaxis="y2",
+            hovertemplate="Equity %: %{y:.1%}<extra></extra>"
+        ))
+
+    fig.update_layout(
+        template="plotly_dark",
+        title="Portfolio History",
+        xaxis_title="Date",
+        xaxis_hoverformat="%b %d, %Y",
+        yaxis_title="Value ($)",
+        yaxis_type="log" if log_scale else "linear",
+        height=600,
+        hovermode="x unified",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
     st.plotly_chart(fig, use_container_width=True)
 
 @st.cache_data(show_spinner=False)
@@ -110,12 +281,14 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
     fig1.add_trace(go.Scatter(
         x=port.index, y=leveraged_port,
         name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
-        line=dict(color="#4A90E2", width=2)
+        line=dict(color="#4A90E2", width=2),
+        hovertemplate="Leveraged: $%{y:,.0f}<extra></extra>"
     ))
     fig1.add_trace(go.Scatter(
         x=port.index, y=port,
         name="Margin Portfolio (Unleveraged)",
-        line=dict(color="#1DB954", width=2)
+        line=dict(color="#1DB954", width=2),
+        hovertemplate="Unleveraged: $%{y:,.0f}<extra></extra>"
     ))
 
     # Add Benchmark Trace if available (Moved to end)
@@ -124,7 +297,8 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
          fig1.add_trace(go.Scatter(
              x=bench_series.index, y=bench_series,
              name=bench_name,
-             line=dict(color="#FFD700", width=2, dash="dash")
+             line=dict(color="#FFD700", width=2, dash="dash"),
+             hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", bench_name)
          ))
          
     # Add Comparison Trace if available
@@ -133,13 +307,15 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
          fig1.add_trace(go.Scatter(
              x=comparison_series.index, y=comparison_series,
              name=comp_name,
-             line=dict(color="#00FFFF", width=2, dash="dot")
+             line=dict(color="#00FFFF", width=2, dash="dot"),
+             hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", comp_name)
          ))
     
     fig1.update_layout(
         **dark_theme,
         height=400,
         xaxis_title="Month",
+        xaxis_hoverformat="%b %d, %Y",
         yaxis_title="Portfolio Value ($)",
         yaxis_type="log" if log_portfolio else "linear",
         legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
@@ -162,23 +338,27 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
         fig2.add_trace(go.Scatter(
             x=port.index, y=current_leverage,
             name="Current Leverage",
-            line=dict(color="#1DB954", width=2)
+            line=dict(color="#1DB954", width=2),
+            hovertemplate="Current: %{y:.2f}x<extra></extra>"
         ))
         fig2.add_trace(go.Scatter(
             x=port.index, y=[target_leverage]*len(port),
             name="Target Leverage",
-            line=dict(color="#FFD700", width=2, dash="dot")
+            line=dict(color="#FFD700", width=2, dash="dot"),
+            hovertemplate="Target: %{y:.2f}x<extra></extra>"
         ))
         fig2.add_trace(go.Scatter(
             x=port.index, y=[max_allowed]*len(port),
             name="Max Allowed",
-            line=dict(color="#FF6B6B", width=2, dash="dash")
+            line=dict(color="#FF6B6B", width=2, dash="dash"),
+            hovertemplate="Max: %{y:.2f}x<extra></extra>"
         ))
         
         fig2.update_layout(
             **dark_theme,
             height=350,
             xaxis_title="Date",
+            xaxis_hoverformat="%b %d, %Y",
             yaxis_title="Leverage Ratio",
             yaxis_type="log" if log_leverage else "linear",
             legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
@@ -196,7 +376,8 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             name="Margin Debt",
             fill='tozeroy',
             line=dict(color="#FF6B6B", width=2),
-            fillcolor="rgba(255,107,107,0.3)"
+            fillcolor="rgba(255,107,107,0.3)",
+            hovertemplate="Debt: $%{y:,.0f}<extra></extra>"
         ))
         
         # Portfolio value line
@@ -204,7 +385,8 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             x=port.index, y=port,
             name="Portfolio Value",
             line=dict(color="#4A90E2", width=2),
-            yaxis="y"
+            yaxis="y",
+            hovertemplate="Portfolio: $%{y:,.0f}<extra></extra>"
         ))
         
         # Net liquidating value
@@ -212,7 +394,8 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             x=equity.index, y=equity,
             name="Net Liquidating Value",
             line=dict(color="#1DB954", width=2),
-            yaxis="y"
+            yaxis="y",
+            hovertemplate="Net Liq: $%{y:,.0f}<extra></extra>"
         ))
         
         # Monthly interest on secondary axis
@@ -232,6 +415,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             height=350,
             xaxis=dict(
                 title="Date",
+                hoverformat="%b %d, %Y",
                 gridcolor="rgba(255,255,255,0.1)",
                 zerolinecolor="rgba(255,255,255,0.2)"
             ),
@@ -368,25 +552,25 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
         main_row = 1
     
     # Prepare Hover Text with % change
-    # Vectorized calculation of percent change
-    # Period-over-period return (matching the returns table)
-    pct_change = ohlc_df["Close"].pct_change().fillna(0) * 100
-    
-    # Recalculate first period (Open to Close) as pct_change() gives NaN or 0 dependent on prev value
-    # actually pct_change() on first element is NaN.
-    if len(ohlc_df) > 0:
-        first_open = ohlc_df["Open"].iloc[0]
-        if first_open != 0:
-             pct_change.iloc[0] = (ohlc_df["Close"].iloc[0] - first_open) / first_open * 100
-    
-    # Format dates once
-    dates_fmt = ohlc_df.index.strftime('%b %d, %Y')
-    
-    # Use list comprehension with zip for speed (avoiding iloc inside loop)
-    hover_text = [
-        f"Date: {d}<br>O: {o:,.2f}<br>H: {h:,.2f}<br>L: {l:,.2f}<br>C: {c:,.2f}<br>Change: {p:+.2f}%"
-        for d, o, h, l, c, p in zip(dates_fmt, ohlc_df["Open"], ohlc_df["High"], ohlc_df["Low"], ohlc_df["Close"], pct_change)
-    ]
+    hover_text = []
+    for i, (d, o, h, l, c) in enumerate(zip(ohlc_df.index, ohlc_df["Open"], ohlc_df["High"], ohlc_df["Low"], ohlc_df["Close"])):
+        # Calculate period-over-period return (matching the returns table)
+        if i > 0:
+            prev_close = ohlc_df["Close"].iloc[i-1]
+            pct_change = ((c - prev_close) / prev_close * 100) if prev_close != 0 else 0
+        else:
+            # For first period, use open to close
+            pct_change = ((c - o) / o * 100) if o != 0 else 0
+        
+        change_sign = "+" if pct_change >= 0 else ""
+        hover_text.append(
+            f"Date: {d:%b %d, %Y}<br>"
+            f"O: {o:,.2f}<br>"
+            f"H: {h:,.2f}<br>"
+            f"L: {l:,.2f}<br>"
+            f"C: {c:,.2f}<br>"
+            f"Change: {change_sign}{pct_change:.2f}%"
+        )
 
     # Main candlestick chart (TradingView colors)
     fig.add_trace(go.Candlestick(
@@ -649,8 +833,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-@st.cache_data(show_spinner=False)
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None):
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id=""):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
     quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
@@ -658,6 +841,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
     # --- HEATMAP HELPERS ---
     def render_quarterly_returns_view(series, suffix=""):
+        # Combine unique_id with suffix for truly unique keys
+        full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
         quarterly_ret = series.resample("QE").last().pct_change().dropna()
         annual_ret = series.resample("YE").last().pct_change().dropna()
@@ -746,7 +931,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         fig.update_layout(title="Quarterly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
-        st.plotly_chart(fig, use_container_width=True, key=f"q_hm_{suffix}")
+        st.plotly_chart(fig, use_container_width=True, key=f"q_hm_{full_suffix}")
         
         st.subheader("Quarterly Returns List")
         df_quarterly_list = q_ret.copy()
@@ -760,6 +945,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
     def render_monthly_returns_view(series, suffix=""):
+        # Combine unique_id with suffix for truly unique keys
+        full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
         m_ret = series.resample("ME").last().pct_change().dropna()
         a_ret = series.resample("YE").last().pct_change().dropna()
@@ -825,7 +1012,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         fig.update_layout(title="Monthly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
-        st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{suffix}")
+        st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
     tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
@@ -942,7 +1129,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             use_container_width=True,
             hide_index=True
         )
-def render_rebalance_sankey(trades_df, view_freq="Yearly"):
+def render_rebalance_sankey(trades_df, view_freq="Yearly", unique_id=None):
     if trades_df.empty:
         return
 
@@ -971,7 +1158,8 @@ def render_rebalance_sankey(trades_df, view_freq="Yearly"):
         
     # Period Selection
     periods = sorted(df["Period"].unique(), reverse=True)
-    selected_period = st.selectbox("Select Period for Flow", periods, index=0, key="rebal_period_selector")
+    key_suffix = f"_{unique_id}" if unique_id else ""
+    selected_period = st.selectbox("Select Period for Flow", periods, index=0, key=f"rebal_period_selector{key_suffix}")
     
     # Filter data for selected period
     df_period = df[df["Period"] == selected_period]
@@ -1129,7 +1317,7 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         )
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly"):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -1148,16 +1336,18 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         else:
             default_idx = 0
         
+    key_suffix = f"_{unique_id}" if unique_id else ""
+    
     # View Frequency Selector
     view_freq = st.selectbox(
         "View Frequency", 
         freq_options, 
         index=default_idx,
-        key="rebal_view_freq"
+        key=f"rebal_view_freq{key_suffix}"
     )
 
     # Optional "Mag 7 Fund" Grouping
-    group_mag7 = st.toggle("Enable Mag 7 Grouping", value=False, help="Groups AAPL, MSFT, GOOG, AMZN, NVDA, META, TSLA, and AVGO into a single 'Mag 7' fund.")
+    group_mag7 = st.toggle("Enable Mag 7 Grouping", value=False, key=f"rebal_mag7{key_suffix}", help="Groups AAPL, MSFT, GOOG, AMZN, NVDA, META, TSLA, and AVGO into a single 'Mag 7' fund.")
     
     # Process Composition Data for Mag 7 Grouping
     comp_df_to_plot = composition_df.copy()
@@ -1504,7 +1694,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
     render_portfolio_composition(comp_df_to_plot, view_freq=view_freq)
         
     # Sankey Diagram
-    render_rebalance_sankey(trades_df, view_freq=view_freq)
+    render_rebalance_sankey(trades_df, view_freq=view_freq, unique_id=unique_id)
     
     with st.expander(f"Rebalancing Details ({view_freq} - Net Flow)", expanded=True):
         current_year = dt.date.today().year
@@ -1662,7 +1852,7 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate,
 # -----------------------------------------------------------------------------
 # Monte Carlo Visualization
 # -----------------------------------------------------------------------------
-def render_monte_carlo_view(mc_results):
+def render_monte_carlo_view(mc_results, unique_id=None):
     """
     Renders the Monte Carlo 'Cone of Uncertainty' chart.
     """
@@ -1695,8 +1885,9 @@ def render_monte_carlo_view(mc_results):
     
     # 2. Options
     c1, c2 = st.columns([1, 4])
-    use_log = c1.toggle("Log Scale", help="Use logarithmic scale to see percentage changes better")
-    show_paths = c1.toggle("Show Paths", help="Display 100 random individual simulation paths (Spaghetti Chart)")
+    key_suffix = f"_{unique_id}" if unique_id else ""
+    use_log = c1.toggle("Log Scale", help="Use logarithmic scale to see percentage changes better", key=f"mc_log_scale{key_suffix}")
+    show_paths = c1.toggle("Show Paths", help="Display 100 random individual simulation paths (Spaghetti Chart)", key=f"mc_show_paths{key_suffix}")
     
     # 3. Plotly Fan Chart
     fig = go.Figure()

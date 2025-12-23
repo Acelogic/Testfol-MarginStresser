@@ -185,7 +185,7 @@ def get_tax_treatment(ticker):
     else:
         return "Equity"
 
-def fetch_prices(tickers, start_date, end_date):
+def fetch_prices(tickers, start_date, end_date, invest_dividends=True):
     """Fetches adjusted close prices for unique base tickers."""
     unique_bases = set()
     for t in tickers:
@@ -209,10 +209,12 @@ def fetch_prices(tickers, start_date, end_date):
     
     output = f.getvalue()
     
-    if "Adj Close" in data:
+    if invest_dividends and "Adj Close" in data:
         prices = data["Adj Close"]
     elif "Close" in data:
         prices = data["Close"]
+    elif "Adj Close" in data:
+        prices = data["Adj Close"]
     else:
         prices = data
         
@@ -221,7 +223,7 @@ def fetch_prices(tickers, start_date, end_date):
         
     return prices, output
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly"):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -232,6 +234,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         rebalance_month (int): Month to rebalance (1-12) if rebalance_freq="Custom" and custom_freq="Yearly".
         rebalance_day (int): Day to rebalance (1-28) for custom rebalancing.
         custom_freq (str): For "Custom" rebalance mode - "Yearly", "Quarterly", or "Monthly".
+        invest_dividends (bool): Whether to use Total Return (Adj Close) or Price Return (Close).
+        pay_down_margin (bool): Whether cashflows are used to pay down margin loan.
+        tax_config (dict): Global tax configuration (optional).
+        custom_rebal_config (dict): Configuration for custom rebalancing logic (optional).
     """
 
     tickers = list(allocation.keys())
@@ -260,7 +266,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         
         yf_output = None
     else:
-        prices_base, yf_output = fetch_prices(tickers, start_date, end_date)
+        prices_base, yf_output = fetch_prices(tickers, start_date, end_date, invest_dividends=invest_dividends)
     
     if yf_output:
         logs.append("\n--- yfinance Output & Payload ---")
