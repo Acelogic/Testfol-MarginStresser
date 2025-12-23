@@ -28,6 +28,7 @@ graph TB
 
     subgraph Engines
         ME[Macro Engine<br>testfol_api.py]
+        DS[Data Service<br>data_service.py]
         SE[Shadow Engine<br>shadow_backtest.py]
         MS[Margin Simulator<br>calculations.py]
     end
@@ -45,9 +46,9 @@ graph TB
     end
 
     ST --> ME --> TF
-    ST --> SE
-    SE --> YF
-    SE --> CSV
+    ST --> DS --> SE
+    DS --> YF
+    DS --> CSV
     SE --> TX
     ME --> MS
     MS --> CH
@@ -59,6 +60,7 @@ graph TB
 | Engine | Location | Purpose |
 |--------|----------|---------|
 | **Macro Engine** | `app/services/testfol_api.py` | Fetches total return series from testfol.io. Acts as "Market Truth" source. |
+| **Data Service** | `app/services/data_service.py` | Handles complex data fetching, including `NDXMEGASIM` splicing (CSV + API). |
 | **Shadow Engine** | `app/core/shadow_backtest.py` | Reconstructs portfolio trade-by-trade. Tracks every tax lot (date, cost basis, quantity). Calculates ST vs LT gains. |
 | **Margin Simulator** | `testfol_charting.py` | Applies margin loan model. Calculates daily interest, equity %, margin call risk. |
 

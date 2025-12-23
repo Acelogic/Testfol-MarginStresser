@@ -2,13 +2,16 @@ import streamlit as st
 import plotly.graph_objects as go
 import pandas as pd
 import numpy as np
+import datetime as dt
+import os
+import csv
+import json
 from app.common import utils
 from app.core import run_shadow_backtest, calculations, tax_library
 from app.core import monte_carlo # Import Monte Carlo module
 from app.services import testfol_api as api
 from app.reporting import report_generator
 from app.ui import charts
-import datetime as dt
 
 def render(results, config, portfolio_name=""):
     """
@@ -20,8 +23,6 @@ def render(results, config, portfolio_name=""):
     """
         
     # Extract Data from Results
-    # Defensive Import to prevent UnboundLocalError
-    import plotly.graph_objects as go
     
     port_series = results["port_series"]
     stats = results["stats"]
@@ -987,13 +988,11 @@ When yFinance data starts later than your chart, the tax engine initializes your
              if st.button("Run Seasonal Analysis (5,000 Runs)", key=f"mc_run_seasonal_{portfolio_name}"):
                  with st.spinner("Analyzing Seasonality..."):
                      # Uses the same source data as main MC (e.g. Extended History if avail)
-                     # Uses the same source data as main MC (e.g. Extended History if avail)
                      seas_df = monte_carlo.run_seasonal_monte_carlo(daily_rets, n_sims=5000, initial_val=sim_start, monthly_cashflow=sim_monthly_add)
                      
                      if not seas_df.empty:
                          # Plot
-                         import plotly.graph_objects as go
-                         import numpy as np
+
                          fig = go.Figure()
                          
                          # Create a dummy date range for a typical year (using 2024 as generic leap year)
@@ -1107,9 +1106,6 @@ When yFinance data starts later than your chart, the tax engine initializes your
         
         # Log detailed scenario results to .csv file
         try:
-            import os
-            import csv
-            
             os.makedirs("debug_tools", exist_ok=True)
             log_path = "debug_tools/monte_carlo_scenarios.csv"
             
@@ -1144,8 +1140,7 @@ When yFinance data starts later than your chart, the tax engine initializes your
         except Exception as e:
             st.error(f"Failed to write detailed CSV: {e}")
     
-        # 3. Render (Moved to top)
-        # charts.render_monte_carlo_view(mc_results, unique_id=portfolio_name)
+
         
     with res_tab_debug:
         st.subheader("Debug Info")
@@ -1156,8 +1151,7 @@ When yFinance data starts later than your chart, the tax engine initializes your
         st.write(str(raw_response)[:1000])
         
         # Also provide download button
-        import json as json_lib
-        json_str = json_lib.dumps(raw_response, indent=2)
+        json_str = json.dumps(raw_response, indent=2)
         st.download_button(
             label="Download Raw Response",
             data=json_str,
