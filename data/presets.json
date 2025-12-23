@@ -1,5 +1,36 @@
 [
     {
+        "name": "NDXMEGASPLIT",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 60.0,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 15.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3",
+                "Weight %": 5.0,
+                "Maint %": 75.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "month_str": "Jan",
+            "day": 1
+        }
+    },
+    {
         "name": "60/40 Portfolio",
         "allocation": [
             {
@@ -343,37 +374,6 @@
         "rebalance": {
             "mode": "Standard",
             "freq": "Yearly"
-        }
-    },
-    {
-        "name": "NDXMEGASPLIT",
-        "allocation": [
-            {
-                "Ticker": "NDXMEGASIM?L=2",
-                "Weight %": 60.0,
-                "Maint %": 25.0
-            },
-            {
-                "Ticker": "GLDSIM",
-                "Weight %": 20.0,
-                "Maint %": 25.0
-            },
-            {
-                "Ticker": "VXUSSIM",
-                "Weight %": 15.0,
-                "Maint %": 26.0
-            },
-            {
-                "Ticker": "QQQSIM?L=3",
-                "Weight %": 5.0,
-                "Maint %": 25.0
-            }
-        ],
-        "rebalance": {
-            "mode": "Custom",
-            "freq": "Yearly",
-            "month_str": "Jan",
-            "day": 15
         }
     }
 ]
