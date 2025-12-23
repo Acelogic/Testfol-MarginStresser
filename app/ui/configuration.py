@@ -16,17 +16,19 @@ def render():
     with tab_port:
         # --- initialize state ---
         if "portfolios" not in st.session_state:
-            # Default to 1 empty or basic portfolio
+            # Default to hardcoded NDXMEGASPLIT
             _default_alloc = pd.DataFrame([
-                {"Ticker":"SPY", "Weight %": 60, "Maint %": 25},
-                {"Ticker":"TLT", "Weight %": 40, "Maint %": 25}
+                {"Ticker": "NDXMEGASIM?L=2", "Weight %": 60.0, "Maint %": 50.0},
+                {"Ticker": "GLDSIM", "Weight %": 20.0, "Maint %": 25.0},
+                {"Ticker": "VXUSSIM", "Weight %": 15.0, "Maint %": 25.0},
+                {"Ticker": "QQQSIM?L=3", "Weight %": 5.0, "Maint %": 75.0}
             ])
             st.session_state.portfolios = [{
                 "id": "p1",
-                "name": "Portfolio 1",
+                "name": "NDXMEGASPLIT",
                 "alloc_df": _default_alloc,
                 "rebalance": {
-                    "mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False
+                    "mode": "Custom", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False
                 },
                 "cashflow": {
                      "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
