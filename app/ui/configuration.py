@@ -44,15 +44,14 @@ def render():
                 # Layout for Custom Date
                 rc1, rc2 = st.columns([1, 1])
                 with rc1:
-                    config['custom_freq'] = st.selectbox("Freq", ["Yearly", "Quarterly", "Monthly"], index=0, label_visibility="collapsed")
+                    config['custom_freq'] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=0)
                 with rc2:
                     if config['custom_freq'] == "Yearly":
-                        # Compact Month/Day
-                        config['rebalance_month'] = st.selectbox("Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), index=0, label_visibility="collapsed")
+                        config['rebalance_month'] = st.selectbox("Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), index=0)
                     else:
                         config['rebalance_month'] = 1
                 
-                config['rebalance_day'] = st.number_input("Day", 1, 31, 15, label_visibility="collapsed")
+                config['rebalance_day'] = st.number_input("Day of Month", 1, 31, 15)
                 config['rebalance'] = "Custom"
                 config['compare_standard'] = st.checkbox("Vs Standard", value=True)
             else:
