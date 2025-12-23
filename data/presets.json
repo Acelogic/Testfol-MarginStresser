@@ -1,0 +1,379 @@
+[
+    {
+        "name": "60/40 Portfolio",
+        "allocation": [
+            {
+                "Ticker": "SPY",
+                "Weight %": 60,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TLT",
+                "Weight %": 40,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "HFEA (Hedgefundie)",
+        "allocation": [
+            {
+                "Ticker": "UPRO",
+                "Weight %": 55,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "TMF",
+                "Weight %": 45,
+                "Maint %": 50
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Quarterly"
+        }
+    },
+    {
+        "name": "All Weather",
+        "allocation": [
+            {
+                "Ticker": "SPY",
+                "Weight %": 30,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TLT",
+                "Weight %": 40,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "IEF",
+                "Weight %": 15,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "GLD",
+                "Weight %": 7.5,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "DBC",
+                "Weight %": 7.5,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "Golden Butterfly",
+        "allocation": [
+            {
+                "Ticker": "VTI",
+                "Weight %": 20,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "IJS",
+                "Weight %": 20,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TLT",
+                "Weight %": 20,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "SHy",
+                "Weight %": 20,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "GLD",
+                "Weight %": 20,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "NDX Mega 1.0 (Sim)",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 100,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "month_str": "Jan",
+            "day": 15
+        }
+    },
+    {
+        "name": "Main Split",
+        "allocation": [
+            {
+                "Ticker": "AAPL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "MSFT?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "AVGO?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "AMZN?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "META?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "NVDA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "GOOGL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "TSLA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 50
+            },
+            {
+                "Ticker": "GLD",
+                "Weight %": 20.0,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "VXUS",
+                "Weight %": 15.0,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TQQQ",
+                "Weight %": 5.0,
+                "Maint %": 75
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "SPY Only",
+        "allocation": [
+            {
+                "Ticker": "SPY",
+                "Weight %": 100.0,
+                "Maint %": 25.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "MAGS",
+        "allocation": [
+            {
+                "Ticker": "MAGS",
+                "Weight %": 100.0,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "MAGS Sim",
+        "allocation": [
+            {
+                "Ticker": "AAPL",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "MSFT",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "AMZN",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "META",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "NVDA",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "GOOGL",
+                "Weight %": 14.28,
+                "Maint %": 25
+            },
+            {
+                "Ticker": "TSLA",
+                "Weight %": 14.32,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "60% SSO / 20% ZROZ",
+        "allocation": [
+            {
+                "Ticker": "SPYSIM?L=2",
+                "Weight %": 60.0,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "ZROZSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "Main Split PM",
+        "allocation": [
+            {
+                "Ticker": "AAPL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "MSFT?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "AVGO?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "AMZN?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "META?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "NVDA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "GOOGL?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "TSLA?L=2",
+                "Weight %": 7.5,
+                "Maint %": 30
+            },
+            {
+                "Ticker": "GLD",
+                "Weight %": 20.0,
+                "Maint %": 15
+            },
+            {
+                "Ticker": "VXUS",
+                "Weight %": 15.0,
+                "Maint %": 9
+            },
+            {
+                "Ticker": "TQQQ",
+                "Weight %": 5.0,
+                "Maint %": 30
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly"
+        }
+    },
+    {
+        "name": "NDXMEGASPLIT",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 60.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 15.0,
+                "Maint %": 26.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3",
+                "Weight %": 5.0,
+                "Maint %": 25.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "month_str": "Jan",
+            "day": 15
+        }
+    }
+]

@@ -3,8 +3,6 @@ import streamlit as st
 import json
 import os
 
-PORTFOLIO_FILE = "data/saved_portfolios.json"
-
 def color_return(val):
     if pd.isna(val): return ""
     color = '#00CC96' if val >= 0 else '#EF553B'
@@ -19,37 +17,56 @@ def num_input(label, key, default, step, **kwargs):
         **kwargs
     )
 
-def load_saved_portfolios():
-    if not os.path.exists(PORTFOLIO_FILE):
-        return {}
-    try:
-        with open(PORTFOLIO_FILE, "r") as f:
-            return json.load(f)
-    except:
-        return {}
-
-def save_portfolio_to_disk(name, config):
-    data = load_saved_portfolios()
-    data[name] = config
-    with open(PORTFOLIO_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-def delete_portfolio_from_disk(name):
-    data = load_saved_portfolios()
-    if name in data:
-        del data[name]
-        with open(PORTFOLIO_FILE, "w") as f:
-            json.dump(data, f, indent=4)
-
 def sync_equity():
-    sv = st.session_state.start_val
-    loan = st.session_state.starting_loan
-    st.session_state.equity_init = 100 * max(0, 1 - loan / sv)
+    sv = st.session_state.get("g_start", 10000.0)
+    loan = st.session_state.get("starting_loan", 0.0)
+    if sv > 0:
+        st.session_state.equity_init = 100 * max(0, 1 - loan / sv)
 
 def sync_loan():
-    sv = st.session_state.start_val
-    eq = st.session_state.equity_init
+    sv = st.session_state.get("g_start", 10000.0)
+    eq = st.session_state.get("equity_init", 100.0)
     st.session_state.starting_loan = sv * max(0, 1 - eq / 100)
+
+def get_presets_path():
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return os.path.join(base_dir, "../../data/presets.json")
+
+def load_presets():
+    path = get_presets_path()
+    if os.path.exists(path):
+        try:
+            with open(path, "r") as f:
+                return json.load(f)
+        except:
+            return []
+    return []
+
+def save_preset(preset_data):
+    """
+    Saves a preset dict to presets.json.
+    Updates existing if name matches, else appends.
+    """
+    path = get_presets_path()
+    current_presets = load_presets()
+    
+    # Check if exists
+    existing_idx = next((i for i, p in enumerate(current_presets) if p["name"] == preset_data["name"]), -1)
+    
+    if existing_idx >= 0:
+        current_presets[existing_idx] = preset_data
+    else:
+        current_presets.append(preset_data)
+        
+    with open(path, "w") as f:
+        json.dump(current_presets, f, indent=4)
+
+def delete_preset(name):
+    path = get_presets_path()
+    current_presets = load_presets()
+    current_presets = [p for p in current_presets if p["name"] != name]
+    with open(path, "w") as f:
+        json.dump(current_presets, f, indent=4)
 
 def resample_data(series: pd.Series, timeframe: str, method="ohlc") -> pd.DataFrame:
     if timeframe == "1D":

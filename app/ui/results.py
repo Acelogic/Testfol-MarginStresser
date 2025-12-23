@@ -10,7 +10,7 @@ from app.reporting import report_generator
 from app.ui import charts
 import datetime as dt
 
-def render(results, config):
+def render(results, config, portfolio_name=""):
     """
     Renders the results section, including metrics and charts.
     
@@ -25,6 +25,7 @@ def render(results, config):
     
     port_series = results["port_series"]
     stats = results["stats"]
+    portfolio_name = results.get("name", "Portfolio")
     
     # Initialize optional chart variables to prevent UnboundLocalError
     fig_tax_impact = None
@@ -464,10 +465,9 @@ When yFinance data starts later than your chart, the tax engine initializes your
             annual_bal = final_adj_series.resample("YE").last()
             annual_bal.index = annual_bal.index.year
             
-            # 2. Annual Tax Paid
-            # Use the SCALED tax series (final_tax_series)
-            annual_tax_aligned = final_tax_series.resample("YE").sum()
-            annual_tax_aligned.index = annual_tax_aligned.index.year
+            # 2. Annual Tax INCURRED (for the impact chart, we show tax based on gains that year)
+            # annual_total_tax is indexed by year (int)
+            annual_tax_aligned = annual_total_tax
             # Reindex to match balance just in case
             annual_tax_aligned = annual_tax_aligned.reindex(annual_bal.index, fill_value=0.0)
             
@@ -483,8 +483,13 @@ When yFinance data starts later than your chart, the tax engine initializes your
                 )
                 market_val_series = gross_cash_series
             else:
-                # Margin Mode: Market Value = Net Equity + Loan (which includes tax debt)
-                market_val_series = final_adj_series + loan_series
+                # Margin Mode: Market Value = Pre-Tax Net Equity (Net Equity if NO tax debt existed)
+                # We reuse the simulate_margin function but with tax_series=None
+                gross_margin_loan, gross_margin_equity, _, _ = api.simulate_margin(
+                    port_series, starting_loan, rate_annual, draw_monthly, wmaint,
+                    tax_series=None, repayment_series=repayment_series
+                )
+                market_val_series = gross_margin_equity
             
             annual_mv = market_val_series.resample("YE").last()
             annual_mv.index = annual_mv.index.year
@@ -499,17 +504,15 @@ When yFinance data starts later than your chart, the tax engine initializes your
             # Plot Stacked Bar Chart with Market Value Line
             fig_tax_impact = go.Figure()
             
-            # Market Value as a Line (to compare against the stack)
-            # User requested NO Gross line in Cash Mode
-            if not pay_tax_cash:
-                fig_tax_impact.add_trace(go.Scatter(
-                    x=tax_impact_df.index,
-                    y=tax_impact_df["Market Value"],
-                    name="Market Value (Gross)",
-                    line=dict(color="#636EFA", width=3),
-                    mode='lines+markers',
-                    hovertemplate="%{y:$,.0f}<extra></extra>"
-                ))
+            # Market Value as a Line (Baseline: What your wealth would be if taxes didn't exist)
+            fig_tax_impact.add_trace(go.Scatter(
+                x=tax_impact_df.index,
+                y=tax_impact_df["Market Value"],
+                name="Pre-Tax Wealth (Baseline)",
+                line=dict(color="#636EFA", width=3),
+                mode='lines+markers',
+                hovertemplate="%{y:$,.0f}<extra></extra>"
+            ))
             
             # Net Balance (Bar)
             fig_tax_impact.add_trace(go.Bar(
@@ -534,7 +537,7 @@ When yFinance data starts later than your chart, the tax engine initializes your
             ))
             
             fig_tax_impact.update_layout(
-                title="Annual Tax Impact: Net Balance + Tax vs. Market Value",
+                title="Annual Tax Impact: Net Wealth vs. Pre-Tax Baseline",
                 xaxis_title="Year",
                 yaxis_title="Amount ($)",
                 barmode='stack',
@@ -753,7 +756,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
         charts.render_returns_analysis(
             tax_adj_port_series, 
             bench_series=bench_resampled,
-            comparison_series=comp_resampled
+            comparison_series=comp_resampled,
+            unique_id=portfolio_name
         )
         
     with res_tab_rebal:
@@ -781,7 +785,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
             rebalance_freq=rebal_freq_for_chart,
             use_standard_deduction=use_std_deduction,
             unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
-            custom_freq=config.get('custom_freq', 'Yearly')
+            custom_freq=config.get('custom_freq', 'Yearly'),
+            unique_id=portfolio_name
         )
     
     with res_tab_tax:
@@ -856,11 +861,11 @@ When yFinance data starts later than your chart, the tax engine initializes your
             
         # 2. Configuration
         c_sims, c_start, c_flow = st.columns(3)
-        n_sims = c_sims.slider("Scenarios", 100, 5000, 1000, 100, help="More scenarios = smoother cone")
+        n_sims = c_sims.slider("Scenarios", 100, 5000, 1000, 100, help="More scenarios = smoother cone", key=f"mc_n_sims_{portfolio_name}")
         
         # Start Value Default
         def_start = results.get("start_val", 10000.0)
-        sim_start = c_start.number_input("Start Value ($)", value=float(def_start), step=1000.0)
+        sim_start = c_start.number_input("Start Value ($)", value=float(def_start), step=1000.0, key=f"mc_start_{portfolio_name}")
         
         # Cashflow Default (Normalize to Monthly)
         cf_amt = results.get("cashflow", 0.0)
@@ -870,7 +875,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
         elif cf_freq == 'Quarterly': def_monthly = cf_amt / 3
         elif cf_freq == 'Yearly': def_monthly = cf_amt / 12
         
-        sim_monthly_add = c_flow.number_input("Monthly Add ($)", value=float(def_monthly), step=100.0, help="Monthly contribution injected into simulation")
+        
+        sim_monthly_add = c_flow.number_input("Monthly Add ($)", value=float(def_monthly), step=100.0, help="Monthly contribution injected into simulation", key=f"mc_monthly_{portfolio_name}")
     
         # Advanced Settings
         custom_mean = None
@@ -884,7 +890,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
             mc_mode = st.radio(
                 "Source Data / Regime",
                 ["Full History (Default)", "Historical Period Filter", "Stress Scenario", "Custom Parameters"],
-                help="Choose how to generate future return paths."
+                help="Choose how to generate future return paths.",
+                key=f"mc_mode_{portfolio_name}"
             )
             
             # Mode Logic
@@ -894,8 +901,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
                 max_date = daily_rets.index.max().date()
                 
                 c_f1, c_f2 = st.columns(2)
-                filter_start = c_f1.date_input("From", value=max(min_date, pd.to_datetime("2020-01-01").date()))
-                filter_end = c_f2.date_input("To", value=max_date)
+                filter_start = c_f1.date_input("From", value=max(min_date, pd.to_datetime("2020-01-01").date()), key=f"mc_date_from_{portfolio_name}")
+                filter_end = c_f2.date_input("To", value=max_date, key=f"mc_date_to_{portfolio_name}")
                 
             elif mc_mode == "Stress Scenario":
                 scenario = st.selectbox(
@@ -904,7 +911,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
                      "2000 DotCom Bust (2000-2002)", 
                      "2008 GFC (2007-2009)", 
                      "2020 COVID Crash (Feb-Apr 2020)", 
-                     "2022 Inflation/Rates (2022)"]
+                     "2022 Inflation/Rates (2022)"],
+                    key=f"mc_stress_scenario_{portfolio_name}"
                 )
                 
                 # Preset Scenarios
@@ -938,16 +946,16 @@ When yFinance data starts later than your chart, the tax engine initializes your
                     
             elif mc_mode == "Custom Parameters":
                 c_p1, c_p2 = st.columns(2)
-                custom_mean = c_p1.number_input("Expected Annual Return (%)", value=7.0, step=0.5) / 100.0
-                custom_vol = c_p2.number_input("Expected Annual Volatility (%)", value=15.0, step=0.5) / 100.0
+                custom_mean = c_p1.number_input("Expected Annual Return (%)", value=7.0, step=0.5, key=f"mc_custom_return_{portfolio_name}") / 100.0
+                custom_vol = c_p2.number_input("Expected Annual Volatility (%)", value=15.0, step=0.5, key=f"mc_custom_vol_{portfolio_name}") / 100.0
                 st.info("Generates synthetic returns using Normal Distribution (IID). Ignores historical data patterns.")
             
             # Bootstrap Method (Only if using History)
             if mc_mode != "Custom Parameters":
                 st.markdown("##### Sampling Method")
-                boot_method = st.radio("Method", ["Simple Bootstrap (IID)", "Block Bootstrap"], horizontal=True)
+                boot_method = st.radio("Method", ["Simple Bootstrap (IID)", "Block Bootstrap"], horizontal=True, key=f"mc_boot_method_{portfolio_name}")
                 if boot_method == "Block Bootstrap":
-                    block_size = st.slider("Block Size (Days)", min_value=5, max_value=60, value=20, help="Larger blocks preserve longer-term market memory (volatility clustering).")
+                    block_size = st.slider("Block Size (Days)", min_value=5, max_value=60, value=20, help="Larger blocks preserve longer-term market memory (volatility clustering).", key=f"mc_block_size_{portfolio_name}")
                     st.caption(f"Sampling contiguous blocks of {block_size} days.")
     
         # --- TABS: Standard vs Seasonal ---
@@ -968,12 +976,15 @@ When yFinance data starts later than your chart, the tax engine initializes your
                     custom_vol_annual=custom_vol,
                     block_size=block_size
                 )
+            
+            if mc_results:
+                charts.render_monte_carlo_view(mc_results, unique_id=portfolio_name)
         
         with mc_tab_seas:
              st.markdown("### 📅 Typical Year Analysis (Seasonal Bootstrap)")
              st.info("This simulation builds a 'Typical Year' by sampling January returns only from historical Januaries, February entries from Februaries, etc. This reveals seasonal patterns like 'Sell in May' or 'Santa Rally'.")
              
-             if st.button("Run Seasonal Analysis (5,000 Runs)"):
+             if st.button("Run Seasonal Analysis (5,000 Runs)", key=f"mc_run_seasonal_{portfolio_name}"):
                  with st.spinner("Analyzing Seasonality..."):
                      # Uses the same source data as main MC (e.g. Extended History if avail)
                      # Uses the same source data as main MC (e.g. Extended History if avail)
@@ -1133,8 +1144,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
         except Exception as e:
             st.error(f"Failed to write detailed CSV: {e}")
     
-        # 3. Render
-        charts.render_monte_carlo_view(mc_results)
+        # 3. Render (Moved to top)
+        # charts.render_monte_carlo_view(mc_results, unique_id=portfolio_name)
         
     with res_tab_debug:
         st.subheader("Debug Info")
@@ -1150,8 +1161,9 @@ When yFinance data starts later than your chart, the tax engine initializes your
         st.download_button(
             label="Download Raw Response",
             data=json_str,
-            file_name="testfol_api_response.json",
-            mime="application/json"
+            file_name=f"testfol_api_response_{portfolio_name}.json",
+            mime="application/json",
+            key=f"dl_json_{portfolio_name}"
         )
     
     # -------------------------------------------------------------------------
@@ -1170,13 +1182,21 @@ When yFinance data starts later than your chart, the tax engine initializes your
         
         # Generate report on the fly
         try:
-            report_html = report_generator.generate_html_report(results)
+            # Use combined results logic
+            report_data = st.session_state.get('results_list', results)
+            if isinstance(report_data, list) and not report_data:
+                report_data = results
+            
+            report_html = report_generator.generate_html_report(report_data)
+            
+            btn_label = "Download Combined Report (HTML)" if isinstance(report_data, list) and len(report_data) > 1 else "Download HTML Report"
             
             st.sidebar.download_button(
-                label="Download HTML Report",
+                label=btn_label,
                 data=report_html,
                 file_name=f"testfol_report_{dt.datetime.now().strftime('%Y%m%d_%H%M')}.html",
                 mime="text/html",
+                key=f"dl_report_{portfolio_name}",
                 help="Download a standalone HTML report with charts and stats."
             )
         except Exception as e:
