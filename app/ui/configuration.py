@@ -14,145 +14,120 @@ def render():
     config = {}
 
     with tab_port:
-        c1, c2 = st.columns([2, 1])
+        # --- Top Settings Grid ---
+        c_set1, c_set2, c_set3 = st.columns(3)
         
-        with c1:
-            st.markdown("##### Allocation")
-            _default = [
-                {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
-                {"Ticker":"GLD","Weight %":20,"Maint %":25},
-                {"Ticker":"VXUS","Weight %":15,"Maint %":25},
-                {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
-            ]
-
-            if "alloc_df" not in st.session_state:
-                st.session_state.alloc_df = pd.DataFrame(_default)
-
-            edited_df = st.data_editor(
-                st.session_state.alloc_df,
-                key=f"alloc_editor_{st.session_state.get('reload_counter', 0)}",
-                num_rows="dynamic",
-                column_order=["Ticker", "Weight %", "Maint %"],
-                column_config={
-                    "Weight %": st.column_config.NumberColumn(
-                        min_value=0.0, max_value=100.0, step=0.01, format="%.2f"
-                    ),
-                    "Maint %": st.column_config.NumberColumn(
-                        min_value=0.0, max_value=100.0, step=0.1, format="%.1f"
-                    ),
-                },
-                use_container_width=True
-            )
-            
-            # Store edited data for save functionality
-            st.session_state.current_edited_df = edited_df
-            config['edited_df'] = edited_df
-        
-        with c2:
-            st.markdown("##### Capital & Cashflow")
+        with c_set1:
+            st.markdown("##### 💰 Capital & Cashflow")
             config['start_val'] = utils.num_input("Start Value ($)", "start_val", 10000.0, 1000.0, on_change=utils.sync_equity)
             config['cashflow'] = utils.num_input("Cashflow ($)", "cashflow", 0.0, 100.0)
-            config['invest_div'] = st.checkbox("Re-invest Dividends", value=True)
-            # Duplicate 'rebalance' removed
-            config['cashfreq'] = st.selectbox("Cashflow Frequency", ["Monthly", "Quarterly", "Yearly"], index=0)
             
-            st.divider()
-            st.markdown("##### Simulation Engine")
-            sim_engine = st.radio(
-                "Engine",
-                ["Standard (Testfol API)", "Custom Rebalance (Hybrid)"],
+            sc1, sc2 = st.columns(2)
+            with sc1:
+                config['cashfreq'] = st.selectbox("Freq", ["Monthly", "Quarterly", "Yearly"], index=0, label_visibility="collapsed")
+            with sc2:
+                 config['invest_div'] = st.checkbox("Re-invest Divs", value=True)
+
+        with c_set2:
+            st.markdown("##### 📅 Rebalancing")
+            sim_mode = st.radio(
+                "Mode",
+                ["Standard", "Custom"],
                 index=0,
-                help="**Standard**: Fast, runs on Testfol servers. Supports Monthly/Quarterly/Yearly rebalancing.\n**Custom (Hybrid)**: Runs locally using Testfol data. Allows flexible rebalancing dates."
+                horizontal=True,
+                label_visibility="collapsed",
+                help="**Standard**: End of Period (API).\n**Custom**: Specific Date (Hybrid)."
             )
-            config['sim_engine'] = "hybrid" if "Hybrid" in sim_engine else "standard"
+            config['sim_engine'] = "hybrid" if "Custom" in sim_mode else "standard"
             
             if config['sim_engine'] == "hybrid":
-                # Custom Frequency Selection
-                config['custom_freq'] = st.selectbox(
-                    "Rebalance Frequency",
-                    ["Yearly", "Quarterly", "Monthly"],
-                    index=0,
-                    help="How often to rebalance. The day selection below determines WHEN in each period."
-                )
-                
-                c_reb1, c_reb2 = st.columns(2)
-                with c_reb1:
+                # Layout for Custom Date
+                rc1, rc2 = st.columns([1, 1])
+                with rc1:
+                    config['custom_freq'] = st.selectbox("Freq", ["Yearly", "Quarterly", "Monthly"], index=0, label_visibility="collapsed")
+                with rc2:
                     if config['custom_freq'] == "Yearly":
-                        config['rebalance_month'] = st.selectbox("Rebalance Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%B"), index=0)
+                        # Compact Month/Day
+                        config['rebalance_month'] = st.selectbox("Month", range(1, 13), format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), index=0, label_visibility="collapsed")
                     else:
-                        config['rebalance_month'] = 1  # Not used for Monthly/Quarterly
-                        
-                with c_reb2:
-                    config['rebalance_day'] = st.number_input("Rebalance Day", 1, 31, 15, help="Day of month to rebalance. If the month has fewer days, the last day of the month is used.")
+                        config['rebalance_month'] = 1
                 
+                config['rebalance_day'] = st.number_input("Day", 1, 31, 15, label_visibility="collapsed")
                 config['rebalance'] = "Custom"
-                
-                # Display info based on frequency
-                try:
-                    rb_day = config['rebalance_day']
-                    if config['custom_freq'] == "Yearly":
-                        rb_month = config['rebalance_month']
-                        display_date = pd.to_datetime(f"2024-{rb_month}-{rb_day}").strftime('%B %d')
-                        st.info(f"Rebalancing **annually** on {display_date}.")
-                    elif config['custom_freq'] == "Quarterly":
-                        st.info(f"Rebalancing **quarterly** on day {rb_day} of Jan/Apr/Jul/Oct.")
-                    else:  # Monthly
-                        st.info(f"Rebalancing **monthly** on day {rb_day}.")
-                except:
-                    st.warning("Invalid Date Selection")
-                    
-                config['compare_standard'] = st.checkbox("Compare vs Standard Rebalance", value=True, help="Overlay the standard Testfol Yearly rebalancing strategy as a benchmark.")
+                config['compare_standard'] = st.checkbox("Vs Standard", value=True)
             else:
-                config['rebalance'] = st.selectbox("Rebalance", ["Yearly", "Quarterly", "Monthly"], index=0)
+                config['rebalance'] = st.selectbox("Freq", ["Yearly", "Quarterly", "Monthly"], index=0, label_visibility="collapsed")
                 config['rebalance_month'] = 1
                 config['rebalance_day'] = 1
                 config['compare_standard'] = False
-            config['pay_down_margin'] = st.checkbox("Pay Down Margin", value=False, help="Use cashflow to reduce margin loan instead of buying shares.")
-            
-        st.divider()
-        
-        st.subheader("Tax Simulation")
-        
-        # Primary toggle visible at top level
-        config['use_std_deduction'] = st.checkbox("Apply Standard Deduction", value=True, help="Subtracts historical standard deduction from income before calculating tax.")
-        
-        # Collapse all other tax options into an expander
-        with st.expander("⚙️ Tax Calculation Options", expanded=False):
-            c_tax1, c_tax2 = st.columns(2)
-            with c_tax1:
-                config['filing_status'] = st.selectbox(
-                    "Filing Status",
-                    ["Single", "Married Filing Jointly", "Head of Household"],
-                    index=0,
-                    help="Determines tax brackets and standard deduction."
-                )
-                config['state_tax_rate'] = st.number_input("State Tax Rate (%)", 0.0, 20.0, 0.0, 0.1, help="Flat state tax rate applied to all realized gains.") / 100.0
                 
-            with c_tax2:
-                config['other_income'] = st.number_input("Other Annual Income ($)", 0.0, 10000000.0, 100000.0, 5000.0, help="Used to determine tax bracket base.")
+            config['pay_down_margin'] = st.checkbox("Pay Down Margin", value=False)
+
+        with c_set3:
+            st.markdown("##### 🏛️ Tax Settings")
+            config['use_std_deduction'] = st.checkbox("Standard Deduction", value=True)
             
-            st.markdown("---")
-            tax_method_selection = st.radio(
-                "Tax Calculation Method",
-                ["Historical Smart (Default)", "Historical Max Rate", "2025 Fixed Brackets"],
+            tax_method_selection = st.selectbox(
+                "Method",
+                ["Historical Smart", "Historical Max Rate", "2025 Fixed Brackets"],
                 index=0,
-                horizontal=True,
-                help="Smart: Uses historical inclusion rates. Max: Flat historical max rate. Fixed: Modern 0/15/20% for all years."
+                help="**Historical Smart**: Uses actual tax brackets and inclusion rates from each specific year.\n**Historical Max**: Applies the highest historical capital gains rate for that year.\n**2025 Fixed**: Applies today's (2025) tax brackets to all past years."
             )
             
+            with st.expander("Details", expanded=False):
+                config['filing_status'] = st.selectbox("Status", ["Single", "Married Joint", "Head of Household"], index=0)
+                config['state_tax_rate'] = st.number_input("State Tax %", 0.0, 20.0, 0.0, 0.1) / 100.0
+                config['other_income'] = st.number_input("Other Income", 0.0, 10000000.0, 100000.0, 5000.0)
+
             if "Smart" in tax_method_selection:
-                 config['tax_method'] = "historical_smart"
+                config['tax_method'] = "smart"
             elif "Max" in tax_method_selection:
-                 config['tax_method'] = "historical_max_rate"
+                config['tax_method'] = "historical_max"
             else:
-                 config['tax_method'] = "2025_fixed"
+                config['tax_method'] = "2025_fixed"
+
+        st.divider()
+        
+        # --- Allocation Table (Full Width) ---
+        st.markdown("##### 🥧 Asset Allocation")
+        
+        _default = [
+            {"Ticker":"AAPL?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"MSFT?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"AVGO?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"AMZN?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"META?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"NVDA?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"GOOGL?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"TSLA?L=2","Weight %":7.5,"Maint %":50},
+            {"Ticker":"GLD","Weight %":20,"Maint %":25},
+            {"Ticker":"VXUS","Weight %":15,"Maint %":25},
+            {"Ticker":"TQQQ","Weight %":5,"Maint %":75},
+        ]
+
+        if "alloc_df" not in st.session_state:
+            st.session_state.alloc_df = pd.DataFrame(_default)
+
+        # Use full container width
+        edited_df = st.data_editor(
+            st.session_state.alloc_df,
+            key=f"alloc_editor_{st.session_state.get('reload_counter', 0)}",
+            num_rows="dynamic",
+            column_order=["Ticker", "Weight %", "Maint %"],
+            column_config={
+                "Weight %": st.column_config.NumberColumn(
+                    min_value=0.0, max_value=100.0, step=0.01, format="%.2f"
+                ),
+                "Maint %": st.column_config.NumberColumn(
+                    min_value=0.0, max_value=100.0, step=0.1, format="%.1f"
+                ),
+            },
+            use_container_width=True
+        )
+        
+        # Store edited data for save functionality
+        st.session_state.current_edited_df = edited_df
+        config['edited_df'] = edited_df
 
     with tab_margin:
         # Move Tax Simulation to top to control state of other inputs

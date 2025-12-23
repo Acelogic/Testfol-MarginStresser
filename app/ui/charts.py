@@ -8,6 +8,7 @@ from app.core import tax_library
 import os
 from app.common.utils import color_return
 
+@st.cache_data(show_spinner=False)
 def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts, log_scale, bench_series=None, comparison_series=None):
     fig = go.Figure()
     TRACES = {
@@ -73,7 +74,8 @@ def render_classic_chart(port, equity, loan, equity_pct, usage_pct, series_opts,
     )
     st.plotly_chart(fig, use_container_width=True)
 
-def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None, comparison_series=None):
+@st.cache_data(show_spinner=False)
+def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None, comparison_series=None, start_val=10000, rate_annual=8.0):
     """Render dashboard-style separate charts"""
     
     # Get log scale settings
@@ -102,7 +104,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
     fig1 = go.Figure()
     
     # Calculate leveraged portfolio (simulated with margin)
-    leveraged_mult = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+    leveraged_mult = 1 / (start_val / 100) if start_val < 100 else 1
     leveraged_port = port * leveraged_mult
     
     fig1.add_trace(go.Scatter(
@@ -154,7 +156,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
         
         # Calculate leverage metrics
         current_leverage = port / equity
-        target_leverage = 1 / (st.session_state.equity_init / 100) if st.session_state.equity_init < 100 else 1
+        target_leverage = 1 / (start_val / 100) if start_val < 100 else 1
         max_allowed = 1 / (1 - maint_pct)
         
         fig2.add_trace(go.Scatter(
@@ -214,7 +216,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
         ))
         
         # Monthly interest on secondary axis
-        monthly_interest = loan * (st.session_state.rate_annual / 100 / 12)
+        monthly_interest = loan * (rate_annual / 100 / 12)
         fig3.add_trace(go.Scatter(
             x=loan.index, y=monthly_interest,
             name="Monthly Interest",
@@ -330,6 +332,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             unsafe_allow_html=True
         )
 
+@st.cache_data(show_spinner=False)
 def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, equity_pct_series, timeframe, log_scale, show_range_slider=True, show_volume=True, bench_series=None, comparison_series=None):
     title_map = {
         "1D": "Daily",
@@ -365,25 +368,25 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
         main_row = 1
     
     # Prepare Hover Text with % change
-    hover_text = []
-    for i, (d, o, h, l, c) in enumerate(zip(ohlc_df.index, ohlc_df["Open"], ohlc_df["High"], ohlc_df["Low"], ohlc_df["Close"])):
-        # Calculate period-over-period return (matching the returns table)
-        if i > 0:
-            prev_close = ohlc_df["Close"].iloc[i-1]
-            pct_change = ((c - prev_close) / prev_close * 100) if prev_close != 0 else 0
-        else:
-            # For first period, use open to close
-            pct_change = ((c - o) / o * 100) if o != 0 else 0
-        
-        change_sign = "+" if pct_change >= 0 else ""
-        hover_text.append(
-            f"Date: {d:%b %d, %Y}<br>"
-            f"O: {o:,.2f}<br>"
-            f"H: {h:,.2f}<br>"
-            f"L: {l:,.2f}<br>"
-            f"C: {c:,.2f}<br>"
-            f"Change: {change_sign}{pct_change:.2f}%"
-        )
+    # Vectorized calculation of percent change
+    # Period-over-period return (matching the returns table)
+    pct_change = ohlc_df["Close"].pct_change().fillna(0) * 100
+    
+    # Recalculate first period (Open to Close) as pct_change() gives NaN or 0 dependent on prev value
+    # actually pct_change() on first element is NaN.
+    if len(ohlc_df) > 0:
+        first_open = ohlc_df["Open"].iloc[0]
+        if first_open != 0:
+             pct_change.iloc[0] = (ohlc_df["Close"].iloc[0] - first_open) / first_open * 100
+    
+    # Format dates once
+    dates_fmt = ohlc_df.index.strftime('%b %d, %Y')
+    
+    # Use list comprehension with zip for speed (avoiding iloc inside loop)
+    hover_text = [
+        f"Date: {d}<br>O: {o:,.2f}<br>H: {h:,.2f}<br>L: {l:,.2f}<br>C: {c:,.2f}<br>Change: {p:+.2f}%"
+        for d, o, h, l, c, p in zip(dates_fmt, ohlc_df["Open"], ohlc_df["High"], ohlc_df["Low"], ohlc_df["Close"], pct_change)
+    ]
 
     # Main candlestick chart (TradingView colors)
     fig.add_trace(go.Candlestick(
@@ -646,6 +649,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
     )
     st.plotly_chart(fig2, use_container_width=True)
 
+@st.cache_data(show_spinner=False)
 def render_returns_analysis(port_series, bench_series=None, comparison_series=None):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
@@ -1042,6 +1046,7 @@ def render_rebalance_sankey(trades_df, view_freq="Yearly"):
     fig.update_layout(title_text=f"Rebalancing Flow {selected_period}", font_size=12, height=500)
     st.plotly_chart(fig, use_container_width=True)
 
+@st.cache_data(show_spinner=False)
 def render_portfolio_composition(composition_df, view_freq="Yearly"):
     if composition_df.empty:
         return
@@ -1557,6 +1562,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             }).map(color_return, subset=["Trade Amount", "Realized P&L"]),
             use_container_width=True
         )
+@st.cache_data(show_spinner=False)
 def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False):
     """
     Renders the Tax Analysis tab.

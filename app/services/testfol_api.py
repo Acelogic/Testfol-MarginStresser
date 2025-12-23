@@ -19,7 +19,8 @@ def table_to_dicts(df: pd.DataFrame):
     return alloc, maint
 
 def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
-                   invest_div, rebalance, allocation, return_raw=False, include_raw=False):
+                   invest_div, rebalance, allocation, return_raw=False, include_raw=False,
+                   rebalance_offset=0, cashflow_offset=0):
     """
     Fetches backtest data from testfol.io API with universal disk caching.
     """
@@ -37,7 +38,9 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         "allocation": allocation,
         # return_raw/include_raw affect output format, so they must be part of key
         "return_raw": return_raw,
-        "include_raw": include_raw 
+        "include_raw": include_raw,
+        "rebalance_offset": rebalance_offset,
+        "cashflow_offset": cashflow_offset
     }
     
     # Sort keys for deterministic JSON
@@ -75,10 +78,12 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         "adj_inflation": False,
         "cashflow": cashflow,
         "cashflow_freq": cashfreq,
+        "cashflow_offset": cashflow_offset,
         "rolling_window": rolling,
         "backtests": [{
             "invest_dividends": invest_div,
             "rebalance_freq":   rebalance,
+            "rebalance_offset": rebalance_offset,
             "allocation":       allocation,
             "drag": 0,
             "absolute_dev": 0,

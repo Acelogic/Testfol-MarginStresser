@@ -1,11 +1,11 @@
-# NDX Mega Strategy Configuration
+import os
 
 # --- General ---
-DOWNLOAD_DIR = "downloads"
-COMPONENTS_FILE = "nasdaq_components.csv"
-WEIGHTS_FILE = "nasdaq_quarterly_weights.csv"
-CHANGES_FILE = "nasdaq_changes.csv"
-PRICE_CACHE_FILE = "prices_cache.pkl"
+DOWNLOAD_DIR = os.path.join(os.path.dirname(__file__), "downloads")
+COMPONENTS_FILE = os.path.join(os.path.dirname(__file__), "nasdaq_components.csv")
+WEIGHTS_FILE = os.path.join(os.path.dirname(__file__), "nasdaq_quarterly_weights.csv")
+CHANGES_FILE = os.path.join(os.path.dirname(__file__), "nasdaq_changes.csv")
+PRICE_CACHE_FILE = os.path.join(os.path.dirname(__file__), "prices_cache.pkl")
 BENCHMARK_TICKER = "^NDX"
 
 # --- Common Methodology Constants ---

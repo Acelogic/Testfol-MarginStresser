@@ -317,8 +317,11 @@ def render_asset_explorer():
 
     st.markdown("###  Periodic Table of Investment Returns")
     
+    # Fix mixed types warnings
+    df_display.columns = df_display.columns.astype(str)
+    
     st.dataframe(
-        df_display.style.applymap(color_cells),
+        df_display.style.map(color_cells),
         use_container_width=True,
         height=(n_assets + 1) * 35 + 50 
     )
