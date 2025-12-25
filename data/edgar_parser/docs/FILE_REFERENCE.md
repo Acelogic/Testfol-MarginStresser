@@ -165,8 +165,8 @@ MEGA1_BUFFER_THRESHOLD = 0.50   # Buffer zone for quarterly rebal
 MEGA1_SINGLE_STOCK_CAP = 0.35   # Max 35% per stock
 
 # NDX Mega 2.0 Constants
-MEGA2_TARGET_THRESHOLD = 0.40   # Top 40% cumulative weight
-MEGA2_BUFFER_THRESHOLD = 0.45   # Buffer zone for quarterly rebal
+MEGA2_TARGET_THRESHOLD = 0.47   # Top 47% cumulative weight
+MEGA2_BUFFER_THRESHOLD = 0.50   # Buffer zone for quarterly rebal
 MEGA2_SINGLE_STOCK_CAP = 0.30   # Max 30% per stock
 MEGA2_MIN_CONSTITUENTS = 9      # Minimum security rule
 
