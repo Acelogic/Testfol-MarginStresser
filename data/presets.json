@@ -406,5 +406,26 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "TQQQ/GLD",
+        "allocation": [
+            {
+                "Ticker": "QQQSIM?L=3",
+                "Weight %": 60.0,
+                "Maint %": 75.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 40.0,
+                "Maint %": 15.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]
