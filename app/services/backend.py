@@ -7,9 +7,9 @@ import numpy as np
 import datetime as dt
 
 # Import existing logic
-from . import testfol_api as api
-from app.core import shadow_backtest
-from app.core import tax_library
+from app.services import testfol_api as api
+from app.services import xray_engine
+from app.core import shadow_backtest, tax_library, monte_carlo
 
 app = FastAPI()
 
@@ -28,89 +28,159 @@ class Allocation(BaseModel):
 
 class BacktestRequest(BaseModel):
     tickers: Dict[str, float] # { "UPRO": 100 }
-    start_val: float
     margin_debt: float
-    margin_rate: float # Annual %
+    margin_rate: float = 8.0 # Annual % (legacy/fixed)
+    margin_config: Optional[Dict] = None # { "type": "Tiered", "tiers": [...] }
+    
     start_date: str # "2010-01-01"
-    end_date: str # "2025-01-01" or today
+    end_date: Optional[str] = None # "2025-01-01" or today
     rebalance_freq: str = "Quarterly"
+    
+    # Global Capital & Cashflow
     cashflow: float = 0.0
     cashflow_freq: str = "Monthly"
-    state_tax: float = 0.0
-    filing_status: str = "Single"
-    state_tax: float = 0.0
-    filing_status: str = "Single"
+    invest_div: bool = True
+    pay_down_margin: bool = False
+
+    # Tax Configuration
+    pay_tax_mode: str = "None" # "None", "Cash", "Margin"
     income: float = 100000
+    filing_status: str = "Single"
+    state_tax_rate: float = 0.0
+    tax_method: str = "2025_fixed"
+    use_std_deduction: bool = True
+    
     maintenance_margin: float = 0.25
+    pm_enabled: bool = False
+
+class XRayRequest(BaseModel):
+    portfolio: Dict[str, float] # { "QQQ": 0.5, "AAPL": 0.5 }
+    portfolio_name: str = "Portfolio"
+
+class MonteCarloRequest(BaseModel):
+    returns: List[float]
+    n_sims: int = 1000
+    n_years: int = 10
+    initial_val: float = 10000.0
+    monthly_cashflow: float = 0.0
+    block_size: int = 1
 
 @app.get("/")
 def health_check():
     return {"status": "ok", "service": "Margin Stresser API"}
 
+@app.post("/xray")
+def run_xray(req: XRayRequest):
+    try:
+        # Expected allocation is {ticker: fractional_weight}
+        xray_data = xray_engine.compute_xray(req.portfolio)
+        return {
+            "portfolio_name": req.portfolio_name,
+            "holdings": xray_data.to_dict(orient="records") if not xray_data.empty else []
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/monte_carlo")
+def run_monte_carlo(req: MonteCarloRequest):
+    try:
+        print(f"DEBUG: Running Monte Carlo for returns list of length {len(req.returns)}")
+        daily_rets = pd.Series(req.returns)
+        mc_results = monte_carlo.run_monte_carlo(
+            daily_rets,
+            n_sims=req.n_sims,
+            n_years=req.n_years,
+            initial_val=req.initial_val,
+            monthly_cashflow=req.monthly_cashflow,
+            block_size=req.block_size
+        )
+        
+        # Safe float conversion for JSON metrics
+        metrics = {}
+        for k, v in mc_results["metrics"].items():
+            try:
+                metrics[k] = float(v) if isinstance(v, (np.float64, np.float32, np.integer)) else v
+            except:
+                metrics[k] = str(v)
+        
+        return {
+            "metrics": metrics,
+            "percentiles": mc_results["percentiles"].fillna(0).to_dict(orient="list"),
+            "p10": mc_results["percentiles"]["P10"].tolist(),
+            "p50": mc_results["percentiles"]["Median"].tolist(),
+            "p90": mc_results["percentiles"]["P90"].tolist()
+        }
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/run_stress_test")
 def run_stress_test(req: BacktestRequest):
     try:
-        # 1. Run Shadow Backtest (Price Fetching + Tax Lots)
-        # Note: shadow_backtest expects allocation as dict {ticker: amount} if using value, 
-        # but here we pass weights. run_shadow_backtest docstring says allocation is dict.
-        # Let's verify input. 
-        
-        # shadow_backtest.run_shadow_backtest params:
-        # allocation (dict), start_val, start_date, end_date ...
-        
-        trades_df, pl_by_year, comp_df, unrealized, logs = shadow_backtest.run_shadow_backtest(
-            allocation=req.tickers,
-            start_val=req.start_val,
-            start_date=req.start_date,
-            end_date=req.end_date if req.end_date else str(dt.date.today()),
-            cashflow=req.cashflow,
-            cashflow_freq=req.cashflow_freq,
-            rebalance_freq=req.rebalance_freq
-        )
-        
-        if comp_df.empty:
-            raise HTTPException(status_code=400, detail="Backtest failed (no data)")
-            
-        # 2. Fetch Backtest Data (Main Curve)
-        print(f"DEBUG: Fetching backtest for {req.tickers} from {req.start_date} to {req.end_date}")
-        
-        try:
-            port_series, stats, extra = api.fetch_backtest(
-                start_date=req.start_date,
-                end_date=req.end_date if req.end_date else str(dt.date.today()),
-                start_val=req.start_val,
-                cashflow=req.cashflow,
-                cashfreq=req.cashflow_freq,
-                rolling=36,
-                invest_div=True,
-                rebalance=req.rebalance_freq,
-                allocation=req.tickers
-            )
-        except Exception as e:
-            print("ERROR in fetch_backtest:")
-            import requests
-            if isinstance(e, requests.exceptions.HTTPError):
-                 print(f"HTTP Error: {e}")
-                 if e.response is not None:
-                     print(f"Response Text: {e.response.text}")
-            raise e
 
         # 3. Simulate Margin
         # simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct)
         # Port series is required.
         
+        # 1. Fetch Backtest Data (Main Curve)
+        # Use broadest possible window, then simulate
+        print(f"DEBUG: Running stress test for {req.tickers}")
+        
+        try:
+            # We use Broad Start to capture historical context for tax/margin
+            port_series, stats, extra = api.fetch_backtest(
+                start_date=req.start_date,
+                end_date=req.end_date if req.end_date else str(dt.date.today()),
+                start_val=10000.0, # Scale to standard for calculation
+                cashflow=req.cashflow if req.cashflow_freq != 'Yearly' else 0, # Handle yearly injection outside if needed
+                cashfreq=req.cashflow_freq,
+                rolling=1,
+                invest_div=req.invest_div,
+                rebalance=req.rebalance_freq,
+                allocation=req.tickers
+            )
+        except Exception as e:
+            print(f"ERROR in fetch_backtest: {e}")
+            raise HTTPException(status_code=400, detail=f"Data fetch failed: {str(e)}")
+
+        # 2. Simulate Margin
+        # Handle Hierarchical/Tiered Margin Config
+        margin_input = req.margin_rate
+        if req.margin_config:
+            margin_input = req.margin_config
+
         loan_series, equity, equity_pct, usage_pct, _ = api.simulate_margin(
             port=port_series,
             starting_loan=req.margin_debt,
-            rate_annual=req.margin_rate,
-            draw_monthly=0, # Assuming draw is handled via cashflow param in fetch_backtest? No.
+            rate_annual=margin_input,
+            draw_monthly=0, # Fixed 0 for now as draw is usually handled via cashflow
             maint_pct=req.maintenance_margin
         )
+
+        # 3. Run Shadow Backtest for Taxes & Detailed Logs
+        tax_cfg = {
+            "method": req.tax_method,
+            "other_income": req.income,
+            "filing_status": req.filing_status,
+            "state_tax_rate": req.state_tax_rate,
+            "use_std_deduction": req.use_std_deduction
+        }
+
+        # run_shadow_backtest returns: trades_df, pl_by_year, composition_df, unrealized, logs, portfolio_series, twr_series (7 values)
+        trades_df, pl_by_year, comp_df, unrealized, logs, _, _ = shadow_backtest.run_shadow_backtest(
+            allocation=req.tickers,
+            start_val=10000.0,
+            start_date=req.start_date,
+            end_date=req.end_date if req.end_date else str(dt.date.today()),
+            cashflow=req.cashflow,
+            cashflow_freq=req.cashflow_freq,
+            rebalance_freq=req.rebalance_freq,
+            tax_config=tax_cfg,
+            pay_down_margin=req.pay_down_margin
+        )
         
-        # 3. Assemble Response
-        # Convert Series to JSON-friendly list
-        # Dates, Equity, Loan, Margin Usage
-        
+        # 4. Assemble Response
         df_result = pd.DataFrame({
             "Portfolio": port_series,
             "Equity": equity,
@@ -118,7 +188,7 @@ def run_stress_test(req: BacktestRequest):
             "MarginUsage": usage_pct
         }).fillna(0)
         
-        # 4. Calculate Monthly Returns
+        # 5. Calculate Monthly Returns
         port = df_result["Portfolio"]
         monthly_data = port.resample("ME").last()
         monthly_returns = monthly_data.pct_change() * 100

@@ -11,7 +11,7 @@ from app.core import run_shadow_backtest, calculations, tax_library
 from app.core import monte_carlo # Import Monte Carlo module
 from app.services import testfol_api as api
 from app.reporting import report_generator
-from app.ui import charts
+from app.ui import charts, xray_view
 
 def render(results, config, portfolio_name=""):
     """
@@ -387,7 +387,7 @@ def render(results, config, portfolio_name=""):
             
     st.markdown("---")
     
-    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔮 Monte Carlo", "🔧 Debug"])
+    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_xray, res_tab_mc, res_tab_debug = st.tabs(["📈 Chart", "📊 Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔍 X-Ray", "🔮 Monte Carlo", "🔧 Debug"])
     
     with res_tab_tax:
         st.markdown("### Annual Tax Impact Analysis")
@@ -803,12 +803,25 @@ When yFinance data starts later than your chart, the tax engine initializes your
             pay_tax_margin=pay_tax_margin
         )
         
+    with res_tab_xray:
+        if not composition_df.empty:
+            # Get the latest allocation from composition_df
+            latest_date = composition_df['Date'].max()
+            latest_df = composition_df[composition_df['Date'] == latest_date]
+            
+            total_val = latest_df['Value'].sum()
+            if total_val > 0:
+                alloc_map = dict(zip(latest_df['Ticker'], latest_df['Value'] / total_val))
+                xray_view.render_xray(alloc_map, portfolio_name=portfolio_name)
+            else:
+                st.info("No allocation data found for X-Ray.")
+        else:
+            st.info("No composition data available for X-Ray.")
+
     with res_tab_mc:
         st.markdown("### 🔮 Monte Carlo Simulation (Historical Bootstrap)")
         st.info("Simulating **10-year future performance** based on your strategy's historical daily volatility. Assumes reinvestment of all returns.")
         
-        
-        # 1. Get Returns Data source
         # Priority:
         # A. Extended Portfolio Data (api_port_series) - Best for Long History (ZROZSIM back to 1960s)
         # B. TWR Series (Shadow Backtest) - Best for Accuracy (excludes cashflows) but might be short (2009+) in Hybrid Mode
