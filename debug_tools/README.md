@@ -1,7 +1,5 @@
 # Debug Tools Reference
 
-**Live App**: [testfol-marginstresser.streamlit.app](https://testfol-marginstresser.streamlit.app/)
-
 This directory contains debugging and testing utilities for the Testfol MarginStresser project, organized by category.
 
 ## Directory Structure
