@@ -99,7 +99,7 @@ def run_stress_test(req: BacktestRequest):
         # simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct)
         # Port series is required.
         
-        loan_series, equity, equity_pct, usage_pct = api.simulate_margin(
+        loan_series, equity, equity_pct, usage_pct, _ = api.simulate_margin(
             port=port_series,
             starting_loan=req.margin_debt,
             rate_annual=req.margin_rate,

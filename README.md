@@ -8,6 +8,13 @@ This tool allows you to simulate leveraged portfolio performance over historical
 
 **Powered by [testfol.io](https://testfol.io)** - The application uses the Testfol API for high-quality historical total return data and uses a local "Shadow Engine" for advanced tax accounting.
 
+## Key Features
+
+-   **Variable & Tiered Margin Rates**: Simulate realistic borrowing costs using historical **Fed Funds Rate** data (from 1954) or **IBKR Pro-style tiers**.
+-   **Advanced Margin Stress Testing**: Simulate margin loans, maintenance requirements, and margin calls with high fidelity.
+-   **Tax-Aware Backtesting**: Simulates tax impact on equity (FIFO/LIFO/HIFO) and drag from tax payments.
+-   **Monte Carlo Simulation**: Stress test your portfolio against thousands of random market paths.
+
 ## Documentation Navigation
 For specific guides, please refer to the detailed documentation:
 - **[User Guide](docs/user_guide.md)**: Configuration, parameters, and how to run your first simulation.
@@ -62,7 +69,7 @@ graph TB
 | **Macro Engine** | `app/services/testfol_api.py` | Fetches total return series from testfol.io. Acts as "Market Truth" source. |
 | **Data Service** | `app/services/data_service.py` | Handles complex data fetching, including `NDXMEGASIM` splicing (CSV + API). |
 | **Shadow Engine** | `app/core/shadow_backtest.py` | Reconstructs portfolio trade-by-trade. Tracks every tax lot (date, cost basis, quantity). Calculates ST vs LT gains. |
-| **Margin Simulator** | `testfol_charting.py` | Applies margin loan model. Calculates daily interest, equity %, margin call risk. |
+| **Margin Simulator** | `app/services/testfol_api.py` | Applies margin loan logical models (Fixed, Variable, Tiered). Calculates daily interest, equity %, and margin calls. |
 
 
 

@@ -33,7 +33,11 @@ The sidebar contains all the configuration options for your backtest.
     -   *Pay from Cash*: Sell assets to pay taxes (reduces compounding).
     -   *Pay with Margin*: Borrow to pay taxes (increases leverage).
 - **Loan Config**: Set starting loan or initial equity %.
-- **Rates**: Annual interest rate and default maintenance requirement.
+- **Margin Rate Model**: Select how interest is calculated:
+    -   **Tiered (Blended)**: (Default) Uses IBKR Pro-style tiered rates, blending different spreads based on your loan size against the historical Fed Funds benchmark.
+    -   **Variable (Fed + Spread)**: Uses the historical **Fed Funds Rate** + a fixed spread.
+    -   **Fixed Annual %**: Uses a constant interest rate.
+- **Maintenance**: Set the default maintenance requirement.
 
 #### ⚙️ Settings
 - **Chart Style**: Switch between "Classic", "Dashboard", and "Candlestick".
