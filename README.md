@@ -1,5 +1,7 @@
 # Testfol Margin Stresser
 
+**Live App**: [testfol-marginstresser.streamlit.app](https://testfol-marginstresser.streamlit.app/)
+
 A powerful Streamlit-based GUI application for backtesting portfolio strategies with high-fidelity margin trading and tax simulation.
 
 ## Overview
