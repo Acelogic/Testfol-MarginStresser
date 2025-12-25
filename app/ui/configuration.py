@@ -244,7 +244,7 @@ def render():
                 p["rebalance"]["day"] = 1
 
         st.markdown("##### 🥧 Asset Allocation")
-        p["alloc_df"] = st.data_editor(
+        new_alloc_df = st.data_editor(
             p["alloc_df"],
             key=f"editor_{p['id']}",
             num_rows="dynamic",
@@ -255,6 +255,12 @@ def render():
             },
             use_container_width=True
         )
+
+        # Explicitly handle state updates to prevent reversion bugs
+        # If the editor output differs from our current state, update and force a rerun
+        if not new_alloc_df.equals(p["alloc_df"]):
+            p["alloc_df"] = new_alloc_df
+            st.rerun()
 
         # Validation & Metrics
         try:
