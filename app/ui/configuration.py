@@ -300,6 +300,32 @@ def render():
         config['pay_tax_margin'] = (tax_sim_mode == "Pay with Margin")
         config['pay_tax_cash'] = (tax_sim_mode == "Pay from Cash")
         
+        with st.expander("Tax Configuration", expanded=True):
+            c_tax1, c_tax2, c_tax3 = st.columns(3)
+            with c_tax1:
+                config['other_income'] = utils.num_input("Annual Income ($)", "other_income", 100000.0, 5000.0)
+            with c_tax2:
+                config['filing_status'] = st.selectbox("Filing Status", ["Single", "Married Filing Jointly", "Head of Household", "Married Filing Separately"], index=0, key="filing_status")
+            with c_tax3:
+                config['state_tax_rate'] = utils.num_input("State Tax Rate (%)", "state_tax_rate", 0.0, 0.1)
+
+            st.caption("Federal tax brackets are automatically applied based on income & filing status.")
+            
+            tax_method_selection = st.radio(
+                "Tax Calculation Method",
+                ["Smart (Historical Brackets)", "Max (Top Rate)", "Fixed (2025 Rates)"],
+                index=0,
+                horizontal=True,
+                help="Smart: Uses historical inclusion rates. Max: Flat historical max rate. Fixed: Modern 0/15/20% for all years."
+            )
+            
+            if "Smart" in tax_method_selection:
+                 config['tax_method'] = "historical_smart"
+            elif "Max" in tax_method_selection:
+                 config['tax_method'] = "historical_max_rate"
+            else:
+                 config['tax_method'] = "2025_fixed"
+        
         # Disable margin inputs if "Pay from Cash" is selected (per user request)
         # This implies a "Cash Only" mindset for this mode
         margin_disabled = config['pay_tax_cash']

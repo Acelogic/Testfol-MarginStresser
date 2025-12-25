@@ -3,17 +3,18 @@ import argparse
 import sys
 import os
 from datetime import datetime
+import config
 
-# Configuration matching backtest_ndx_mega.py
-WEIGHTS_FILE = "nasdaq_quarterly_weights.csv"
-MEGA_TARGET_THRESHOLD = 0.47
-MEGA_BUFFER_THRESHOLD = 0.50
-SINGLE_STOCK_CAP = 0.35
+# Configuration imported from config.py
+WEIGHTS_FILE = config.WEIGHTS_FILE
+MEGA_TARGET_THRESHOLD = config.MEGA1_TARGET_THRESHOLD
+MEGA_BUFFER_THRESHOLD = config.MEGA1_BUFFER_THRESHOLD
+SINGLE_STOCK_CAP = config.MEGA1_SINGLE_STOCK_CAP
 
-# Configuration matching backtest_ndx_mega2.py
-MEGA2_TARGET_THRESHOLD = 0.40
-SINGLE_STOCK_CAP2 = 0.30
-MIN_CONSTITUENTS2 = 9
+# Mega 2.0 Settings
+MEGA2_TARGET_THRESHOLD = config.MEGA2_TARGET_THRESHOLD
+SINGLE_STOCK_CAP2 = config.MEGA2_SINGLE_STOCK_CAP
+MIN_CONSTITUENTS2 = config.MEGA2_MIN_CONSTITUENTS
 
 def apply_caps(w_series, cap, total_target=1.0):
     """
@@ -252,10 +253,6 @@ def main():
         for _, row in m2.sort_values('FinalWeight', ascending=False).iterrows():
             print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
         print("-" * 75)
-
-if __name__ == "__main__":
-    main()
-
 
 if __name__ == "__main__":
     main()
