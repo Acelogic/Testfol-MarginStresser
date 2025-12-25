@@ -169,7 +169,7 @@ def render(results, config, portfolio_name=""):
     eff_rate = 0.0 if pay_tax_cash else rate_annual
     eff_draw = 0.0 if pay_tax_cash else draw_monthly
     
-    loan_series, equity_series, equity_pct_series, usage_series = api.simulate_margin(
+    loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = api.simulate_margin(
         port_series, eff_loan,
         eff_rate, eff_draw, wmaint,
         tax_series=sim_tax_series,
@@ -181,7 +181,8 @@ def render(results, config, portfolio_name=""):
         "loan_series": loan_series,
         "equity_series": equity_series,
         "usage_series": usage_series,
-        "equity_pct_series": equity_pct_series
+        "equity_pct_series": equity_pct_series,
+        "effective_rate_series": effective_rate_series
     })
             
     
@@ -258,9 +259,9 @@ def render(results, config, portfolio_name=""):
     loan_resampled = utils.resample_data(loan_series, timeframe, method="last")
     usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
     equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
+    effective_rate_resampled = utils.resample_data(effective_rate_series, timeframe, method="last")
     
-    usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
-    equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
+
     
     st.caption(f"📅 **Backtest Range:** {results.get('sim_range', 'N/A')}")
     m1, m2, m3, m4, m5 = st.columns(5)
@@ -486,7 +487,7 @@ When yFinance data starts later than your chart, the tax engine initializes your
             else:
                 # Margin Mode: Market Value = Pre-Tax Net Equity (Net Equity if NO tax debt existed)
                 # We reuse the simulate_margin function but with tax_series=None
-                gross_margin_loan, gross_margin_equity, _, _ = api.simulate_margin(
+                gross_margin_loan, gross_margin_equity, _, _, _ = api.simulate_margin(
                     port_series, starting_loan, rate_annual, draw_monthly, wmaint,
                     tax_series=None, repayment_series=repayment_series
                 )
@@ -570,13 +571,14 @@ When yFinance data starts later than your chart, the tax engine initializes your
     with res_tab_chart:
         if chart_style == "Classic (Combined)":
             # Default series options for classic view
-            series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %", "Equity %"]
+            series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %"]
             charts.render_classic_chart(
                 tax_adj_port_series, final_adj_series, loan_series, 
                 tax_adj_equity_pct_series, tax_adj_usage_series, 
                 series_opts, log_scale,
                 bench_series=bench_resampled,
-                comparison_series=comp_resampled
+                comparison_series=comp_resampled,
+                effective_rate_series=effective_rate_series
             )
         elif chart_style == "Classic (Dashboard)":
             log_opts = config.get('log_opts', {})

@@ -104,7 +104,15 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     except Exception as e:
         raise e
 
-    print(f"DEBUG: API Success {req_hash} (Msg Size: {len(r.content)} bytes)")
+
+    def _format_size(size_bytes):
+        for unit in ['B', 'KB', 'MB', 'GB']:
+            if size_bytes < 1024.0:
+                return f"{size_bytes:.2f} {unit}"
+            size_bytes /= 1024.0
+        return f"{size_bytes:.2f} TB"
+
+    print(f"DEBUG: API Success {req_hash} (Msg Size: {_format_size(len(r.content))})")
     resp = r.json()
     
     if return_raw:
@@ -150,37 +158,19 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
     """
     Simulates margin loan and calculates equity/usage metrics.
     """
-    rate_daily = (rate_annual / 100) / 252
-    
     # 1. Create Cashflow Series (Draws + Taxes)
     # Initialize with zeros
     cashflows = pd.Series(0.0, index=port.index)
     
     # Add Monthly Draws
     if draw_monthly > 0:
-        # Identify month start/changes
-        # We want to add draw at the first available date of each new month
-        # Use numpy for speed and to avoid index alignment issues
         months = port.index.month.values
-        # Compare with shifted version (roll)
-        # np.roll shifts elements. element at 0 moves to 1.
-        # We want to compare i with i-1.
-        # shifted = np.roll(months, 1)
-        # changes = months != shifted
-        # changes[0] = False # First element is boundary condition, ignore or handle.
-        # Original logic: prev_m initialized to first month. Loop starts at 0.
-        # So first day: month == prev_m. No draw.
-        # So changes[0] should be False.
-        
         month_changes = months != np.roll(months, 1)
-        month_changes[0] = False # Explicitly ignore first day (start of sim)
-        
-        # cashflows is a Series. We can index it with a boolean array.
+        month_changes[0] = False # Explicitly ignore first day
         cashflows.values[month_changes] += draw_monthly
 
     # Add Tax Payments
     if tax_series is not None:
-        # Align tax_series to port.index, filling missing with 0
         aligned_taxes = tax_series.reindex(port.index, fill_value=0.0)
         cashflows += aligned_taxes
         
@@ -188,41 +178,114 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
     if repayment_series is not None:
         aligned_repayments = repayment_series.reindex(port.index, fill_value=0.0)
         cashflows -= aligned_repayments
+
+    # 2. Determine Rate Logic
+    # Legacy: rate_annual is a float -> Fixed Rate
+    # New: rate_annual can be a dict -> Margin Model
+    
+    use_vectorized = True
+    rate_factor = 0.0 # Will be array or scalar
+    effective_rate_series = pd.Series(0.0, index=port.index) # To store annualized % for display
+    
+    if isinstance(rate_annual, dict):
+        model = rate_annual
+        mode = model.get("type", "Fixed")
         
-    # 2. Calculate Loan Balance (Vectorized)
-    # Recurrence: L_t = L_{t-1} * (1 + r) + C_t
-    # Solution: L_t = L_0 * (1+r)^t + Sum(C_i * (1+r)^(t-i))
-    #               = (1+r)^t * [ L_0 + Sum(C_i / (1+r)^i) ]
-    # Note: The C_i term usually assumes cashflow happens at end of period?
-    # Original loop:
-    #   loan *= 1 + rate_daily
-    #   loan += cashflow
-    # This means interest is applied to previous balance, THEN cashflow is added.
-    # So L_t = L_{t-1} * (1+r) + C_t
+        if mode == "Fixed":
+            r = model.get("rate_pct", 5.0)
+            rate_daily = (r / 100) / 252
+            rate_factor = 1 + rate_daily
+            effective_rate_series[:] = r
+            
+        elif mode == "Variable":
+            # Variable: Base + Spread
+            base_series = model.get("base_series", None)
+            spread = model.get("spread_pct", 1.0)
+            
+            if base_series is not None:
+                aligned_base = base_series.reindex(port.index, method='ffill').fillna(0.0)
+                daily_rates_pct = aligned_base + spread
+                daily_rates_pct = daily_rates_pct.clip(lower=0.0) 
+                
+                rate_daily_series = (daily_rates_pct / 100) / 252
+                rate_factor = 1 + rate_daily_series
+                effective_rate_series = daily_rates_pct
+            else:
+                # Fallback
+                rate_factor = 1 + (0.05 / 252)
+                effective_rate_series[:] = 5.0
+
+        elif mode == "Tiered":
+            use_vectorized = False
+            tiers = model.get("tiers", []) 
+            base_series = model.get("base_series", None)
+            
+            if base_series is not None:
+                aligned_base = base_series.reindex(port.index, method='ffill').fillna(0.0)
+            else:
+                aligned_base = pd.Series(5.0, index=port.index)
+            
+            # --- ITERATIVE CALCULATION FOR TIERED RATES ---
+            loan_vals = np.zeros(len(port))
+            eff_rate_vals = np.zeros(len(port)) # Store effective rate
+            current_loan = starting_loan
+            
+            base_vals = aligned_base.values
+            cf_vals = cashflows.values
+            
+            for t in range(len(port)):
+                daily_base_decimal = (base_vals[t] / 100) / 252
+                interest_accrued = 0.0
+                calc_balance = current_loan
+                
+                # Calculate Blended Interest
+                for i, (limit, spread) in enumerate(tiers):
+                    next_limit = tiers[i+1][0] if i+1 < len(tiers) else float('inf')
+                    chunk = min(max(0, calc_balance - limit), next_limit - limit)
+                    
+                    if chunk > 0:
+                        tier_rate_daily = daily_base_decimal + ((spread/100)/252)
+                        interest_accrued += chunk * tier_rate_daily
+                    
+                    if calc_balance < next_limit:
+                        break
+                
+                # Back-calculate effective annualized rate for this day
+                # Rate = (Interest / Balance) * 252 * 100
+                if current_loan > 1e-9:
+                     day_rate = (interest_accrued / current_loan)
+                     eff_rate_vals[t] = day_rate * 252 * 100
+                else:
+                     # If no loan, what is the rate? Technically undefined or Base + lowest spread.
+                     # Let's show Base + Tier 1 spread as 'potential' rate
+                     base_s = tiers[0][1] if tiers else 0
+                     eff_rate_vals[t] = base_vals[t] + base_s
+                
+                # Update Loan
+                current_loan = current_loan + interest_accrued + cf_vals[t]
+                loan_vals[t] = current_loan
+                
+            loan_series = pd.Series(loan_vals, index=port.index)
+            effective_rate_series = pd.Series(eff_rate_vals, index=port.index)
+            
+    else:
+        # Legacy Float
+        r = rate_annual
+        rate_daily = (r / 100) / 252
+        rate_factor = 1 + rate_daily
+        effective_rate_series[:] = r
     
-    # Cumulative Interest Factor (1+r)^t
-    # We use cumprod.
-    # However, for constant rate, (1+r)^t is cleaner.
-    # But let's use cumprod to be generic (if we ever want variable rates).
-    rate_factor = 1 + rate_daily
-    # cum_rate[t] = (1+r)^(t+1) if we just do cumprod?
-    # We want factor[t] such that L_t part 1 = L_0 * factor[t]
-    # Loop 0: L_0 -> L_0 * (1+r) + C_0.
-    # So factor at t=0 should be (1+r).
-    cum_rate = pd.Series(rate_factor, index=port.index).cumprod()
-    
-    # Discounted Cashflows: C_i / (1+r)^(i+1) ?
-    # Let's trace t=0: L = L_0*(1+r) + C_0.
-    # Formula: L_t = (1+r)^(t+1) * [ L_0 + Sum( C_i / (1+r)^(i+1) ) ]
-    # Let's check t=0: (1+r)^1 * [ L_0 + C_0 / (1+r)^1 ] = L_0(1+r) + C_0. Correct.
-    
-    discounted_cashflows = cashflows / cum_rate
-    cum_discounted_cashflows = discounted_cashflows.cumsum()
-    
-    loan_series = cum_rate * (starting_loan + cum_discounted_cashflows)
+    if use_vectorized:
+        cum_rate = pd.Series(rate_factor, index=port.index).cumprod()
+        discounted_cashflows = cashflows / cum_rate
+        cum_discounted_cashflows = discounted_cashflows.cumsum()
+        loan_series = cum_rate * (starting_loan + cum_discounted_cashflows)
+
     loan_series.name = "Loan"
+    effective_rate_series.name = "Margin Rate %"
+
     
     equity = port - loan_series
     equity_pct = (equity / port).rename("Equity %")
     usage_pct = (loan_series / (port * (1 - maint_pct))).rename("Margin usage %")
-    return loan_series, equity, equity_pct, usage_pct
+    return loan_series, equity, equity_pct, usage_pct, effective_rate_series

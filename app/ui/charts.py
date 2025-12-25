@@ -151,7 +151,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
 def render_classic_chart(port_series, final_adj_series, loan_series, 
                         equity_pct_series, usage_series, 
                         series_opts, log_scale,
-                        bench_series=None, comparison_series=None):
+                        bench_series=None, comparison_series=None, effective_rate_series=None):
     """
     Renders the classic line chart with toggleable traces.
     """
@@ -230,6 +230,19 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             line=dict(color='#148F77', width=1),
             yaxis="y2",
             hovertemplate="Equity %: %{y:.1%}<extra></extra>"
+        ))
+        
+    if effective_rate_series is not None and not effective_rate_series.empty:
+        # Check if rate is in % (e.g. 5.0) or decimal (0.05). API returns %.
+        # Convert to decimal for consistent Y-axis with other percentages
+        rate_decimal = effective_rate_series / 100.0
+        fig.add_trace(go.Scatter(
+            x=effective_rate_series.index, y=rate_decimal,
+            name="Margin Rate %",
+            line=dict(color='#FF00FF', width=1, dash='dot'), # Magenta
+            yaxis="y2",
+
+            hovertemplate="Rate: %{y:.2%}<extra></extra>" 
         ))
 
     fig.update_layout(

@@ -324,8 +324,67 @@ def render():
             
         with c2:
             st.markdown("##### Rates & Maintenance")
-            config['rate_annual'] = utils.num_input("Interest % per year", "rate_annual", 8.0, 0.5, disabled=margin_disabled)
-            config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0) # Draws allowed in cash mode? Assuming yes.
+
+            
+            margin_mode = st.selectbox("Margin Rate Model", ["Fixed", "Variable (Fed + Spread)", "Tiered (Blended)"], 
+                                      index=2,
+                                      help="**Fixed**: Constant annual rate.\n**Variable**: Fed Funds Rate (Daily) + User Spread.\n**Tiered**: Blended rate based on loan size (Base + Tiered Spread).",
+                                      disabled=margin_disabled)
+            
+            margin_config = {}
+            if margin_mode == "Fixed":
+                margin_config = {
+                    "type": "Fixed",
+                    "rate_pct": utils.num_input("Annual Interest %", "rate_annual", 8.0, 0.5, disabled=margin_disabled)
+                }
+            elif margin_mode == "Variable (Fed + Spread)":
+                from app.services import data_service
+                fed_series = data_service.get_fed_funds_rate()
+                
+                # Show Preview
+                curr_rate = fed_series.iloc[-1] if fed_series is not None and not fed_series.empty else 0.0
+                st.caption(f"Current Base: **{curr_rate:.2f}%** (Fed Effective)")
+                
+                spread = utils.num_input("Spread over Base %", "spread_pct", 1.5, 0.1, disabled=margin_disabled)
+                
+                margin_config = {
+                    "type": "Variable",
+                    "base_series": fed_series,
+                    "spread_pct": spread
+                }
+            else: # Tiered
+                from app.services import data_service
+                fed_series = data_service.get_fed_funds_rate()
+
+                curr_rate = fed_series.iloc[-1] if fed_series is not None and not fed_series.empty else 0.0
+                st.caption(f"Current Base: **{curr_rate:.2f}%**")
+                
+                st.markdown("**IBKR Pro Spreads (Blended)**")
+                # IBKR Pro Tiers: 0-100k, 100k-1M, 1M-50M, >50M
+                c_t1, c_t2 = st.columns(2)
+                with c_t1:
+                    t1_spread = st.number_input("Tier 1 (<100k) %", value=1.5, step=0.1, key="t1_spread")
+                    t3_spread = st.number_input("Tier 3 (1M-50M) %", value=0.75, step=0.05, key="t3_spread")
+                with c_t2:
+                    t2_spread = st.number_input("Tier 2 (100k-1M) %", value=1.0, step=0.1, key="t2_spread")
+                    t4_spread = st.number_input("Tier 4 (>50M) %", value=0.5, step=0.05, key="t4_spread")
+                
+                tiers = [
+                    (0, t1_spread),
+                    (100000, t2_spread),
+                    (1000000, t3_spread),
+                    (50000000, t4_spread)
+                ]
+                
+                margin_config = {
+                    "type": "Tiered",
+                    "base_series": fed_series,
+                    "tiers": tiers
+                }
+            
+            config['rate_annual'] = margin_config
+            
+            config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
             config['default_maint'] = utils.num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
             
             # Portfolio Margin Toggle

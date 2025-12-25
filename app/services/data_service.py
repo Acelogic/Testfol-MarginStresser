@@ -118,3 +118,47 @@ def fetch_component_data(tickers, start_date, end_date):
             st.warning(f"Failed to fetch data for {ticker}: {e}")
             
     return combined_prices
+
+import time
+@st.cache_data
+def get_fed_funds_rate():
+    """
+    Fetches historical Fed Funds Rate (daily) from FRED or local cache.
+    Returns: pd.Series with DatetimeIndex and rate as float (e.g. 5.25 for 5.25%)
+    """
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data")
+    file_path = os.path.join(data_dir, "FEDFUNDS.csv")
+    
+    # Download if missing or old (>30 days)
+    should_download = True
+    if os.path.exists(file_path):
+        mtime = os.path.getmtime(file_path)
+        if (time.time() - mtime) < (30 * 86400):
+            should_download = False
+            
+    if should_download:
+        try:
+            url = "https://fred.stlouisfed.org/graph/fredgraph.csv?id=FEDFUNDS"
+            # Fake User-Agent to avoid 403
+            headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
+            import requests
+            r = requests.get(url, headers=headers)
+            r.raise_for_status()
+            with open(file_path, "wb") as f:
+                f.write(r.content)
+            print("Downloaded fresh FEDFUNDS.csv")
+        except Exception as e:
+            print(f"Failed to download FEDFUNDS: {e}. using cached if available.")
+            
+    if os.path.exists(file_path):
+        try:
+            # FRED CSV format: observation_date, FEDFUNDS
+            df = pd.read_csv(file_path, parse_dates=["observation_date"], index_col="observation_date")
+            # Resample to daily (forward fill monthlies)
+            full_idx = pd.date_range(start=df.index.min(), end=pd.Timestamp.today(), freq='D')
+            daily_series = df['FEDFUNDS'].reindex(full_idx, method='ffill')
+            return daily_series
+        except Exception as e:
+             st.error(f"Error reading FEDFUNDS.csv: {e}")
+             return None
+    return None

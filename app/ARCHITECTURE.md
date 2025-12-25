@@ -126,8 +126,9 @@ sequenceDiagram
 
 | File | Purpose | Key Functions |
 |------|---------|---------------|
-| `testfol_api.py` | API wrapper with caching for testfol.io | `fetch_backtest()` |
-| `backend.py` | Price data utilities, hybrid mode logic | `get_component_prices()` |
+| `testfol_api.py` | API wrapper & Margin Logic | `fetch_backtest()`, `simulate_margin()` |
+| `data_service.py` | Complex data sourcing (FRED, splicing) | `get_fed_funds_rate()`, `get_ticker_data()` |
+| `backend.py` | Legacy price utilities | `get_component_prices()` |
 
 ### `app/common/` - Utilities
 

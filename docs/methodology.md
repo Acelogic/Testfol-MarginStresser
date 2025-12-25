@@ -16,13 +16,29 @@ For advanced simulations (e.g., `NDXMEGASIM`), the application uses a custom **D
 ## Margin Simulation Logic
 The margin simulation is applied *on top* of the unleveraged portfolio performance returned by the API.
 
-### 1. Daily Interest Calculation
-Interest is compounded daily based on the annual interest rate provided.
+### 1. Interest Rate Models
+The application supports three distinct margin rate models to accurately simulate borrowing costs:
 
-$$ \text{Daily Rate} = (1 + \frac{\text{Annual Rate}}{100})^{1/365.25} - 1 $$
-$$ \text{Loan}_{t} = \text{Loan}_{t-1} \times (1 + \text{Daily Rate}) + \text{Cashflows} $$
+#### A. Fixed Annual %
+Uses a constant annual rate throughout the entire simulation.
+$$ \text{Daily Rate} = \frac{\text{Annual Rate}}{100} \div 252 $$
 
-*(Note: The simulation uses a geometric daily rate conversion to be precise).*
+#### B. Variable (Fed Funds + Spread)
+Simulates a floating rate loan tied to the Federal Reserve's benchmark.
+-   **Source**: St. Louis Fed (FRED) `FEDFUNDS` Effective Rate (historical monthly data back to 1954).
+-   **Logic**: The system aligns daily portfolio dates with the historical effective rate for that month.
+$$ \text{Daily Rate}_t = \frac{\text{FedFunds}_t + \text{Spread}}{100} \div 252 $$
+
+#### C. Tiered (Blended)
+Simulates "Pro" style broker pricing (e.g., IBKR) where the interest rate decreases as the loan balance increases.
+-   **Mechanism**: The calculation is **iterative** (day-by-day). The daily interest charge is a blended sum of the loan segments.
+-   **Segments** (Default):
+    1.  Loan < $100k: Base + 1.5%
+    2.  $100k - $1M: Base + 1.0%
+    3.  $1M - $50M: Base + 0.75%
+    4.  \> $50M: Base + 0.5%
+
+$$ \text{Loan}_{t} = \text{Loan}_{t-1} + \text{Interest}_t + \text{Cashflows} $$
 
 ### 2. Monthly Adjustments
 If a "Monthly Margin Draw" is configured, it is added to the loan balance on the 1st of each month.
