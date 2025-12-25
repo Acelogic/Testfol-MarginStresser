@@ -9,9 +9,8 @@ def render():
     
     st.subheader("Strategy Configuration")
     
-    tab_port, tab_margin, tab_asset, tab_xray, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "🔍 X-Ray", "⚙️ Settings"])
+    tab_port, tab_margin, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "⚙️ Settings"])
     
-    from . import xray_view
     
     config = {}
 
@@ -431,15 +430,6 @@ def render():
         # It doesn't modify the simulation config, just visualizes data.
         asset_explorer.render_asset_explorer()
 
-    with tab_xray:
-        # Look through ETFs to see underlying holdings
-        if 'alloc_df' in p and not p['alloc_df'].empty:
-            alloc_map = dict(zip(p['alloc_df']['Ticker'], p['alloc_df']['Weight %']))
-            # Convert percentage to fractional for the engine
-            alloc_map = {k: v/100.0 for k, v in alloc_map.items()}
-            xray_view.render_xray(alloc_map, portfolio_name=p['name'])
-        else:
-            st.info("Select a portfolio with assets to see the X-Ray view.")
 
     with tab_settings:
         c1, c2 = st.columns(2)
