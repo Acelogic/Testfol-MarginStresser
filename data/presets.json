@@ -121,11 +121,6 @@
                 "Maint %": 25
             },
             {
-                "Ticker": "SHy",
-                "Weight %": 20,
-                "Maint %": 25
-            },
-            {
                 "Ticker": "GLD",
                 "Weight %": 20,
                 "Maint %": 25
@@ -133,7 +128,9 @@
         ],
         "rebalance": {
             "mode": "Standard",
-            "freq": "Yearly"
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
         }
     },
     {

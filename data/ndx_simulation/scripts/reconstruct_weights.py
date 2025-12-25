@@ -4,9 +4,13 @@ import yfinance as yf
 import numpy as np
 import datetime
 import os
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
 import changes_parser
 import calendar
+import ndx_parser
 
 # Configuration
 INPUT_CSV = config.COMPONENTS_FILE
@@ -148,6 +152,7 @@ def reconstruct():
     
     # Resample prices to daily if needed (fill fwd) to handle weekend quarters
     prices = prices.ffill()
+    ndx_parser.process_files()
     
     quarters = get_rebalance_dates()
     final_rows = []

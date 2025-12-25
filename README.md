@@ -14,6 +14,7 @@ This tool allows you to simulate leveraged portfolio performance over historical
 -   **Advanced Margin Stress Testing**: Simulate margin loans, maintenance requirements, and margin calls with high fidelity.
 -   **Tax-Aware Backtesting**: Simulates tax impact on equity (FIFO/LIFO/HIFO) and drag from tax payments.
 -   **Monte Carlo Simulation**: Stress test your portfolio against thousands of random market paths.
+-   **ETF X-Ray Analyzer**: Decompsoe ETFs (including Leveraged & Simulated) into their underlying exposures.
 
 ## Documentation Navigation
 For specific guides, please refer to the detailed documentation:
@@ -184,6 +185,15 @@ The tool now includes a professional **Monte Carlo Simulation** suite to stress-
     ```bash
     streamlit run testfol_charting.py
     ```
+
+## Data Generation
+This project includes a powerful engine to reconstruct historical index data from SEC filings. If you need to regenerate the `NDXMEGASIM` or `NDXMEGA2SIM` datasets:
+
+```bash
+# Run the full reconstruction pipeline (Downloads -> Parse -> Backtest)
+python3 data/ndx_simulation/scripts/rebuild_all.py
+```
+This process uses the self-contained `data/ndx_simulation` module.
 
 ## Disclaimer
 **Educational Use Only.** This software simulates tax and margin mechanics for research. It is not a substitute for profound professional financial or tax advice.

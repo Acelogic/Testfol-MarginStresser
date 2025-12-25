@@ -3,12 +3,18 @@ import os
 # --- General ---
 # --- General ---
 # Start from 'src' directory
+# Base directory: data/ndx_simulation
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-ASSETS_DIR = os.path.join(BASE_DIR, "assets")
-RESULTS_DIR = os.path.join(BASE_DIR, "results")
-CACHE_DIR = os.path.join(BASE_DIR, "cache")
-DOWNLOAD_DIR = os.path.join(CACHE_DIR, "downloads")
-DEBUG_DIR = os.path.join(BASE_DIR, "debug")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+
+ASSETS_DIR = os.path.join(DATA_DIR, "assets")
+RESULTS_DIR = os.path.join(DATA_DIR, "results")
+CACHE_DIR = os.path.join(DATA_DIR, "cache")
+NDX_CACHE_DIR = os.path.join(CACHE_DIR, "ndx_filings")
+# Legacy alias
+DOWNLOAD_DIR = NDX_CACHE_DIR
+
+DEBUG_DIR = os.path.join(BASE_DIR, "debug") # Debug can stay at root of module
 
 COMPONENTS_FILE = os.path.join(ASSETS_DIR, "nasdaq_components.csv")
 WEIGHTS_FILE = os.path.join(RESULTS_DIR, "nasdaq_quarterly_weights.csv")
