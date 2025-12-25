@@ -3,7 +3,8 @@ import pandas as pd
 import numpy as np
 import plotly.graph_objects as go
 from app.services import testfol_api as api
-from app.common.utils import color_return
+from app.common import utils
+from concurrent.futures import ThreadPoolExecutor
 
 # Define Asset Class Universe (Proxies)
 # Using Testfol Simulated Tickers for maximum history
@@ -32,33 +33,44 @@ ASSET_COLORS = {
     "CASHX": "#50E3C2"    # Teal (Cash)
 }
 
-@st.cache_data(show_spinner="Fetching Asset History...", ttl=3600)
-def cached_fetch_asset_history(ticker):
+@st.cache_resource
+def get_executor():
     """
-    Fetches long-term history for a single asset using Testfol API.
+    Returns a shared ThreadPoolExecutor.
     """
-    try:
-        # Request full history
-        end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
-        
-        # We rely on Testfol API's behavior: asking for 100% of a ticker
-        # returns its price history in the 'charts' response.
-        series, _, _ = api.fetch_backtest(
-            start_date="1900-01-01",
-            end_date=end_date,
-            start_val=10000,
-            cashflow=0,
-            cashfreq="Monthly",
-            rolling=1,
-            invest_div=True, # Total Return
-            rebalance="Yearly",
-            allocation={ticker: 100.0},
-            return_raw=False
-        )
-        return series
-    except Exception as e:
-        print(f"Error fetching {ticker}: {e}")
-        return pd.Series(dtype=float)
+    return ThreadPoolExecutor(max_workers=4)
+
+def fetch_worker(tickers):
+    """
+    Background worker to fetch data for a list of tickers.
+    Returns a dict {ticker: series}.
+    """
+    results = {}
+    end_date = pd.Timestamp.now().strftime("%Y-%m-%d")
+    
+    for ticker in tickers:
+        try:
+            # We bypass st.cache_data here because we are in a thread
+            # and we want to control the caching manually in session_state,
+            # or rely on the API's internal caching if it exists.
+            series, _, _ = api.fetch_backtest(
+                start_date="1900-01-01",
+                end_date=end_date,
+                start_val=10000,
+                cashflow=0,
+                cashfreq="Monthly",
+                rolling=1,
+                invest_div=True, # Total Return
+                rebalance="Yearly",
+                allocation={ticker: 100.0},
+                return_raw=False
+            )
+            results[ticker] = series
+        except Exception as e:
+            print(f"Error fetching {ticker}: {e}")
+            results[ticker] = pd.Series(dtype=float)
+            
+    return results
 
 def render_asset_explorer():
     """
@@ -67,12 +79,13 @@ def render_asset_explorer():
     st.subheader("🧩 Asset Class Explorer (Periodic Table)")
     st.markdown("Annual performance ranking of major asset classes.")
     
-    # 1. Fetch Data
-    price_data = {}
+    # --- State Management for Async Loading ---
+    if "ae_cache" not in st.session_state:
+        st.session_state.ae_cache = {}
     
-    # 1. Fetch Data
-    price_data = {}
-    
+    if "ae_future" not in st.session_state:
+        st.session_state.ae_future = None
+
     # Custom Asset Selection (Interactive Legend)
     # Use session state to track exclusions
     if "ae_excluded_assets" not in st.session_state:
@@ -82,9 +95,6 @@ def render_asset_explorer():
     
     # Helper for Color-coded Emoji
     def get_color_emoji(ticker):
-        # Approximate mapping or just use a generic circle
-        # We can try to use a specific circle color if we had a map, 
-        # but standardized circles are limited (🔴 🟠 🟡 🟢 🔵 🟣 ⚫ ⚪ 🟤)
         c = ASSET_COLORS.get(ticker, "").upper()
         if "4A90E2" in c: return "🔵" # Blue
         if "F5A623" in c: return "🟠" # Orange
@@ -100,9 +110,6 @@ def render_asset_explorer():
     st.markdown("##### Filter Assets (Click to Toggle)")
     
     # Create rows of buttons (Interactive Key)
-    # Split into 2 rows to avoid squashing when sidebar is open
-    # 5 items first row, 4 items second row
-    
     row1_assets = all_assets[:5]
     row2_assets = all_assets[5:]
     
@@ -145,18 +152,47 @@ def render_asset_explorer():
         st.warning("Please select at least one asset class.")
         return
     
-    with st.spinner("Fetching Asset Class History..."):
-        # Parallel fetch could be faster, but cached functions handle it okay
-        for name in selected_assets:
-            ticker = ASSET_CLASSES[name]
-            series = cached_fetch_asset_history(ticker)
-            if not series.empty:
-                price_data[ticker] = series
-    
-    if not price_data:
-        st.error("Failed to fetch asset data. Please check API connection.")
-        return
+    # --- Async Data Loading Logic ---
+    missing_tickers = []
+    for name in selected_assets:
+        t = ASSET_CLASSES[name]
+        if t not in st.session_state.ae_cache:
+            missing_tickers.append(t)
+            
+    # If we have missing data
+    if missing_tickers:
+        # Check if a future is already running
+        if st.session_state.ae_future:
+            if st.session_state.ae_future.done():
+                # Task done! Retrieve results
+                try:
+                    new_data = st.session_state.ae_future.result()
+                    st.session_state.ae_cache.update(new_data)
+                except Exception as e:
+                    st.error(f"Background fetch failed: {e}")
+                
+                # Clear future and rerun to render
+                st.session_state.ae_future = None
+                st.rerun()
+            else:
+                # Task still running
+                st.info(f"⏳ Fetching data for {len(missing_tickers)} assets in the background... You can switch tabs.")
+                # Force refresh button to check status manually if auto-rerun isn't desired (Streamlit doesn't auto-poll well without tricks)
+                if st.button("🔄 Check Status"):
+                    st.rerun()
+                return
 
+        else:
+            # No future running, submit new task
+            executor = get_executor()
+            st.session_state.ae_future = executor.submit(fetch_worker, missing_tickers)
+            # Rerun immediately to show the "Loading" state
+            st.rerun()
+            return
+
+    # If we reach here, ALL data is present in st.session_state.ae_cache
+    price_data = {ASSET_CLASSES[n]: st.session_state.ae_cache[ASSET_CLASSES[n]] for n in selected_assets}
+    
     # 2. Combine & Clean
     # Use Names for columns instead of Tickers
     df_prices = pd.DataFrame()

@@ -112,13 +112,88 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             orientation="h",
             yanchor="bottom",
             y=1.02,
-            xanchor="right",
-            x=1
+            xanchor="center",
+            x=0.5
         ),
         margin=dict(l=40, r=40, t=60, b=40)
     )
 
     st.plotly_chart(fig, use_container_width=True)
+
+    # --- Drawdown Chart ---
+    st.markdown("### Drawdowns")
+    fig_dd = go.Figure()
+
+    # 1. Portfolios Drawdown
+    for i, res in enumerate(results_list):
+        series = res.get('series')
+        if series is None or series.empty: continue
+        
+        # Align
+        if common_start:
+            series = series[series.index >= common_start]
+            if series.empty: continue
+            
+        # Drawdown Calc
+        series = series.astype(float)
+        running_max = series.cummax()
+        drawdown = (series / running_max) - 1.0
+        
+        name = res['name']
+        color = colors[i % len(colors)]
+        
+        fig_dd.add_trace(go.Scatter(
+            x=drawdown.index, 
+            y=drawdown, 
+            mode='lines', 
+            name=name,
+            line=dict(color=color, width=1),
+            fill='tozeroy', 
+            hovertemplate="<b>%{fullData.name}</b>: %{y:.2%}<extra></extra>"
+        ))
+
+    # 2. Benchmarks Drawdown
+    if benchmarks:
+        for i, bench in enumerate(benchmarks):
+            if bench is None or bench.empty: continue
+            
+            if common_start:
+                bench = bench[bench.index >= common_start]
+                if bench.empty: continue
+            
+            bench = bench.astype(float)
+            running_max = bench.cummax()
+            dd = (bench / running_max) - 1.0
+            
+            b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
+            
+            fig_dd.add_trace(go.Scatter(
+                x=dd.index, 
+                y=dd,
+                mode='lines',
+                name=b_name,
+                line=dict(color='#BDC3C7', width=1.0, dash='dash'),
+                hovertemplate="<b>%{fullData.name}</b>: %{y:.2%}<extra></extra>"
+            ))
+            
+    fig_dd.update_layout(
+        template="plotly_dark",
+        xaxis_title="Date",
+        xaxis_hoverformat="%b %d, %Y",
+        yaxis_title="Drawdown (%)",
+        yaxis_tickformat=".0%",
+        height=350,
+        hovermode="x unified",
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="center",
+            x=0.5
+        ),
+        margin=dict(l=40, r=40, t=30, b=40)
+    )
+    st.plotly_chart(fig_dd, use_container_width=True)
 
     # Comparison Table
     if results_list:
