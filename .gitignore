@@ -205,8 +205,8 @@ yarn-error.log*
 .pnp.*
 
 # Data Caches (Exclude from git)
-data/api_cache/
-data/price_cache/
+data/etf_xray/cache/etf_filings/
+.gemini/
 
 # User Data (Keep these tracked?)
 # data/*.csv

@@ -71,6 +71,14 @@ graph TD
     MC --> CA
     
     BE --> API
+
+    subgraph Data Modules
+        NDX[data/ndx_simulation]
+        XRAY[data/etf_xray]
+    end
+    
+    NDX --> MEGA
+    XRAY --> API
 ```
 
 ---

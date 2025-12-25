@@ -82,3 +82,15 @@ A robust stochastic simulation to stress-test your strategy against thousands of
 #### 🏗️ Margin Details
 -   **Combined Chart**: Shows Portfolio Value (Gross Assets), Net Equity, and Loan Balance on one chart to visualize leverage dynamics.
 -   **Tax Analysis**: Breakdown of annual tax liabilities and the difference between paying with cash vs. margin.
+
+#### 🩻 X-Ray Analyzer
+The X-Ray engine allows you to peer inside your ETFs to see the actual underlying exposures. It supports a wide range of assets including:
+
+-   **Standard ETFs**: SPY, QQQ, VTI, BND, etc.
+-   **Leveraged ETFs**: Automatically decomposes leveraged funds (e.g., `UPRO`) into their 3x underlying components (e.g., 300% SPY).
+-   **Simulated Tickers**: Full support for extended history tickers from the `shadow_backtest` engine:
+    -   **Markets**: `SPYSIM`, `QQQSIM`, `VTVSIM` (Value), `VUGSIM` (Growth).
+    -   **Sectors**: `XLBSIM` (Materials), `XLKSIM` (Tech), `XLFSIM` (Financials), etc.
+    -   **Bonds**: `IEFSIM` (7-10y), `SHYSIM` (1-3y), `TLTSIM` (20y+).
+    -   **Modifiers**: Works seamlessly with leverage modifiers like `SPYSIM?L=2`.
+

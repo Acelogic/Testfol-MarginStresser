@@ -15,8 +15,9 @@ def render():
         st.markdown("---")
         
         st.header("Global Settings")
-        start_date = st.date_input("Start Date", value=dt.date(2012,1,1), min_value=dt.date(1884, 1, 1))
-        end_date = st.date_input("End Date", value=dt.date.today(), min_value=dt.date(1884, 1, 1))
+        today = dt.date.today()
+        start_date = st.date_input("Start Date", value=dt.date(2012,1,1), min_value=dt.date(1884, 1, 1), max_value=today)
+        end_date = st.date_input("End Date", value=today, min_value=dt.date(1884, 1, 1), max_value=today)
         
         
         run_placeholder = st.empty()

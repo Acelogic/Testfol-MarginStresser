@@ -9,7 +9,9 @@ def render():
     
     st.subheader("Strategy Configuration")
     
-    tab_port, tab_margin, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "⚙️ Settings"])
+    tab_port, tab_margin, tab_asset, tab_xray, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "🔍 X-Ray", "⚙️ Settings"])
+    
+    from . import xray_view
     
     config = {}
 
@@ -429,6 +431,16 @@ def render():
         # It doesn't modify the simulation config, just visualizes data.
         asset_explorer.render_asset_explorer()
 
+    with tab_xray:
+        # Look through ETFs to see underlying holdings
+        if 'alloc_df' in p and not p['alloc_df'].empty:
+            alloc_map = dict(zip(p['alloc_df']['Ticker'], p['alloc_df']['Weight %']))
+            # Convert percentage to fractional for the engine
+            alloc_map = {k: v/100.0 for k, v in alloc_map.items()}
+            xray_view.render_xray(alloc_map, portfolio_name=p['name'])
+        else:
+            st.info("Select a portfolio with assets to see the X-Ray view.")
+
     with tab_settings:
         c1, c2 = st.columns(2)
         with c1:
@@ -456,15 +468,28 @@ def render():
             
             st.markdown("---")
             st.markdown("**Cache Management**")
-            if st.button("🗑️ Clear API Cache", help="Remove cached API responses to force fresh data fetches"):
+            if st.button("🗑️ Clear All Caches", help="Purge all local data including API responses and downloaded ETF filings."):
                 import shutil
                 import os
-                cache_dir = "data/api_cache"
-                if os.path.exists(cache_dir):
-                    shutil.rmtree(cache_dir)
-                    os.makedirs(cache_dir, exist_ok=True)
-                    st.success("Cache cleared!")
+                
+                # 1. API Cache
+                api_cache_dir = "data/api_cache"
+                cleared = False
+                if os.path.exists(api_cache_dir):
+                    shutil.rmtree(api_cache_dir)
+                    os.makedirs(api_cache_dir, exist_ok=True)
+                    cleared = True
+                    
+                # 2. ETF Filings Cache
+                etf_cache_dir = "data/etf_xray/cache/etf_filings"
+                if os.path.exists(etf_cache_dir):
+                    shutil.rmtree(etf_cache_dir)
+                    os.makedirs(etf_cache_dir, exist_ok=True)
+                    cleared = True
+                
+                if cleared:
+                    st.success("All caches cleared!")
                 else:
-                    st.info("Cache is already empty.")
+                    st.info("Caches are already empty.")
 
     return config

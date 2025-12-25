@@ -3,6 +3,9 @@ import yfinance as yf
 import matplotlib.pyplot as plt
 import numpy as np
 import os
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
 import chart_style
 import price_manager

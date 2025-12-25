@@ -10,11 +10,13 @@ from app.common.utils import color_return
 from plotly.subplots import make_subplots
 
 
+from app.core import calculations
+
 # --- Multi-Portfolio Chart ---
 def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     """
     Renders a performance chart for multiple portfolios.
-    results_list: List of dicts {'name': str, 'series': pd.Series, 'stats': dict}
+    results_list: List of dicts {'name': str, 'series': pd.Series, 'stats': dict, 'start_val': float}
     """
     st.markdown("### Multi-Portfolio Performance Comparison")
 
@@ -45,6 +47,11 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     else:
         common_start = None
 
+    # Get baseline target from the first result (they should all share same global start_val)
+    target_baseline = 10000.0
+    if results_list:
+        target_baseline = results_list[0].get('start_val', 10000.0)
+
     # Add Portfolios
     for i, res in enumerate(results_list):
         name = res['name']
@@ -53,18 +60,22 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         if series is None or series.empty:
             continue
             
-        # Align Series
+        # Align & Normalize Series
         if common_start:
             series = series[series.index >= common_start]
             if series.empty: continue
             
+            # Normalization: Force start at the target_baseline (e.g. 20k)
+            v0 = series.iloc[0]
+            if v0 > 0:
+                series = series * (target_baseline / v0)
+            
         color = colors[i % len(colors)]
         
-        # Calculate Stats for Legend (simple re-calc or use passed stats)
-        # We use passed stats usually
-        stats = res.get('stats', {})
+        # Recalculate Stats for the visible period
+        stats = calculations.generate_stats(series)
         cagr_raw = stats.get('cagr', 0.0)
-        cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
+        cagr_display = cagr_raw
         max_dd = stats.get('max_drawdown', 0.0)
         
         label = f"{name} (CAGR: {cagr_display:.1f}%, DD: {max_dd:.1f}%)"
@@ -83,10 +94,14 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
             
-            # Align Benchmark
+            # Align & Normalize Benchmark
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
+                
+                bv0 = bench.iloc[0]
+                if bv0 > 0:
+                    bench = bench * (target_baseline / bv0)
             
             # Name
             b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
