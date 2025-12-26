@@ -98,7 +98,11 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         }]
     }
     
-    headers = {}
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:125.0) Gecko/20100101 Firefox/125.0",
+        "Referer": "https://testfol.io/",
+        "Origin": "https://testfol.io"
+    }
     # Check for Bearer Token (Arg > Env)
     token = kwargs.get('bearer_token') or os.environ.get("TESTFOL_API_KEY")
     if token:
@@ -109,16 +113,31 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         headers["Authorization"] = f"Bearer {token}"
         
     try:
-        r = requests.post(API_URL, json=payload, headers=headers, timeout=30)
+        # Configure Retry Strategy with Exponential Backoff
+        # 429: Rate Limit, 5xx: Server Errors
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
         
-        # Rate Limit Protection (Only on actual API call)
-        time.sleep(2.0) 
+        retry_strategy = Retry(
+            total=5,  # 5 retries
+            backoff_factor=2,  # 2s, 4s, 8s, 16s, 32s
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session = requests.Session()
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
         
+        r = session.post(API_URL, json=payload, headers=headers, timeout=45)
         r.raise_for_status()
+        
+    except requests.exceptions.RetryError:
+         raise requests.exceptions.HTTPError(f"Max retries exceeded for {API_URL}")
     except requests.exceptions.HTTPError as e:
         # Include response text in error message for debugging
-        error_msg = f"HTTP Error: {e}\nResponse: {r.text}"
-        raise requests.exceptions.HTTPError(error_msg, response=r)
+        error_msg = f"HTTP Error: {e}\nResponse: {r.text if 'r' in locals() else 'No Response'}"
+        raise requests.exceptions.HTTPError(error_msg, response=r if 'r' in locals() else None)
     except Exception as e:
         raise e
 

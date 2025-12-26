@@ -240,18 +240,7 @@ def backtest():
             final_weights = pd.concat([w_standard, w_filler])
 
         
-        # Check for Mid-Quarter Changes (Pre-emptive Replacement)
-        replacements = changes_parser.get_replacement_map(start_dt, end_dt)
-        for old, new in replacements.items():
-            if old in final_weights.index:
-                # Only swap if we have data for the new one
-                if new in data.columns:
-                    print(f"  [Rebal Event] Replacing {old} with {new} (Pre-emptive) in Mega 2.0")
-                    # Assign old weight to new ticker
-                    final_weights[new] = final_weights[old]
-                    final_weights = final_weights.drop(old)
-                else:
-                     print(f"  Warning: Cannot replace {old} -> {new}: Price data missing for {new}")
+
 
         # Validation of Final Weights
         if abs(final_weights.sum() - 1.0) > 0.001:
@@ -270,30 +259,147 @@ def backtest():
             "Weights": "|".join([f"{w:.6f}" for w in final_weights])
         })
 
-        # Perf Simulation
-        try:
-            price_slice = data.loc[start_dt:end_dt, final_weights.index]
-            price_slice = price_slice.ffill()
+        # 3. Perf Simulation (Event-Driven)
+        quarter_changes = changes_parser.get_changes_between(start_dt, end_dt)
+        
+        # Build timeline
+        timeline = sorted(list(set([start_dt] + quarter_changes['Date'].tolist() + [end_dt])))
+        timeline = [d for d in timeline if start_dt <= d <= end_dt]
+        
+        # Ensure we have at least start and end
+        if len(timeline) < 2: timeline = [start_dt, end_dt]
+        if timeline[0] != start_dt: timeline.insert(0, start_dt)
+        if timeline[-1] != end_dt: timeline.append(end_dt)
+        timeline = sorted(list(set(timeline)))
+
+        curr_w = final_weights.copy()
+        dropped_this_quarter = set()
+        
+        for k in range(len(timeline) - 1):
+            sub_start = timeline[k]
+            sub_end = timeline[k+1]
             
-            p_start = price_slice.iloc[0]
-            valid_mask = (p_start > 0) & (p_start.notna())
+            if sub_start >= sub_end: continue
             
-            if not valid_mask.all():
-                valid_tkrs = valid_mask.index[valid_mask].tolist()
-                final_weights = final_weights[valid_tkrs]
-                final_weights = final_weights / final_weights.sum()
-                p_start = p_start[valid_tkrs]
-                price_slice = price_slice[valid_tkrs]
-            
-            shares = final_weights / p_start
-            daily_vals = price_slice.dot(shares)
-            
-            daily_vals_scaled = daily_vals * current_value
-            mega_values.loc[daily_vals_scaled.index] = daily_vals_scaled
-            current_value = daily_vals_scaled.iloc[-1]
-            
-        except Exception as e:
-            print(f"Error simulating {start_dt}: {e}")
+            try:
+                # Slice logic [sub_start, sub_end]
+                price_slice = data.loc[sub_start:sub_end, curr_w.index]
+                if price_slice.empty: continue
+                
+                price_slice = price_slice.ffill()
+                
+                p_start = price_slice.iloc[0]
+                valid_mask = (p_start > 0) & (p_start.notna())
+                
+                if not valid_mask.all():
+                    valid_tkrs = valid_mask.index[valid_mask].tolist()
+                    curr_w = curr_w[valid_tkrs]
+                    if curr_w.sum() > 0: curr_w = curr_w / curr_w.sum()
+                    p_start = p_start[valid_tkrs]
+                    price_slice = price_slice[valid_tkrs]
+                
+                if curr_w.empty: continue
+                
+                shares = (curr_w * current_value) / p_start
+                daily_vals = price_slice.dot(shares)
+                
+                mega_values.loc[daily_vals.index] = daily_vals
+                current_value = daily_vals.iloc[-1]
+                
+            except Exception as e:
+                print(f"Error simulating sub-period {sub_start} to {sub_end}: {e}")
+
+            # --- Handle Logic at Event Date (sub_end) ---
+            if sub_end != end_dt:
+                # Event Logic
+                todays_changes = quarter_changes[quarter_changes['Date'] == sub_end]
+                
+                dropped_any = False
+                for _, row in todays_changes.iterrows():
+                     removed = row.get('Removed Ticker')
+                     if pd.notna(removed) and removed in curr_w.index:
+                         print(f"  [Event {sub_end.date()}] Dropping {removed}")
+                         curr_w = curr_w.drop(removed)
+                         dropped_any = True
+                     
+                     if pd.notna(removed):
+                         dropped_this_quarter.add(removed)
+                
+                if dropped_any:
+                    # Check < 9 Rule
+                    current_tickers = curr_w.index.tolist()
+                    needed = config.MEGA2_MIN_CONSTITUENTS - len(current_tickers)
+                    
+                    if needed > 0:
+                        print(f"    Count fell to {len(current_tickers)}. Finding {needed} replacements...")
+                        
+                        # Exclude ALL tickers dropped so far this quarter (including today)
+                        # We track this in 'dropped_this_quarter' set maintained in the outer loop
+                        
+                        # Candidates from q_weights (excluding current AND any dropped this quarter)
+                        candidates_df = q_weights[
+                            (~q_weights['Ticker'].isin(current_tickers)) & 
+                            (~q_weights['Ticker'].isin(dropped_this_quarter))
+                        ]
+                        candidates_df = candidates_df[candidates_df['IsMapped'] == True]
+                        
+                        found_count = 0
+                        for t in candidates_df['Ticker']:
+                            if t in data.columns:
+                                print(f"      Selected replacement: {t}")
+                                current_tickers.append(t)
+                                found_count += 1
+                            if found_count >= needed: break
+                    
+                    # Recalculate Weights (Mini-Rebalance)
+                    # Classify Standards vs Fillers
+                    # Update standard_tickers (remove drops)
+                    standard_tickers = [t for t in standard_tickers if t in current_tickers]
+                    
+                    # Note: Any replacement we just added is effectively a "Filler"?
+                    # PDF: "The Index Securities that were selected... are kept... The Minimum Security Rule is applied... The Minimum Security Weighting Process is applied."
+                    # This implies replacements are Fillers (1% pool).
+                    # 'standard_tickers' tracks the original elite set.
+                    
+                    # Prepare subset data
+                    # We need 'Weight' data for the new set.
+                    # Use q_weights for the relative weights.
+                    mega_subset = q_weights[q_weights['Ticker'].isin(current_tickers)].copy()
+                    
+                    # Re-Run Weighting Logic
+                    is_min_security_triggered_now = (len(current_tickers) < config.MEGA2_MIN_CONSTITUENTS) # Should be false now unless we ran out of candidates
+                    
+                    # Logic block copied from main loop (simplified)
+                    # Standards
+                    standard_subset = mega_subset[mega_subset['Ticker'].isin(standard_tickers)]
+                    # Fillers
+                    filler_subset = mega_subset[~mega_subset['Ticker'].isin(standard_tickers)]
+                    
+                    w_standard = pd.Series(dtype=float)
+                    w_filler = pd.Series(dtype=float)
+                    
+                    # Apply Logic
+                    if not standard_subset.empty:
+                        n_standards = len(standard_subset)
+                        max_possible = n_standards * config.MEGA2_SINGLE_STOCK_CAP
+                        standard_target = min(0.99, max_possible)
+                        
+                        w_standard = apply_caps(
+                            standard_subset.set_index('Ticker')['Weight'], 
+                            config.MEGA2_SINGLE_STOCK_CAP, 
+                            total_target=standard_target
+                        )
+                    
+                    filler_budget = 1.0 - w_standard.sum()
+                    if not filler_subset.empty and filler_budget > 0:
+                        filler_count = len(filler_subset)
+                        w_filler = pd.Series(filler_budget / filler_count, index=filler_subset['Ticker'])
+
+                    curr_w = pd.concat([w_standard, w_filler])
+                    
+                    # Validation
+                    if abs(curr_w.sum() - 1.0) > 0.001:
+                         print(f"    Warning: Re-calc weights sum to {curr_w.sum():.4f}")
 
     mega_values = mega_values.dropna()
     
