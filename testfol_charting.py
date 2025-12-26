@@ -417,6 +417,8 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                                         res['unrealized_pl_df'] = new_unrealized
                                         res['logs'] = new_logs
                                         res['twr_series'] = new_twr
+                                        # Update shadow_range to match the new aligned execution
+                                        res['shadow_range'] = f"{common_start.date()} to {end_date}"
                                         print(f"DEBUG: Re-ran shadow backtest for {res['name']} from {common_start.date()}")
                                     except Exception as shadow_e:
                                         print(f"Failed to re-run shadow for {res['name']}: {shadow_e}")
@@ -485,6 +487,8 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                                         res['unrealized_pl_df'] = new_unrealized
                                         res['logs'] = new_logs
                                         res['twr_series'] = new_twr
+                                        # Update shadow_range to match the new aligned execution
+                                        res['shadow_range'] = f"{common_start.date()} to {end_date}"
                                         # Recalculate stats from new TWR
                                         res['stats'] = calculations.generate_stats(new_twr if new_twr is not None and not new_twr.empty else new_series)
                                         print(f"DEBUG: Re-ran shadow backtest for local {res['name']} from {common_start.date()}")
