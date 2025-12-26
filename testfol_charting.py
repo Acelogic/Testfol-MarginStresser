@@ -43,7 +43,7 @@ if mode == "Documentation":
     st.stop()
 
 # --- Sidebar ---
-start_date, end_date, run_placeholder = render_sidebar()
+start_date, end_date, bearer_token, run_placeholder = render_sidebar()
 
 # --- Main Area ---
 config = render_config()
@@ -128,6 +128,10 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                 stats = {}
                 trades_df = pd.DataFrame()
                 
+                # Initialize variables that may not be set in all code paths
+                extra_data = {}
+                df_rets = None
+                
                 if not use_local_engine:
                     # --- API Path ---
                     
@@ -165,7 +169,8 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                         rebalance_offset=calc_rebal_offset,
                         allocation=alloc_map, 
                         return_raw=False,
-                        include_raw=True
+                        include_raw=True,
+                        bearer_token=bearer_token
                     )
                     stats = stats_api
                     print(f"DEBUG APP: Tickers={alloc_map.keys()} | API Stats CAGR={stats.get('cagr')}")
@@ -255,12 +260,15 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                         stats = {}
 
                 # Add result
-                # Add result
+                port_name = p.get('name', 'Portfolio')
                 results_list.append({
-                    "name": p.get('name', 'Portfolio'),
-                    "series": port_series,
-                    "port_series": port_series, # Alias for results.py
-                    "stats": stats,
+                    'name': port_name,
+                    'series': port_series,
+                    'port_series': port_series, # Alias for results.py
+                    'stats': stats,
+                    'twr_series': twr_series if 'twr_series' in locals() else None,
+                    'daily_returns_df': df_rets,  # Now always defined (may be None)
+                    'is_local': use_local_engine,
                     "trades": trades_df,
                     "trades_df": trades_df, # Alias for results.py
                     "pl_by_year": pl_by_year,
@@ -270,7 +278,6 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                     "composition_df": composition_df if 'composition_df' in locals() else pd.DataFrame(),
                     "raw_response": extra_data if 'extra_data' in locals() else {},
                     "start_val": start_val,
-                    "twr_series": twr_series if 'twr_series' in locals() else None,
                     "sim_range": f"{start_date} to {end_date}",
                     "shadow_range": f"{start_date} to {end_date}",
                     "wmaint": current_wmaint
@@ -290,13 +297,68 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                             invest_div=invest_div,
                             rebalance="Yearly", # Force Yearly Standard
                             allocation=alloc_map, 
-                            return_raw=False
+                            return_raw=False,
+                            bearer_token=bearer_token
                         )
                         std_series.name = f"{p.get('name')} (Standard)"
                         bench_series_list.append(std_series)
                     except Exception as e:
-                        print(f"Comparison failed: {e}")
+                        print(f"Failed standard comparison: {e}")
 
+            # --- Pass 2: Auto-Align Start Dates (Re-Simulate from Common Start) ---
+            # User Request: "if we have a common date out of that range we should ignore the global and just use the common as the start date"
+            # To fix "End Value" discrepancies, we must start fresh at common date with full capital.
+            
+            # 1. Determine Common Start
+            start_dates = []
+            for res in results_list:
+                if res.get('series') is not None and not res['series'].empty:
+                    start_dates.append(res['series'].index.min())
+                    
+                    
+            if bench_series_list:
+                for b in bench_series_list:
+                    if b is not None and not b.empty:
+                        start_dates.append(b.index.min())
+                            
+            common_start = max(start_dates) if start_dates else None
+            
+            # 2. Re-Simulate if needed
+            if common_start:
+                global_start_val = config.get('global_cashflow', {}).get('start_val', 10000.0)
+                
+                for i, res in enumerate(results_list):
+                    series = res.get('series')
+                    if series is None or series.empty: continue
+                    
+                    # If this portfolio started significantly earlier than common_start
+                    if series.index[0] < common_start:
+                        # We need to re-simulate starting from common_start
+                        # Method: Use TWR series to project value from scratch
+                        
+                        twr = res.get('twr_series')
+                        if twr is not None and not twr.empty:
+                            # Slice TWR to start at common_start
+                            twr_slice = twr[twr.index >= common_start]
+                            
+                            if not twr_slice.empty:
+                                # Normalize TWR to start at 1.0 at common_start
+                                scale_factor = twr_slice / twr_slice.iloc[0]
+                                new_series = scale_factor * global_start_val
+                                
+                                # Replace in results
+                                res['series'] = new_series
+                                res['port_series'] = new_series # Fix KeyError: Sync Alias
+                                
+                                # Preserve original API stats before recalculating
+                                res['original_api_stats'] = res.get('stats', {})
+                                res['stats'] = calculations.generate_stats(new_series)
+                                res['stats_source'] = 'rebased'  # Flag for UI disambiguation
+                                
+                                # Update description
+                                # st.toast(f"Re-aligned {res['name']} to start {common_start.date()}")
+                                
+            # -------------------------------------------------------------------
             # Store for Rendering
             st.session_state.results_list = results_list
             st.session_state.bench_series_list = bench_series_list
@@ -314,8 +376,12 @@ if "results_list" in st.session_state and st.session_state.results_list:
 
     st.divider()
     
-    # --- Render Main Chart ---
-    charts.render_multi_portfolio_chart(results_list, benchmarks=bench_series_list, log_scale=config.get('log_scale', True))
+    # --- Render Main Chart (Raw Data, No Transformations) ---
+    charts.render_multi_portfolio_chart(
+        results_list, 
+        benchmarks=bench_series_list, 
+        log_scale=config.get('log_scale', True)
+    )
     
     # --- Render Detailed Results (synced with config tab) ---
     st.divider()
@@ -325,7 +391,14 @@ if "results_list" in st.session_state and st.session_state.results_list:
     # Validate index
     if active_idx >= len(results_list):
         active_idx = 0
+    
+    # Calculate Common Start Date (for syncing results with chart)
+    start_dates = []
+    for r in results_list:
+        if not r['series'].empty:
+            start_dates.append(r['series'].index[0])
+    common_start = max(start_dates) if start_dates else None
         
     res = results_list[active_idx]
     st.markdown(f"### 📋 {res['name']} Details")
-    render_results(res, config, portfolio_name=res['name'])
+    render_results(res, config, portfolio_name=res['name'], clip_start_date=common_start)

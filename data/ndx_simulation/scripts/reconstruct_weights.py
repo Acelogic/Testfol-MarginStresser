@@ -136,6 +136,17 @@ def get_rebalance_dates(start_year=2000, end_year=2025):
     # Filter to not exceed now + 90 days too much
     limit = pd.Timestamp.now() + pd.Timedelta(days=90)
     dates = [d for d in dates if d <= limit]
+    
+    # --- EDGE CASE FIX ---
+    # The data source (nasdaq_components.csv) starts on 2000-06-30.
+    # The nearest "3rd Friday" before that was June 16, 2000.
+    # Because our logic looks for Data <= RebalanceDate, the June 16th date finds nothing.
+    # We must manually inject 2000-06-30 as a "special" rebalance date to kickstart the simulation.
+    start_override = pd.Timestamp("2000-06-30")
+    if start_override not in dates:
+        dates.append(start_override)
+        dates.sort()
+        
     return dates
 
 def reconstruct():
