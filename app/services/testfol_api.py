@@ -57,8 +57,15 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
             with open(cache_path, "rb") as f:
                 # print(f"DEBUG: Cache HIT {req_hash}")
                 return pickle.load(f)
+        except (EOFError, pickle.UnpicklingError, IndexError, ImportError, ValueError) as e:
+            print(f"⚠️ Cache Corruption Detected ({e}). Deleting corrupted file: {cache_path}")
+            try:
+                os.remove(cache_path)
+            except OSError:
+                pass
+            # Fall through to API fetch
         except Exception as e:
-            print(f"Cache read failed: {e}")
+            print(f"Cache read failed (Unknown Error): {e}")
             # Fall through to API fetch
             pass
             
@@ -136,7 +143,8 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     
     extra_data = {
         "rebalancing_events": resp.get("rebalancing_events", []),
-        "rebalancing_stats": resp.get("rebalancing_stats", [])
+        "rebalancing_stats": resp.get("rebalancing_stats", []),
+        "daily_returns": resp.get("daily_returns", [])
     }
     
     if include_raw:

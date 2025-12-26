@@ -335,10 +335,11 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         
         # 4. Leverage (L, SW, SP)
         L = float(params.get('L', 1.0))
-        SW = float(params.get('SW', 1.1))
-        # Default SP = sgn(L) * 0.4%
-        default_sp = 0.4 if L >= 0 else -0.4 
-        SP = float(params.get('SP', default_sp))
+        # 4. Leverage (L, SW, SP)
+        L = float(params.get('L', 1.0))
+        SW = float(params.get('SW', 1.0))
+        # Default SP = 0.0%
+        SP = float(params.get('SP', 0.0))
         
         if L != 1.0:
             # Leverage Formula: R_lev = L * R_u - Cost
@@ -375,18 +376,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         if 'E' in params:
             e_val = float(params['E'])
         else:
-             # Auto-calc default E based on Leverage
-             if L > 1:
-                 e_val = (L - 1) * 0.5 # 0.5% per point above 1
-             elif L < 0:
-                 # -1x -> 1 point of neg leverage? 
-                 # "0.333% for every point of negative leverage"
-                 # if L = -1, is that 1 point? abs(L)?
-                 # Usually inverse ETFs have ~1%. -1x -> 1%?
-                 # Let's use abs(L) * 0.333?
-                 e_val = abs(L) * 0.333
-             else:
-                 e_val = 0.0
+            e_val = 0.0
 
         if e_val != 0:
             r_s = r_s - (e_val / 100.0) / 252.0
