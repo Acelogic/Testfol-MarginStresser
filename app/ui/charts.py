@@ -62,7 +62,10 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             
         color = colors[i % len(colors)]
         
-        # Stats from API (no recalculation)
+        # Use stats directly - they're already accurate for the displayed period
+        # For 'refetched' portfolios: stats came from fresh API call with common_start
+        # For 'rebased' portfolios: stats were calculated locally from TWR (only option)
+        # For non-rebased portfolios: stats are original API stats for that period
         cagr = stats.get('cagr', 0.0)
         max_dd = stats.get('max_drawdown', 0.0)
         
@@ -215,36 +218,36 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         
     st.plotly_chart(fig_dd, use_container_width=True)
 
-    # Comparison Table (Stats recalculated from clipped data for consistency)
+    # Comparison Table (Stats are already accurate - refetched or calculated in main app)
     if results_list:
         st.markdown("### Statistics")
         
         stats_data = []
         for res in results_list:
             series = res.get('series')
+            stats = res.get('stats', {})
             if series is None or series.empty:
                 continue
             
-            # Clip to common start (same as chart)
+            # Clip to common start (same as chart) for End Balance calculation
             if common_start:
                 series = series[series.index >= common_start]
                 if series.empty: continue
             
-            # Recalculate stats from clipped series
-            clipped_stats = calculations.generate_stats(series)
-            
-            cagr_raw = clipped_stats.get('cagr', 0)
+            # Use stats directly - they're already accurate for the displayed period
+            cagr_raw = stats.get('cagr', 0)
             cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
             
-            vol_raw = clipped_stats.get('volatility', 0)
+            # Handle volatility/std - API may return 'std' or 'volatility'
+            vol_raw = stats.get('std', stats.get('volatility', 0))
             vol_display = vol_raw * 100 if abs(vol_raw) <= 1 else vol_raw
             
             row = {
                 "Name": res['name'],
                 "CAGR": f"{cagr_display:.2f}%",
                 "Stdev": f"{vol_display:.2f}%",
-                "Sharpe": f"{clipped_stats.get('sharpe', 0):.2f}",
-                "Max DD": f"{clipped_stats.get('max_drawdown', 0):.2f}%",
+                "Sharpe": f"{stats.get('sharpe', 0):.2f}",
+                "Max DD": f"{stats.get('max_drawdown', 0):.2f}%",
                 "End Balance": f"${series.iloc[-1]:,.2f}" if not series.empty else "$0"
             }
             stats_data.append(row)
