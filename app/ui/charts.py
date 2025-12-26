@@ -28,7 +28,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     # 1. Determine Common Date Range (Intersection)
     start_dates = []
     
-    # Collect start dates from portfolios
+    # Collect start dates from portfolios to determine overall chart window
     for res in results_list:
         series = res.get('series')
         if series is not None and not series.empty:
@@ -39,46 +39,48 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         for bench in benchmarks:
             if bench is not None and not bench.empty:
                 start_dates.append(bench.index.min())
-                
-    # Find the Latest Start Date (to clip all to common range)
-    if start_dates:
-        common_start = max(start_dates)
-        st.caption(f"ℹ️ Chart aligned to common start date: {common_start.date()}")
-    else:
-        common_start = None
 
-    # Get baseline target from the first result (they should all share same global start_val)
-    target_baseline = 10000.0
-    if results_list:
-        target_baseline = results_list[0].get('start_val', 10000.0)
+    # Find the Latest Start Date (to clip all to common range for visual alignment)
+    # We do NOT normalize dollar values—this ensures chart tooltips match the stats table.
+    common_start = max(start_dates) if start_dates else None
+    if common_start:
+        st.caption(f"ℹ️ Chart aligned to common start date: **{common_start.date()}**")
 
     # Add Portfolios
     for i, res in enumerate(results_list):
         name = res['name']
         series = res['series']
+        original_stats = res.get('stats', {}) # Stats for the FULL chosen simulation period
         
         if series is None or series.empty:
             continue
-            
-        # Align & Normalize Series
+         
+        # Clip to common_start for visual alignment (no staircase)
         if common_start:
             series = series[series.index >= common_start]
             if series.empty: continue
             
-            # Normalization: Force start at the target_baseline (e.g. 20k)
-            v0 = series.iloc[0]
-            if v0 > 0:
-                series = series * (target_baseline / v0)
-            
         color = colors[i % len(colors)]
         
-        # Recalculate Stats for the visible period
-        stats = calculations.generate_stats(series)
-        cagr_raw = stats.get('cagr', 0.0)
-        cagr_display = cagr_raw
-        max_dd = stats.get('max_drawdown', 0.0)
+        # Stats from the original results (consistent with the Details tab)
+        cagr = original_stats.get('cagr', 0.0)
+        max_dd = original_stats.get('max_drawdown', 0.0)
         
-        label = f"{name} (CAGR: {cagr_display:.1f}%, DD: {max_dd:.1f}%)"
+        # Smart Stats: If visual alignment clipped data, recalculate the CAGR for the legend
+        # so it reflects the visible line's performance (Inception CAGR) rather than the zero-filled global CAGR.
+        twr_series = res.get('twr_series')
+        if common_start and twr_series is not None and not twr_series.empty:
+            # Slice TWR to common start
+            twr_clipped = twr_series[twr_series.index >= common_start]
+            if not twr_clipped.empty:
+                # Normalize just for calculation (Start=1.0)
+                rebased_twr = twr_clipped / twr_clipped.iloc[0]
+                # Recalculate CAGR
+                smart_cagr = calculations.calculate_cagr(rebased_twr)
+                if smart_cagr != 0.0:
+                    cagr = smart_cagr # Override for Legend Only
+        
+        label = f"{name} (CAGR: {cagr:.1f}%, DD: {max_dd:.1f}%)"
         
         fig.add_trace(go.Scatter(
             x=series.index, 
@@ -94,23 +96,23 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
             
-            # Align & Normalize Benchmark
+            # Clip to common_start for visual alignment
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
-                
-                bv0 = bench.iloc[0]
-                if bv0 > 0:
-                    bench = bench * (target_baseline / bv0)
             
-            # Name
+            # Name & Stats for the full available period
             b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
+            b_stats = calculations.generate_stats(bench)
+            b_cagr = b_stats.get('cagr', 0.0)
+            b_mdd = b_stats.get('max_drawdown', 0.0)
+            b_label = f"{b_name} (CAGR: {b_cagr:.1f}%, DD: {b_mdd:.1f}%)"
             
             fig.add_trace(go.Scatter(
                 x=bench.index,
                 y=bench.values,
                 mode='lines',
-                name=b_name,
+                name=b_label,
                 line=dict(color='#BDC3C7', width=1.5, dash='dash'),
                 hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
             ))
@@ -144,7 +146,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         series = res.get('series')
         if series is None or series.empty: continue
         
-        # Align
+        # Clip to common_start for visual alignment
         if common_start:
             series = series[series.index >= common_start]
             if series.empty: continue
@@ -172,6 +174,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
             
+            # Clip to common_start for visual alignment
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
@@ -219,6 +222,19 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             s = res.get('stats', {})
             # Handle CAGR: may be decimal (0.61) or percentage (61.41)
             cagr_raw = s.get('cagr', 0)
+            
+            # --- Smart Stats Logic (Match Chart Legend) ---
+            # If visual chart is clipped, the table should reflect the visible performance.
+            twr_series = res.get('twr_series')
+            if common_start and twr_series is not None and not twr_series.empty:
+                twr_clipped = twr_series[twr_series.index >= common_start]
+                if not twr_clipped.empty:
+                    # Normalize just for calculation
+                    rebased_twr = twr_clipped / twr_clipped.iloc[0]
+                    smart_cagr = calculations.calculate_cagr(rebased_twr)
+                    if smart_cagr != 0.0:
+                        cagr_raw = smart_cagr # Override for Table
+            
             cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
             
             # Handle volatility: may be decimal (0.20) or percentage (20.0)
@@ -935,7 +951,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
     )
     st.plotly_chart(fig2, use_container_width=True)
 
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id=""):
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy"):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
     quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
@@ -1118,7 +1134,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
     tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
     
     with tab_annual:
-        st.subheader("Annual Returns")
+        st.subheader(f"{portfolio_name} Annual Returns")
         
         colors = ["#00CC96" if x >= 0 else "#EF553B" for x in annual_ret]
         fig = go.Figure(go.Bar(
@@ -1150,13 +1166,13 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
     with tab_quarterly:
-        qt_tabs = ["Strategy"]
+        qt_tabs = [portfolio_name]
         if comparison_series is not None and not comparison_series.empty: qt_tabs.append("Benchmark (Comparison)")
         if bench_series is not None and not bench_series.empty: qt_tabs.append("Benchmark (Primary)")
             
         q_view_tabs = st.tabs(qt_tabs)
         with q_view_tabs[0]:
-            st.subheader("Strategy Quarterly Returns")
+            st.subheader(f"{portfolio_name} Quarterly Returns")
             render_quarterly_returns_view(port_series)
         
         if len(qt_tabs) > 1 and "Benchmark (Comparison)" in qt_tabs:
@@ -1170,13 +1186,13 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 render_quarterly_returns_view(bench_series, suffix="_bench")
 
     with tab_monthly:
-        hm_tabs = ["Strategy"]
+        hm_tabs = [portfolio_name]
         if comparison_series is not None and not comparison_series.empty: hm_tabs.append("Benchmark (Comparison)")
         if bench_series is not None and not bench_series.empty: hm_tabs.append("Benchmark (Primary)")
             
         m_view_tabs = st.tabs(hm_tabs)
         with m_view_tabs[0]:
-            st.subheader("Strategy Monthly Returns")
+            st.subheader(f"{portfolio_name} Monthly Returns")
             render_monthly_returns_view(port_series)
             
             st.subheader("Monthly Returns List")
@@ -1196,7 +1212,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 render_monthly_returns_view(bench_series, suffix="_bench")
 
     with tab_daily:
-        st.subheader("Daily Returns")
+        st.subheader(f"{portfolio_name} Daily Returns")
         
         c1, c2, c3 = st.columns(3)
         c1.metric("Best Day", f"{daily_ret.max()*100:+.2f}%")

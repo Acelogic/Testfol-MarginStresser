@@ -168,6 +168,41 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                         include_raw=True
                     )
                     stats = stats_api
+                    print(f"DEBUG APP: Tickers={alloc_map.keys()} | API Stats CAGR={stats.get('cagr')}")
+
+                    # --- Extract TWR Series from API for Accurate Smart Stats ---
+                    # We prefer API TWR (Official) over Local Shadow TWR (Conservative)
+                    api_twr_series = None
+                    if extra_data and 'daily_returns' in extra_data:
+                        d_rets = extra_data['daily_returns']
+                        # Format: [[date_str, pct, val], ...]
+                        if d_rets:
+                            try:
+                                # Convert to DataFrame
+                                df_rets = pd.DataFrame(d_rets, columns=['Date', 'Pct', 'Val'])
+                                df_rets['Date'] = pd.to_datetime(df_rets['Date'])
+                                df_rets = df_rets.set_index('Date').sort_index()
+                                
+                                # Calculate Factor (1 + r)
+                                # Pct is percentage (e.g. -3.035)
+                                df_rets['Factor'] = 1 + (df_rets['Pct'] / 100.0)
+                                
+                                # Cumulative Product to get TWR Index
+                                # Start at 1.0 (insert initial)
+                                start_dt = df_rets.index[0] - pd.Timedelta(days=1) # Aproximation
+                                
+                                # Let's just use cumprod directly
+                                twr_series_vals = df_rets['Factor'].cumprod()
+                                
+                                # Prepend 1.0 at start date (if possible, or just use first val)
+                                # Actually, cumprod starts at (1+r1).
+                                # We want a series representing Unit Value.
+                                # Normalized to 1.0 at start of data.
+                                # We can just pass this series. Our charts.py logic rebases it anyway (twr / twr[0]).
+                                api_twr_series = twr_series_vals
+                                api_twr_series.name = "TWR (API)"
+                            except Exception as e:
+                                print(f"Failed to build API TWR: {e}")
                     
                     # Run Shadow (Tax Only) - Using Global Tax Config for now
                     if not port_series.empty:
@@ -185,6 +220,10 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                             tax_config=config, 
                             custom_rebal_config=reb if r_mode == "Custom" else {}
                         )
+
+                        # Override TWR if API provided it (More accurate than Shadow)
+                        if api_twr_series is not None:
+                            twr_series = api_twr_series
                 else:
                     # --- Pure Local Path (NDXMEGASIM) ---
                      tickers = list(alloc_map.keys())

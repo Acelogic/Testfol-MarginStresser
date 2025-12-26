@@ -272,7 +272,7 @@ def render(results, config, portfolio_name=""):
              aligned_pf = tax_adj_port_series.reindex(bench_series.index, method='ffill')
              diff_val = aligned_pf.iloc[-1] - bench_series.iloc[-1]
              diff_pct = (diff_val / bench_series.iloc[-1]) * 100
-             st.info(f"**Comparison Active**: Strategy vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
+             st.info(f"**Comparison Active**: {portfolio_name} vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
          except:
              pass
     
@@ -340,12 +340,12 @@ def render(results, config, portfolio_name=""):
         
         comp_data = {
             "Metric": ["Ending Value", "CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
-            "Strategy": [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
+            portfolio_name: [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
             comp_label: [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{active_bench_stats.get('volatility',0)*100:.2f}%"],
             "Diff": [f"${strategy_end_val - bench_end_val:+,.0f}", f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
         }
         comp_df = pd.DataFrame(comp_data)
-        with st.expander(f"📊 Detailed Strategy vs {comp_label} Statistics", expanded=False):
+        with st.expander(f"📊 Detailed {portfolio_name} vs {comp_label} Statistics", expanded=False):
             st.dataframe(comp_df, hide_index=True, use_container_width=True)
             
     else:
@@ -760,7 +760,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
             tax_adj_port_series, 
             bench_series=bench_resampled,
             comparison_series=comp_resampled,
-            unique_id=portfolio_name
+            unique_id=portfolio_name,
+            portfolio_name=portfolio_name
         )
         
     with res_tab_rebal:

@@ -424,5 +424,37 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "QLD",
+        "allocation": [
+            {
+                "Ticker": "QQQSIM?L=2",
+                "Weight %": 100,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "QQUP ",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 100,
+                "Maint %": 25
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]

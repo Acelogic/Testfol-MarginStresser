@@ -1,6 +1,8 @@
 import pandas as pd
 import streamlit as st
 import os
+import subprocess
+import sys
 import yfinance as yf
 from app.services import testfol_api as api
 
@@ -27,7 +29,24 @@ def fetch_component_data(tickers, start_date, end_date):
                     csv_path = f"data/{base}.csv"
                     df_sim = pd.DataFrame()
                     if os.path.exists(csv_path):
-                        df_sim = pd.read_csv(csv_path)
+                        try:
+                            df_sim = pd.read_csv(csv_path)
+                        except (pd.errors.ParserError, pd.errors.EmptyDataError, ValueError) as e:
+                            st.warning(f"⚠️ Corruption detected in {base}.csv ({e}). Attempting auto-rebuild...")
+                            rebuild_script = os.path.join("data", "ndx_simulation", "scripts", "rebuild_all.py")
+                            if os.path.exists(rebuild_script):
+                                try:
+                                    with st.spinner("♻️ Rebuilding Simulation Data... (This takes a moment)"):
+                                        subprocess.run([sys.executable, rebuild_script], check=True)
+                                    st.success("Rebuild complete. Reloading data.")
+                                    df_sim = pd.read_csv(csv_path) # Retry load
+                                except Exception as rebuild_err:
+                                    st.error(f"❌ Rebuild failed: {rebuild_err}")
+                                    return pd.DataFrame()
+                            else:
+                                st.error(f"Cannot rebuild: Script not found at {rebuild_script}")
+                                return pd.DataFrame()
+
                         if 'Date' in df_sim.columns:
                             df_sim['Date'] = pd.to_datetime(df_sim['Date'])
                             df_sim = df_sim.set_index('Date')
