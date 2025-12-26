@@ -305,7 +305,7 @@ def download_nport_file(cik, accession, primary_doc, session=None, peek_keyword=
         return cache_path
     
     try:
-        logging.info(f"Downloading N-PORT from {url}")
+        logging.debug(f"Downloading N-PORT from {url}")
         res = session.get(url, headers={"Host": "www.sec.gov"}, stream=True, timeout=30)
         
         # If 404 on rendered form, fallback to raw? 
@@ -313,7 +313,7 @@ def download_nport_file(cik, accession, primary_doc, session=None, peek_keyword=
         if res.status_code == 404:
             # Fallback to raw
             url = f"{BASE_ARCHIVE_URL}/{cik}/{accession_no_dashes}/{primary_doc}"
-            logging.info(f"Rendered form not found, trying raw: {url}")
+            logging.debug(f"Rendered form not found, trying raw: {url}")
             res = session.get(url, headers={"Host": "www.sec.gov"}, stream=True, timeout=30)
             
         res.raise_for_status()
@@ -335,12 +335,12 @@ def download_nport_file(cik, accession, primary_doc, session=None, peek_keyword=
                         text_chunk = peek_buffer.decode('utf-8', errors='ignore')
                         if peek_keyword in text_chunk:
                             found = True
-                            logging.info(f"Found keyword '{peek_keyword}' in stream.")
+                            logging.debug(f"Found keyword '{peek_keyword}' in stream.")
                     except:
                         pass
                         
                 if not found and len(peek_buffer) >= peek_size:
-                    logging.info(f"Keyword '{peek_keyword}' not found in first 5MB. Aborting.")
+                    logging.debug(f"Keyword '{peek_keyword}' not found in first 5MB. Aborting.")
                     res.close()
                     os.remove(temp_path)
                     return None
@@ -404,7 +404,7 @@ def parse_nport_xhtml(filepath):
         # Vanguard uses: <h1>NPORT-P: Part C: Schedule of Portfolio Investments</h1>
         sections = re.split(r'<h1>NPORT-P: Part C: Schedule of Portfolio Investments</h1>', content, flags=re.IGNORECASE)
         
-        logging.info(f"Found {len(sections)-1} Part C sections in {filepath}")
+        logging.debug(f"Found {len(sections)-1} Part C sections in {filepath}")
         
         # Skip the first section (header info before first security)
         for section in sections[1:]:
@@ -717,7 +717,7 @@ def get_etf_holdings(ticker):
             logging.warning(f"Exceeded {max_attempts} attempts for {ticker}. Aborting search.")
             break
             
-        logging.info(f"Checking filing {accession} ({f_date})...")
+        logging.debug(f"Checking filing {accession} ({f_date})...")
         file_path = download_nport_file(cik, accession, primary_doc, session, peek_keyword=keyword)
         
         if not file_path:
@@ -727,13 +727,13 @@ def get_etf_holdings(ticker):
         # Strict Validation
         if keyword:
             if not validate_filing_content(file_path, keyword):
-                 logging.info(f"Filing {accession} failed validation for '{keyword}', skipping...")
+                 logging.debug(f"Filing {accession} failed validation for '{keyword}', skipping...")
                  attempts += 1
                  continue
                  
         # Size sanity check for broad market ETFs (should be > 5MB)
         if clean_ticker in ["VTI", "BND", "VXUS", "AGG", "IWM", "EEM", "VEA", "VWO", "IVV", "TLT", "SPY"] and os.path.getsize(file_path) < 5 * 1024 * 1024:
-             logging.info(f"Filing {accession} too small ({os.path.getsize(file_path)} bytes) for {ticker}, skipping...")
+             logging.debug(f"Filing {accession} too small ({os.path.getsize(file_path)} bytes) for {ticker}, skipping...")
              continue
 
         logging.info(f"Match found in {accession}!")

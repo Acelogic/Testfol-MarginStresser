@@ -66,7 +66,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         cagr = stats.get('cagr', 0.0)
         max_dd = stats.get('max_drawdown', 0.0)
         
-        label = f"{name} (CAGR: {cagr:.1f}%, DD: {max_dd:.1f}%)"
+        label = f"{name} (CAGR: {cagr:.2f}%, DD: {max_dd:.2f}%)"
         
         # Rebase to $10k at common start for fair visual comparison
         original_values = series.values
@@ -98,7 +98,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             b_stats = calculations.generate_stats(bench)
             b_cagr = b_stats.get('cagr', 0.0)
             b_mdd = b_stats.get('max_drawdown', 0.0)
-            b_label = f"{b_name} (CAGR: {b_cagr:.1f}%, DD: {b_mdd:.1f}%)"
+            b_label = f"{b_name} (CAGR: {b_cagr:.2f}%, DD: {b_mdd:.2f}%)"
             
             # Rebase to $10k
             b_original = bench.values

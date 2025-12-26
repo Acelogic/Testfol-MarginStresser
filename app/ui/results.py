@@ -25,13 +25,23 @@ def render(results, config, portfolio_name="", clip_start_date=None):
     
     # --- Clip Data Logic (Sync with Chart) ---
     original_start_date = results.get("start_date")
+    twr_series = results.get("twr_series")
+
     if clip_start_date and not port_series.empty:
         # Avoid clipping if clip_start is before port start
         if clip_start_date > port_series.index[0]:
             port_series = port_series[port_series.index >= clip_start_date]
+            
             # Recalculate Stats for clipped period
             if not port_series.empty:
-                stats = calculations.generate_stats(port_series)
+                # Use TWR Series for stats if available (Correct for Cashflows)
+                target_series = port_series
+                if twr_series is not None and not twr_series.empty:
+                    twr_clipped = twr_series[twr_series.index >= clip_start_date]
+                    if not twr_clipped.empty:
+                        target_series = twr_clipped
+                
+                stats = calculations.generate_stats(target_series)
     
     # Initialize optional chart variables to prevent UnboundLocalError
     fig_tax_impact = None

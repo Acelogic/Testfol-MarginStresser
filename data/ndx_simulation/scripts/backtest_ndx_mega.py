@@ -210,18 +210,7 @@ def backtest():
         # Note: We re-normalize to 100% of the HELD portfolio here.
         final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA1_SINGLE_STOCK_CAP)
 
-        # Check for Mid-Quarter Changes (Pre-emptive Replacement)
-        replacements = changes_parser.get_replacement_map(start_dt, end_dt)
-        for old, new in replacements.items():
-            if old in final_weights.index:
-                # Only swap if we have data for the new one
-                if new in data.columns:
-                    print(f"  [Rebal Event] Replacing {old} with {new} (Pre-emptive)")
-                    # Assign old weight to new ticker
-                    final_weights[new] = final_weights[old]
-                    final_weights = final_weights.drop(old)
-                else:
-                    print(f"  Warning: Cannot replace {old} -> {new}: Price data missing for {new}")
+
 
         # Stats
         constituents_history.append({
@@ -233,32 +222,100 @@ def backtest():
             "Weights": "|".join([f"{w:.6f}" for w in final_weights])
         })
         
-        # 3. Perf Simulation (Buy and Hold for Quarter)
-        try:
-            price_slice = data.loc[start_dt:end_dt, final_weights.index]
-            price_slice = price_slice.ffill()
+        # 3. Perf Simulation (Event-Driven)
+        quarter_changes = changes_parser.get_changes_between(start_dt, end_dt)
+        
+        # Build timeline
+        timeline = sorted(list(set([start_dt] + quarter_changes['Date'].tolist() + [end_dt])))
+        timeline = [d for d in timeline if start_dt <= d <= end_dt]
+        
+        # Ensure we have at least start and end
+        if len(timeline) < 2: timeline = [start_dt, end_dt]
+        if timeline[0] != start_dt: timeline.insert(0, start_dt)
+        if timeline[-1] != end_dt: timeline.append(end_dt)
+        timeline = sorted(list(set(timeline))) # Specific safety re-sort
+
+        curr_w = final_weights.copy()
+        
+        for k in range(len(timeline) - 1):
+            sub_start = timeline[k]
+            # Simulation goes up to sub_end
+            # If sub_end is a change date, the change happens AFTER market close (mostly).
+            # So we simulate fully UP TO sub_end.
+            # Then we adjust weights for the NEXT start.
+            sub_end = timeline[k+1]
             
-            p_start = price_slice.iloc[0]
-            valid_mask = (p_start > 0) & (p_start.notna())
+            if sub_start >= sub_end: continue
             
-            # Re-confirm validity at start date data
-            if not valid_mask.all():
-                # Drop invalid
-                valid_tkrs = valid_mask.index[valid_mask].tolist()
-                final_weights = final_weights[valid_tkrs]
-                final_weights = final_weights / final_weights.sum()
-                p_start = p_start[valid_tkrs]
-                price_slice = price_slice[valid_tkrs]
+            try:
+                # Slice logic: [sub_start, sub_end]
+                # We include sub_end because the change happens effectively after that day's close.
+                price_slice = data.loc[sub_start:sub_end, curr_w.index]
+                
+                # If sub_end == sub_start, slice might be 1 row
+                if price_slice.empty: continue
+                
+                # We need to drop the first row IF it overlaps with previous? 
+                # No, previous loop went to its sub_end.
+                # If loop 1: D1 -> D2. We simulate D1..D2. Current Value is close of D2.
+                # Next loop: D2 -> D3. Start at D2?
+                # Double counting D2?
+                # YES.
+                # Correct: 
+                # Loop 1 simulates return from D1 to D2. Value updates.
+                # Loop 2 simulates D2 to D3.
+                # The "return" of D2 calc: (Price_D2 / Price_D1) - 1.
+                # If we include D2 in Loop 2, we calculate (Price_D3 / Price_D2).
+                # This is correct chaining.
+                # BUT we need start price.
+                # p_start = price_slice.iloc[0] (which is D2 price).
+                # shares = curr_w_value / Price_D2.
+                # End Value = shares * Price_D3.
+                # So yes, overlaps are handled by re-basing shares at start of each sub-period.
+                
+                price_slice = price_slice.ffill()
+                
+                p_start = price_slice.iloc[0]
+                valid_mask = (p_start > 0) & (p_start.notna())
+                
+                if not valid_mask.all():
+                    valid_tkrs = valid_mask.index[valid_mask].tolist()
+                    curr_w = curr_w[valid_tkrs]
+                    if curr_w.sum() > 0: curr_w = curr_w / curr_w.sum()
+                    p_start = p_start[valid_tkrs]
+                    price_slice = price_slice[valid_tkrs]
+                
+                if curr_w.empty: continue
+                
+                # Re-calculate shares based on Current Portfolio Value
+                shares = (curr_w * current_value) / p_start
+                
+                daily_vals = price_slice.dot(shares)
+                
+                # Update series
+                mega_values.loc[daily_vals.index] = daily_vals
+                current_value = daily_vals.iloc[-1]
+                
+            except Exception as e:
+                print(f"Error simulating sub-period {sub_start} to {sub_end}: {e}")
             
-            shares = final_weights / p_start
-            daily_vals = price_slice.dot(shares)
-            
-            daily_vals_scaled = daily_vals * current_value
-            mega_values.loc[daily_vals_scaled.index] = daily_vals_scaled
-            current_value = daily_vals_scaled.iloc[-1]
-            
-        except Exception as e:
-            print(f"Error simulating {start_dt}: {e}")
+            # --- Handle Logic at Event Date (sub_end) ---
+            if sub_end != end_dt:
+                # This is a change date
+                todays_changes = quarter_changes[quarter_changes['Date'] == sub_end]
+                for _, row in todays_changes.iterrows():
+                    removed = row.get('Removed Ticker')
+                    # Added ticker logic omitted for Mega 1.0 (Drop Only)
+                    
+                    if pd.notna(removed) and removed in curr_w.index:
+                        print(f"  [Event {sub_end.date()}] Dropping {removed} (Methodology: No Replace)")
+                        curr_w = curr_w.drop(removed)
+                
+                # Re-normalize
+                if curr_w.sum() > 0:
+                    curr_w = curr_w / curr_w.sum()
+                else:
+                    print(f"  Warning: Portfolio empty after drops on {sub_end.date()}")
 
     mega_values = mega_values.dropna()
     
