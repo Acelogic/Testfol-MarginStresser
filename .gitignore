@@ -212,3 +212,6 @@ data/etf_xray/cache/etf_filings/
 # data/*.csv
 # !data/Historical Income Tax Rates and Brackets, 1862-2025.csv
 
+
+# API Cache
+data/api_cache/
