@@ -338,6 +338,18 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             yaxis="y2",
             hovertemplate="Equity %: %{y:.1%}<extra></extra>"
         ))
+
+    # Margin Call Threshold Line (100% Usage)
+    if "Margin usage %" in series_opts:
+        fig.add_trace(go.Scatter(
+            x=[port_series.index[0], port_series.index[-1]], 
+            y=[1.0, 1.0],
+            name="Margin Call Threshold",
+            line=dict(color='#FF0000', width=1.5, dash='dash'), # Red dashed line
+            yaxis="y2",
+            mode="lines",
+            hoverinfo="skip" # Don't clutter hover
+        ))
         
     if effective_rate_series is not None and not effective_rate_series.empty:
         # Check if rate is in % (e.g. 5.0) or decimal (0.05). API returns %.
