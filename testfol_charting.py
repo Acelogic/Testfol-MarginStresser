@@ -305,9 +305,9 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                     except Exception as e:
                         print(f"Failed standard comparison: {e}")
 
-            # --- Pass 2: Auto-Align Start Dates (Re-Simulate from Common Start) ---
-            # User Request: "if we have a common date out of that range we should ignore the global and just use the common as the start date"
-            # To fix "End Value" discrepancies, we must start fresh at common date with full capital.
+            # --- Pass 2: Re-Fetch API Portfolios at Common Start Date ---
+            # For pure Testfol portfolios, re-fetch from API with common_start to get accurate stats.
+            # For local simulations (NDXMEGASIM), use TWR-based rebasing (only option).
             
             # 1. Determine Common Start
             start_dates = []
@@ -323,7 +323,7 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                             
             common_start = max(start_dates) if start_dates else None
             
-            # 2. Re-Simulate if needed
+            # 2. Re-Fetch or Re-Simulate if needed
             if common_start:
                 global_start_val = config.get('global_cashflow', {}).get('start_val', 10000.0)
                 
@@ -331,32 +331,165 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                     series = res.get('series')
                     if series is None or series.empty: continue
                     
-                    # If this portfolio started significantly earlier than common_start
-                    if series.index[0] < common_start:
-                        # We need to re-simulate starting from common_start
-                        # Method: Use TWR series to project value from scratch
+                    original_start = series.index[0]
+                    
+                    # Only process if this portfolio started significantly earlier than common_start
+                    if original_start < common_start - pd.Timedelta(days=3):
                         
-                        twr = res.get('twr_series')
-                        if twr is not None and not twr.empty:
-                            # Slice TWR to start at common_start
-                            twr_slice = twr[twr.index >= common_start]
+                        if not res.get('is_local', False):
+                            # --- API Portfolio: Re-fetch with common_start for accurate stats ---
+                            p = portfolios[i]  # Get original portfolio config
+                            alloc_map = dict(zip(p['alloc_df']['Ticker'], p['alloc_df']['Weight %']))
                             
-                            if not twr_slice.empty:
-                                # Normalize TWR to start at 1.0 at common_start
-                                scale_factor = twr_slice / twr_slice.iloc[0]
-                                new_series = scale_factor * global_start_val
+                            gcf = config.get('global_cashflow', {})
+                            reb = p.get('rebalance', {})
+                            r_freq = reb.get('freq', 'Yearly')
+                            r_mode = reb.get('mode', 'Standard')
+                            
+                            # Calculate rebalance offset (same as first pass)
+                            calc_rebal_offset = 0
+                            if r_mode == "Custom":
+                                r_month = reb.get('month', 1)
+                                r_day = reb.get('day', 1)
+                                try:
+                                    if r_freq == "Yearly":
+                                        end_of_year = pd.Timestamp("2024-12-31")
+                                        target_date = pd.Timestamp(f"2024-{r_month}-{r_day}")
+                                        days_remaining = (end_of_year - target_date).days
+                                        calc_rebal_offset = int(days_remaining * (252.0 / 366.0))
+                                    else:
+                                        days_remaining = 31 - r_day
+                                        calc_rebal_offset = int(days_remaining * (21.0 / 31.0))
+                                except:
+                                    calc_rebal_offset = 0
+                            
+                            try:
+                                # Re-fetch with common_start date
+                                new_series, new_stats, new_extra = cached_fetch_backtest(
+                                    start_date=common_start.strftime('%Y-%m-%d'),
+                                    end_date=end_date,
+                                    start_val=global_start_val,
+                                    cashflow=0.0 if gcf.get('pay_down_margin', False) else gcf.get('amount', 0.0),
+                                    cashfreq=gcf.get('freq', 'Monthly'),
+                                    rolling=60,
+                                    invest_div=gcf.get('invest_div', True),
+                                    rebalance=r_freq,
+                                    rebalance_offset=calc_rebal_offset,
+                                    allocation=alloc_map,
+                                    return_raw=False,
+                                    include_raw=True,
+                                    bearer_token=bearer_token
+                                )
                                 
-                                # Replace in results
-                                res['series'] = new_series
-                                res['port_series'] = new_series # Fix KeyError: Sync Alias
+                                if not new_series.empty:
+                                    # Update with fresh API data
+                                    res['series'] = new_series
+                                    res['port_series'] = new_series
+                                    res['original_api_stats'] = res.get('stats', {})
+                                    res['stats'] = new_stats  # Use API stats directly!
+                                    res['stats_source'] = 'refetched'
+                                    res['raw_response'] = new_extra
+                                    print(f"DEBUG: Re-fetched {res['name']} from {common_start.date()} - CAGR: {new_stats.get('cagr')}")
+                                    
+                                    # Re-run shadow backtest with new series for aligned taxes/trades
+                                    try:
+                                        shadow_cf = 0.0 if gcf.get('pay_down_margin', False) else gcf.get('amount', 0.0)
+                                        new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr = cached_run_shadow_backtest_v2(
+                                            allocation=alloc_map,
+                                            start_val=global_start_val,
+                                            start_date=common_start.strftime('%Y-%m-%d'),
+                                            end_date=end_date,
+                                            api_port_series=new_series,
+                                            rebalance_freq="Custom",
+                                            cashflow=shadow_cf,
+                                            cashflow_freq=gcf.get('freq', 'Monthly'),
+                                            invest_dividends=gcf.get('invest_div', True),
+                                            pay_down_margin=gcf.get('pay_down_margin', False),
+                                            tax_config=config,
+                                            custom_rebal_config=reb if r_mode == "Custom" else {}
+                                        )
+                                        # Update result with aligned shadow data
+                                        res['trades_df'] = new_trades
+                                        res['trades'] = new_trades
+                                        res['pl_by_year'] = new_pl
+                                        res['composition_df'] = new_comp
+                                        res['composition'] = new_comp
+                                        res['unrealized_pl_df'] = new_unrealized
+                                        res['logs'] = new_logs
+                                        res['twr_series'] = new_twr
+                                        print(f"DEBUG: Re-ran shadow backtest for {res['name']} from {common_start.date()}")
+                                    except Exception as shadow_e:
+                                        print(f"Failed to re-run shadow for {res['name']}: {shadow_e}")
+                                    
+                            except Exception as e:
+                                print(f"Failed to re-fetch {res['name']}: {e}")
+                                # Fallback to TWR-based rebasing
+                                twr = res.get('twr_series')
+                                if twr is not None and not twr.empty:
+                                    twr_slice = twr[twr.index >= common_start]
+                                    if not twr_slice.empty:
+                                        scale_factor = twr_slice / twr_slice.iloc[0]
+                                        new_series = scale_factor * global_start_val
+                                        res['series'] = new_series
+                                        res['port_series'] = new_series
+                                        res['stats'] = calculations.generate_stats(new_series)
+                                        res['stats_source'] = 'rebased'
+                        else:
+                            # --- Local Portfolio (NDXMEGASIM): Use TWR-based rebasing ---
+                            twr = res.get('twr_series')
+                            if twr is not None and not twr.empty:
+                                twr_slice = twr[twr.index >= common_start]
                                 
-                                # Preserve original API stats before recalculating
-                                res['original_api_stats'] = res.get('stats', {})
-                                res['stats'] = calculations.generate_stats(new_series)
-                                res['stats_source'] = 'rebased'  # Flag for UI disambiguation
-                                
-                                # Update description
-                                # st.toast(f"Re-aligned {res['name']} to start {common_start.date()}")
+                                if not twr_slice.empty:
+                                    scale_factor = twr_slice / twr_slice.iloc[0]
+                                    new_series = scale_factor * global_start_val
+                                    
+                                    res['series'] = new_series
+                                    res['port_series'] = new_series
+                                    res['original_api_stats'] = res.get('stats', {})
+                                    res['stats'] = calculations.generate_stats(new_series)
+                                    res['stats_source'] = 'rebased'
+                                    print(f"DEBUG: Rebased local {res['name']} from {common_start.date()} - CAGR: {res['stats'].get('cagr')}")
+                                    
+                                    # Re-run shadow backtest for local portfolio too
+                                    try:
+                                        from app.services.data_service import fetch_component_data
+                                        tickers = list(alloc_map.keys())
+                                        prices_df_new = fetch_component_data(tickers, common_start.strftime('%Y-%m-%d'), end_date)
+                                        
+                                        shadow_cf = 0.0 if gcf.get('pay_down_margin', False) else gcf.get('amount', 0.0)
+                                        new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr = cached_run_shadow_backtest_v2(
+                                            allocation=alloc_map,
+                                            start_val=global_start_val,
+                                            start_date=common_start.strftime('%Y-%m-%d'),
+                                            end_date=end_date,
+                                            api_port_series=None,
+                                            rebalance_freq=reb.get('freq', 'Yearly'),
+                                            cashflow=shadow_cf,
+                                            cashflow_freq=gcf.get('freq', 'Monthly'),
+                                            invest_dividends=gcf.get('invest_div', True),
+                                            pay_down_margin=gcf.get('pay_down_margin', False),
+                                            tax_config=config,
+                                            custom_rebal_config=reb if r_mode == "Custom" else {},
+                                            prices_df=prices_df_new,
+                                            rebalance_month=reb.get('month', 1),
+                                            rebalance_day=reb.get('day', 1),
+                                            custom_freq=reb.get('freq', 'Yearly')
+                                        )
+                                        # Update result with aligned shadow data
+                                        res['trades_df'] = new_trades
+                                        res['trades'] = new_trades
+                                        res['pl_by_year'] = new_pl
+                                        res['composition_df'] = new_comp
+                                        res['composition'] = new_comp
+                                        res['unrealized_pl_df'] = new_unrealized
+                                        res['logs'] = new_logs
+                                        res['twr_series'] = new_twr
+                                        # Recalculate stats from new TWR
+                                        res['stats'] = calculations.generate_stats(new_twr if new_twr is not None and not new_twr.empty else new_series)
+                                        print(f"DEBUG: Re-ran shadow backtest for local {res['name']} from {common_start.date()}")
+                                    except Exception as shadow_e:
+                                        print(f"Failed to re-run shadow for local {res['name']}: {shadow_e}")
                                 
             # -------------------------------------------------------------------
             # Store for Rendering
