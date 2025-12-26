@@ -20,7 +20,7 @@ def table_to_dicts(df: pd.DataFrame):
 
 def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
                    invest_div, rebalance, allocation, return_raw=False, include_raw=False,
-                   rebalance_offset=0, cashflow_offset=0):
+                   rebalance_offset=0, cashflow_offset=0, **kwargs):
     """
     Fetches backtest data from testfol.io API with universal disk caching.
     """
@@ -97,8 +97,19 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
             "relative_dev": 0
         }]
     }
+    
+    headers = {}
+    # Check for Bearer Token (Arg > Env)
+    token = kwargs.get('bearer_token') or os.environ.get("TESTFOL_API_KEY")
+    if token:
+        # Sanitize: Remove 'Bearer ' prefix if user pasted it
+        if token.startswith("Bearer "):
+            token = token.replace("Bearer ", "", 1).strip()
+            
+        headers["Authorization"] = f"Bearer {token}"
+        
     try:
-        r = requests.post(API_URL, json=payload, timeout=30)
+        r = requests.post(API_URL, json=payload, headers=headers, timeout=30)
         
         # Rate Limit Protection (Only on actual API call)
         time.sleep(2.0) 

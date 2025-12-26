@@ -13,26 +13,31 @@ from app.services import testfol_api as api
 from app.reporting import report_generator
 from app.ui import charts, xray_view
 
-def render(results, config, portfolio_name=""):
+def render(results, config, portfolio_name="", clip_start_date=None):
     """
     Renders the results section, including metrics and charts.
-    
-    Args:
-        results (dict): The results dictionary from the backtest.
-        config (dict): The configuration dictionary used for the backtest.
     """
         
     # Extract Data from Results
-    
     port_series = results["port_series"]
     stats = results["stats"]
     portfolio_name = results.get("name", "Portfolio")
+    
+    # --- Clip Data Logic (Sync with Chart) ---
+    original_start_date = results.get("start_date")
+    if clip_start_date and not port_series.empty:
+        # Avoid clipping if clip_start is before port start
+        if clip_start_date > port_series.index[0]:
+            port_series = port_series[port_series.index >= clip_start_date]
+            # Recalculate Stats for clipped period
+            if not port_series.empty:
+                stats = calculations.generate_stats(port_series)
     
     # Initialize optional chart variables to prevent UnboundLocalError
     fig_tax_impact = None
     
     if port_series.empty or not isinstance(port_series.index, pd.DatetimeIndex):
-        st.error("No valid simulation data generated. Check inputs or API connection.")
+        st.error("No valid simulation data generated (or data completely clipped). Check inputs or API connection.")
         return
         
     trades_df = results["trades_df"]
@@ -40,9 +45,17 @@ def render(results, config, portfolio_name=""):
     composition_df = results.get("composition_df", pd.DataFrame())
     raw_response = results["raw_response"]
     
+    # Clip other series if they exist
+    # Note: pl_by_year and trades_df might still refer to old period, but primary metrics rely on port_series
+    
     # Extract Config Values
     # We fallback to results defaults if necessary, but config should match
-    start_val = results["start_val"]
+    # Adjusted Start Val for Recalculation?
+    # Actually, start_val is just input. Efficiency: If we clip, the NEW 'start val' is the val at clip date.
+    # But for "Growth of $10k", we simply rebase in charts. 
+    # For metrics 'total_return', we need accurate start/end.
+    start_val = port_series.iloc[0] # RE-BASE start val to the clipped start
+    
     wmaint = results.get("wmaint", config.get('wmaint', 0.25))
     
     # Tax/Margin Config
@@ -70,10 +83,15 @@ def render(results, config, portfolio_name=""):
     
     pm_enabled = config.get('pm_enabled', False)
     
-    pm_enabled = config.get('pm_enabled', False)
-    
     # Extract Benchmark (Standard Comparison or Custom)
     bench_series = results.get("bench_series", None)
+    bench_stats = results.get("bench_stats")
+    
+    # Clip Benchmark if exists
+    if bench_series is not None and clip_start_date:
+         bench_series = bench_series[bench_series.index >= clip_start_date]
+         if not bench_series.empty:
+             bench_stats = calculations.generate_stats(bench_series)
     
     logs = results.get("logs", [])
 
@@ -263,7 +281,16 @@ def render(results, config, portfolio_name=""):
     
 
     
-    st.caption(f"📅 **Backtest Range:** {results.get('sim_range', 'N/A')}")
+    
+    # Update Range Caption to reflect actual displayed data
+    if not port_series.empty:
+        start_str = port_series.index[0].strftime('%Y-%m-%d')
+        end_str = port_series.index[-1].strftime('%Y-%m-%d')
+        display_range = f"{start_str} to {end_str} (Synced)"
+    else:
+        display_range = results.get('sim_range', 'N/A')
+
+    st.caption(f"📅 **Backtest Range:** {display_range}")
     m1, m2, m3, m4, m5 = st.columns(5)
     
     # Comparison Logic

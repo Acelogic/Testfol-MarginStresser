@@ -23,5 +23,8 @@ def render():
         run_placeholder = st.empty()
         st.info("Configure your strategy, then click Run.")
         
-    return start_date, end_date, run_placeholder
+        with st.expander("API Settings"):
+             bearer_token = st.text_input("Bearer Token (Optional)", type="password", help="Overrides TESTFOL_API_KEY env var if set.")
+        
+    return start_date, end_date, bearer_token, run_placeholder
 

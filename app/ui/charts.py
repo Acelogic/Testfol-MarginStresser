@@ -16,7 +16,7 @@ from app.core import calculations
 def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     """
     Renders a performance chart for multiple portfolios.
-    results_list: List of dicts {'name': str, 'series': pd.Series, 'stats': dict, 'start_val': float}
+    Clips all series to common start date and rebases to $10k for fair comparison.
     """
     st.markdown("### Multi-Portfolio Performance Comparison")
 
@@ -24,96 +24,95 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
 
     # Colors for portfolios
     colors = ['#2E86C1', '#28B463', '#D35400', '#884EA0', '#F1C40F', '#1F618D', '#148F77', '#B03A2E']
-    
-    # 1. Determine Common Date Range (Intersection)
+
+    # Determine Common Start Date (latest start among all portfolios)
     start_dates = []
-    
-    # Collect start dates from portfolios to determine overall chart window
     for res in results_list:
         series = res.get('series')
         if series is not None and not series.empty:
             start_dates.append(series.index.min())
-            
-    # Collect start dates from benchmarks
     if benchmarks:
         for bench in benchmarks:
             if bench is not None and not bench.empty:
                 start_dates.append(bench.index.min())
-
-    # Find the Latest Start Date (to clip all to common range for visual alignment)
-    # We do NOT normalize dollar values—this ensures chart tooltips match the stats table.
+    
     common_start = max(start_dates) if start_dates else None
+    
+    # Use the first portfolio's start_val from user's Global Capital config
+    rebase_target = 10000.0
+    if results_list:
+        rebase_target = results_list[0].get('start_val', 10000.0)
+    
     if common_start:
-        st.caption(f"ℹ️ Chart aligned to common start date: **{common_start.date()}**")
+        st.caption(f"ℹ️ Chart aligned to common start date: **{common_start.date()}**. All values rebased to ${rebase_target:,.0f}.")
 
-    # Add Portfolios
+    # Add Portfolios (clipped to common start, rebased to $10k)
     for i, res in enumerate(results_list):
         name = res['name']
-        series = res['series']
-        original_stats = res.get('stats', {}) # Stats for the FULL chosen simulation period
+        series = res.get('series')
+        stats = res.get('stats', {})
         
         if series is None or series.empty:
             continue
-         
-        # Clip to common_start for visual alignment (no staircase)
+        
+        # Clip to common start date
         if common_start:
             series = series[series.index >= common_start]
             if series.empty: continue
             
         color = colors[i % len(colors)]
         
-        # Stats from the original results (consistent with the Details tab)
-        cagr = original_stats.get('cagr', 0.0)
-        max_dd = original_stats.get('max_drawdown', 0.0)
-        
-        # Smart Stats: If visual alignment clipped data, recalculate the CAGR for the legend
-        # so it reflects the visible line's performance (Inception CAGR) rather than the zero-filled global CAGR.
-        twr_series = res.get('twr_series')
-        if common_start and twr_series is not None and not twr_series.empty:
-            # Slice TWR to common start
-            twr_clipped = twr_series[twr_series.index >= common_start]
-            if not twr_clipped.empty:
-                # Normalize just for calculation (Start=1.0)
-                rebased_twr = twr_clipped / twr_clipped.iloc[0]
-                # Recalculate CAGR
-                smart_cagr = calculations.calculate_cagr(rebased_twr)
-                if smart_cagr != 0.0:
-                    cagr = smart_cagr # Override for Legend Only
+        # Stats from API (no recalculation)
+        cagr = stats.get('cagr', 0.0)
+        max_dd = stats.get('max_drawdown', 0.0)
         
         label = f"{name} (CAGR: {cagr:.1f}%, DD: {max_dd:.1f}%)"
         
+        # Rebase to $10k at common start for fair visual comparison
+        original_values = series.values
+        plot_values = series.values
+        if not series.empty and series.iloc[0] != 0:
+            plot_values = (series.values / series.iloc[0]) * rebase_target
+        
         fig.add_trace(go.Scatter(
             x=series.index, 
-            y=series.values, 
+            y=plot_values, 
             mode='lines', 
             name=label,
             line=dict(color=color, width=2),
+            customdata=original_values,  # Store actual values for reference
             hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
         ))
 
-    # Add Benchmarks
+    # Add Benchmarks (clipped to common start, rebased to $10k)
     if benchmarks:
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
             
-            # Clip to common_start for visual alignment
+            # Clip to common start date
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
             
-            # Name & Stats for the full available period
             b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
             b_stats = calculations.generate_stats(bench)
             b_cagr = b_stats.get('cagr', 0.0)
             b_mdd = b_stats.get('max_drawdown', 0.0)
             b_label = f"{b_name} (CAGR: {b_cagr:.1f}%, DD: {b_mdd:.1f}%)"
             
+            # Rebase to $10k
+            b_original = bench.values
+            b_plot = bench.values
+            if not bench.empty and bench.iloc[0] != 0:
+                b_plot = (bench.values / bench.iloc[0]) * rebase_target
+            
             fig.add_trace(go.Scatter(
                 x=bench.index,
-                y=bench.values,
+                y=b_plot,
                 mode='lines',
                 name=b_label,
                 line=dict(color='#BDC3C7', width=1.5, dash='dash'),
+                customdata=b_original,
                 hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
             ))
             
@@ -123,6 +122,8 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         xaxis_hoverformat="%b %d, %Y",
         yaxis_title="Portfolio Value ($)",
         yaxis_type="log" if log_scale else "linear",
+        yaxis_tickprefix="$",
+        yaxis_tickformat="s", # Uses SI prefixes (k, M, G)
         height=500,
         hovermode="x unified",
         legend=dict(
@@ -141,12 +142,12 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     st.markdown("### Drawdowns")
     fig_dd = go.Figure()
 
-    # 1. Portfolios Drawdown
+    # 1. Portfolios Drawdown (clipped to common start)
     for i, res in enumerate(results_list):
         series = res.get('series')
         if series is None or series.empty: continue
         
-        # Clip to common_start for visual alignment
+        # Clip to common start date
         if common_start:
             series = series[series.index >= common_start]
             if series.empty: continue
@@ -169,12 +170,12 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             hovertemplate="<b>%{fullData.name}</b>: %{y:.2%}<extra></extra>"
         ))
 
-    # 2. Benchmarks Drawdown
+    # 2. Benchmarks Drawdown (clipped to common start)
     if benchmarks:
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
             
-            # Clip to common_start for visual alignment
+            # Clip to common start date
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
@@ -211,43 +212,40 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         ),
         margin=dict(l=40, r=40, t=30, b=40)
     )
+        
     st.plotly_chart(fig_dd, use_container_width=True)
 
-    # Comparison Table
+    # Comparison Table (Stats recalculated from clipped data for consistency)
     if results_list:
         st.markdown("### Statistics")
         
         stats_data = []
         for res in results_list:
-            s = res.get('stats', {})
-            # Handle CAGR: may be decimal (0.61) or percentage (61.41)
-            cagr_raw = s.get('cagr', 0)
+            series = res.get('series')
+            if series is None or series.empty:
+                continue
             
-            # --- Smart Stats Logic (Match Chart Legend) ---
-            # If visual chart is clipped, the table should reflect the visible performance.
-            twr_series = res.get('twr_series')
-            if common_start and twr_series is not None and not twr_series.empty:
-                twr_clipped = twr_series[twr_series.index >= common_start]
-                if not twr_clipped.empty:
-                    # Normalize just for calculation
-                    rebased_twr = twr_clipped / twr_clipped.iloc[0]
-                    smart_cagr = calculations.calculate_cagr(rebased_twr)
-                    if smart_cagr != 0.0:
-                        cagr_raw = smart_cagr # Override for Table
+            # Clip to common start (same as chart)
+            if common_start:
+                series = series[series.index >= common_start]
+                if series.empty: continue
             
+            # Recalculate stats from clipped series
+            clipped_stats = calculations.generate_stats(series)
+            
+            cagr_raw = clipped_stats.get('cagr', 0)
             cagr_display = cagr_raw * 100 if abs(cagr_raw) <= 1 else cagr_raw
             
-            # Handle volatility: may be decimal (0.20) or percentage (20.0)
-            vol_raw = s.get('volatility', 0)
+            vol_raw = clipped_stats.get('volatility', 0)
             vol_display = vol_raw * 100 if abs(vol_raw) <= 1 else vol_raw
             
             row = {
                 "Name": res['name'],
                 "CAGR": f"{cagr_display:.2f}%",
                 "Stdev": f"{vol_display:.2f}%",
-                "Sharpe": f"{s.get('sharpe', 0):.2f}",
-                "Max DD": f"{s.get('max_drawdown', 0):.2f}%",
-                "End Balance": f"${res['series'].iloc[-1]:,.2f}" if not res['series'].empty else "$0"
+                "Sharpe": f"{clipped_stats.get('sharpe', 0):.2f}",
+                "Max DD": f"{clipped_stats.get('max_drawdown', 0):.2f}%",
+                "End Balance": f"${series.iloc[-1]:,.2f}" if not series.empty else "$0"
             }
             stats_data.append(row)
             
