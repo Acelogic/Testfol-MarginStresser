@@ -64,6 +64,7 @@ def backtest():
     print(f"Fetching prices for {len(tickers)} tickers...")
     start_date = weights_df['Date'].min().strftime('%Y-%m-%d')
     
+    # price_manager reads NDX_DATA_SOURCE and POLYGON_API_KEY from environment
     data = price_manager.get_price_data(tickers, start_date)
     
     if data is None or data.empty:
