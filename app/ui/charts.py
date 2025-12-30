@@ -976,7 +976,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
         quarterly_ret = series.resample("QE").last().pct_change().dropna()
-        annual_ret = series.resample("YE").last().pct_change().dropna()
+
         
         q_ret = quarterly_ret.to_frame(name="Return")
         q_ret["Year"] = q_ret.index.year
@@ -999,8 +999,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         years = pivot.index
         yearly_col = []
         for y in years:
-            val = annual_ret[annual_ret.index.year == y]
-            yearly_col.append(val.values[0] if not val.empty else float("nan"))
+            # Calculate geometric sum of the quarters for consistency
+            row = pivot.loc[y]
+            ret = (1 + row.fillna(0)).prod() - 1
+            yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
 
@@ -1079,7 +1081,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
         m_ret = series.resample("ME").last().pct_change().dropna()
-        a_ret = series.resample("YE").last().pct_change().dropna()
+
         
         df_monthly = m_ret.to_frame(name="Return")
         df_monthly["Year"] = df_monthly.index.year
@@ -1098,8 +1100,12 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         years = pivot.index
         yearly_col = []
         for y in years:
-            val = a_ret[a_ret.index.year == y]
-            yearly_col.append(val.values[0] if not val.empty else float("nan"))
+            # Calculate geometric sum of the months for consistency
+            # This ensures the Yearly column matches the compounded value of the displayed months
+            row = pivot.loc[y]
+            # compound: product(1+r) - 1. Treat NaNs as 0 (no return for that period)
+            ret = (1 + row.fillna(0)).prod() - 1
+            yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
 
