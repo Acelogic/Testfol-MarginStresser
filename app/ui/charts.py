@@ -971,6 +971,76 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
     annual_ret = port_series.resample("YE").last().pct_change().dropna()
 
     # --- HEATMAP HELPERS ---
+    def render_seasonal_summary(series, suffix=""):
+        full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
+        if series.empty: return
+        
+        # 1. Prepare Data (Same as Monthly View)
+        m_ret = series.resample("ME").last().pct_change().dropna()
+        df_monthly = m_ret.to_frame(name="Return")
+        df_monthly["Year"] = df_monthly.index.year
+        df_monthly["Month"] = df_monthly.index.month
+        
+        pivot = df_monthly.pivot(index="Year", columns="Month", values="Return")
+        for i in range(1, 13):
+            if i not in pivot.columns: pivot[i] = float("nan")
+        pivot = pivot.sort_index(ascending=True)
+        month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        
+        # 2. Add Yearly Return Column
+        yearly_col = []
+        years = pivot.index
+        for y in years:
+            row = pivot.loc[y]
+            ret = (1 + row.fillna(0)).prod() - 1
+            yearly_col.append(ret)
+        
+        # Add Yearly column to pivot for display/calculation
+        display_pivot = pivot.copy()
+        display_pivot.columns = month_names
+        display_pivot["Yearly Return"] = yearly_col
+        
+        # 3. Calculate Summary Statistics Table
+        st.subheader("Summary")
+        
+        # Create a DF for stats calc: Join pivot (months) and yearly_col
+        stats_source = display_pivot.copy() # Columns: Jan..Dec, Yearly Return
+        
+        # Define rows
+        stats_rows = ["Average", "% Positive", "% Negative", "Median", "Best", "Worst", "Abs Average", "Abs Best", "Abs Worst"]
+        stats_df = pd.DataFrame(index=stats_rows, columns=stats_source.columns)
+        
+        for col in stats_source.columns:
+            s_data = stats_source[col].dropna()
+            if s_data.empty:
+                continue
+                
+            stats_df.loc["Average", col] = s_data.mean()
+            stats_df.loc["% Positive", col] = (s_data > 0).mean()
+            stats_df.loc["% Negative", col] = (s_data < 0).mean()
+            stats_df.loc["Median", col] = s_data.median()
+            stats_df.loc["Best", col] = s_data.max()
+            stats_df.loc["Worst", col] = s_data.min()
+            stats_df.loc["Abs Average", col] = s_data.abs().mean()
+            stats_df.loc["Abs Best", col] = s_data.abs().max()
+            stats_df.loc["Abs Worst", col] = s_data.abs().min()
+            
+        stats_df = stats_df.astype(float)
+        
+        return_rows = ["Average", "Median", "Best", "Worst"]
+        pct_rows = ["% Positive", "% Negative"]
+        abs_rows = ["Abs Average", "Abs Best", "Abs Worst"]
+        
+        def style_summary(df):
+            return df.style.format("{:.2%}") \
+                .map(color_return, subset=pd.IndexSlice[return_rows, :]) \
+                .background_gradient(cmap="Greens", subset=pd.IndexSlice["% Positive", :], vmin=0, vmax=1) \
+                .background_gradient(cmap="Reds", subset=pd.IndexSlice["% Negative", :], vmin=0, vmax=1) \
+                .background_gradient(cmap="Oranges", subset=pd.IndexSlice[abs_rows, :])
+
+        st.dataframe(style_summary(stats_df), use_container_width=True)
+
+    # --- HEATMAP HELPERS ---
     def render_quarterly_returns_view(series, suffix=""):
         # Combine unique_id with suffix for truly unique keys
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
@@ -1150,7 +1220,11 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
-    tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma, tab_cheatsheet = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA", "📜 Cheat Sheet"])
+    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma, tab_cheatsheet = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA", "📜 Cheat Sheet"])
+
+    with tab_summary:
+        st.subheader(f"{portfolio_name} Seasonal Summary")
+        render_seasonal_summary(port_series)
     
     with tab_annual:
         st.subheader(f"{portfolio_name} Annual Returns")
