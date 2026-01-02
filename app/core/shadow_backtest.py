@@ -260,6 +260,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # Ensure index is datetime
         if not isinstance(prices_base.index, pd.DatetimeIndex):
              prices_base.index = pd.to_datetime(prices_base.index)
+             
+        # Normalize Timezone to Naive to prevent mismatch during slicing
+        if prices_base.index.tz is not None:
+             prices_base.index = prices_base.index.tz_localize(None)
         
         # Slicing
         prices_base = prices_base.loc[start_date:end_date]

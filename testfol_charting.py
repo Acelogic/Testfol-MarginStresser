@@ -209,6 +209,14 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                             except Exception as e:
                                 print(f"Failed to build API TWR: {e}")
                     
+                    # Fetch Component Prices for Cheat Sheet (API Path)
+                    try:
+                         tickers = list(alloc_map.keys())
+                         prices_df = fetch_component_data(tickers, start_date, end_date)
+                    except Exception as e:
+                         print(f"Failed to fetch component prices: {e}")
+                         prices_df = pd.DataFrame()
+
                     # Run Shadow (Tax Only) - Using Global Tax Config for now
                     if not port_series.empty:
                         trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = cached_run_shadow_backtest_v2(
@@ -273,6 +281,8 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                     "trades_df": trades_df, # Alias for results.py
                     "pl_by_year": pl_by_year,
                     "unrealized_pl_df": unrealized_pl_df,
+                    "component_prices": prices_df if 'prices_df' in locals() else pd.DataFrame(),
+                    "allocation": alloc_map,
                     "logs": logs if 'logs' in locals() else [],
                     "composition": composition_df if 'composition_df' in locals() else pd.DataFrame(),
                     "composition_df": composition_df if 'composition_df' in locals() else pd.DataFrame(),

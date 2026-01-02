@@ -22,6 +22,8 @@ def render(results, config, portfolio_name="", clip_start_date=None):
     port_series = results["port_series"]
     stats = results["stats"]
     portfolio_name = results.get("name", "Portfolio")
+    component_prices = results.get("component_prices", pd.DataFrame())
+
     
     # --- Clip Data Logic (Sync with Chart) ---
     original_start_date = results.get("start_date")
@@ -798,7 +800,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
             bench_series=bench_resampled,
             comparison_series=comp_resampled,
             unique_id=portfolio_name,
-            portfolio_name=portfolio_name
+            portfolio_name=portfolio_name,
+            component_data=component_prices
         )
         
     with res_tab_rebal:
