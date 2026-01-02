@@ -963,6 +963,239 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series, usage_series, 
         margin=dict(l=50, r=50, t=60, b=50)
     )
     st.plotly_chart(fig2, use_container_width=True)
+def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, show_stage_analysis=True):
+    """
+    Renders the Moving Average Analysis tab content.
+    """
+    st.subheader(f"{portfolio_name} {window}-Day Moving Average Analysis")
+    
+    # Controls
+    c_ctrl1, c_ctrl2 = st.columns(2)
+    # Ensure keys are unique per window AND per portfolio instance
+    key_suffix = f"{unique_id}_{window}" if unique_id else f"{window}"
+    
+    merge_tol = c_ctrl1.slider(
+        "Merge Events Tolerance (Days)", 
+        min_value=0, max_value=30, value=3, step=1,
+        key=f"ma_merge_{key_suffix}",
+        help=f"**Merge Tolerance**: Ignores short recoveries. If the price recovers above {window}MA for fewer than X days before dropping again, it is considered a single continuous 'Under' event. Useful for filtering out fake breakouts."
+    )
+    min_days = c_ctrl2.slider(
+        "Signal Filter (Min Days)", 
+        min_value=0, max_value=90, value=0, step=1,
+        key=f"ma_min_{key_suffix}",
+        help=f"**Signal Filter**: Excludes short-lived drops below the {window}MA (noise). Events shorter than X days will be hidden from the analysis table and statistics."
+    )
+
+    # Calculate Stats (Reactive)
+    # Use the generalized analyze_ma function
+    dma_series, events_df = calculations.analyze_ma(port_series, window=window, tolerance_days=merge_tol)
+    
+    # Calculate Stage (New)
+    stage_series, slope_series, _ = calculations.analyze_stage(port_series, ma_window=window)
+    
+    if dma_series is None or dma_series.dropna().empty: 
+            st.info(f"Insufficient data to calculate {window}MA (need >{window} days).")
+            return
+
+    # Just in case events_df is empty but we have DMA
+    if events_df.empty:
+        st.info(f"Price has never been below {window}MA in this period.")
+    else:
+        # Apply Min Days Filter for Display/Stats
+        filtered_events = events_df[events_df["Duration (Days)"] >= min_days]
+    
+    # Chart
+    fig = go.Figure()
+    
+    # Base Price (Blue)
+    fig.add_trace(go.Scatter(
+        x=port_series.index, y=port_series,
+        name="Price",
+        line=dict(color='#2E86C1', width=2),
+        hovertemplate="Price: $%{y:,.0f}<extra></extra>"
+    ))
+    
+    # Price Below MA (Red Overlay)
+    price_below = port_series.copy()
+    # Mask values where Price >= DMA (keep only Below)
+    price_below[port_series >= dma_series] = None 
+    
+    fig.add_trace(go.Scatter(
+        x=price_below.index, y=price_below,
+        name=f"Below {window}MA",
+        line=dict(color='#FFD700', width=2),
+        hovertemplate="Price: $%{y:,.0f}<extra></extra>",
+        showlegend=False # Cleaner legend
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=dma_series.index, y=dma_series,
+        name=f"{window}MA",
+        line=dict(color='#E74C3C', width=1.5),
+        hovertemplate=f"{window}MA: $%{{y:,.0f}}<extra></extra>"
+    ))
+    fig.update_layout(
+        title=f"Price vs {window}MA",
+        template="plotly_dark",
+        height=400,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_title="Date",
+        yaxis_title="Price ($)",
+        yaxis_type="log",
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"ma_chart_{key_suffix}")
+
+    if not events_df.empty:
+        # Summary Metrics (Based on FILTERED events)
+        # Note: If filtered_events is empty, we handle that
+        
+        total_days = (port_series.index[-1] - port_series.index[0]).days
+        if not filtered_events.empty: # Use filtered_events here to respect the variable (was hardcoded)
+            days_under = filtered_events["Duration (Days)"].sum()
+            pct_under = (days_under / total_days) * 100 if total_days > 0 else 0
+            
+            longest_event_idx = filtered_events["Duration (Days)"].idxmax()
+            longest_event = filtered_events.loc[longest_event_idx]
+            
+            l_dur = longest_event['Duration (Days)']
+            l_depth = longest_event['Max Depth (%)']
+        else:
+            days_under = 0
+            pct_under = 0
+            l_dur = 0
+            l_depth = 0
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric(f"Time Under {window}MA", f"{pct_under:.1f}%", f"{days_under} days total")
+        c2.metric("Longest Period Under", f"{l_dur} days", f"Max Depth: {l_depth:.2f}%")
+        
+        # Check current status
+        last_event = events_df.iloc[-1]
+        last_price = port_series.iloc[-1]
+        last_dma = dma_series.iloc[-1]
+        
+        if last_event["Status"] == "Ongoing":
+                c3.metric("Current Status", f"🔴 Below/Risk {window}MA", f"Duration: {last_event['Duration (Days)']} days")
+        elif last_price < last_dma:
+                c3.metric("Current Status", f"🔴 Below {window}MA", "Just started")
+        else:
+            # We are above and outside tolerance
+            # Find last end
+            last_end = last_event["End Date"]
+            if pd.notna(last_end):
+                days_above = (port_series.index[-1] - last_end).days
+                c3.metric("Current Status", f"🟢 Above {window}MA", f"For {days_above} days")
+            else:
+                c3.metric("Current Status", f"🟢 Above {window}MA")
+        
+        # Stage Analysis Display
+        if show_stage_analysis and stage_series is not None and not stage_series.empty:
+            current_stage = stage_series.iloc[-1]
+            current_slope = slope_series.iloc[-1]
+            
+            # Determine color/icon for Stage
+            if "Stage 2" in current_stage:
+                s_color = "🟢"
+            elif "Stage 4" in current_stage:
+                s_color = "🔴"
+            else:
+                s_color = "🟡"
+            
+            # Trend Text
+            if current_slope > 0.001: trend_txt = "Rising ↗️"
+            elif current_slope < -0.001: trend_txt = "Falling ↘️"
+            else: trend_txt = "Flat ➡️"
+            
+            st.markdown("---")
+            sc1, sc2 = st.columns(2)
+            sc1.metric("Weinstein Stage Est.", f"{s_color} {current_stage}")
+            sc2.metric(f"{window}MA Trend", trend_txt, f"Slope: {current_slope:.2%}")
+
+            with st.expander("ℹ️ About Weinstein Market Stages"):
+                st.markdown("""
+                **Stan Weinstein's 4 Stages:**
+                1.  **Stage 1 (Basing):** Price consolidates sideways. MA flattens. Market prepares for a move.
+                2.  **Stage 2 (Advancing):** Price breaks out above rising MA. The "Bull Market" phase. Trend is Up.
+                    *   *(Correction): Price dips below rising MA. Often a buying opportunity if trend persists.*
+                3.  **Stage 3 (Topping):** Price volatility increases, momentum slows. MA flattens/rolls over. Distribution phase.
+                4.  **Stage 4 (Declining):** Price breaks below falling MA. The "Bear Market" phase. Trend is Down.
+                    *   *(Bear Rally): Price pops above falling MA. often a "bull trap" or selling opportunity.*
+                
+                *Note: This estimation uses a simplified logic based on Price vs MA and MA Slope.*
+                """)
+        
+        # Events Table
+        st.subheader(f"Periods Under {window}MA")
+        
+        display_df = filtered_events.copy() # Use filtered_events here
+        if not display_df.empty:
+            # Formatting Dates
+            display_df["Start"] = display_df["Start Date"].dt.date
+            display_df["End"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+            if "Peak Date" in display_df.columns:
+                display_df["Peak Date"] = display_df["Peak Date"].apply(lambda x: x.date() if pd.notna(x) else "-")
+            
+            # Selection & Renaming for cleaner UI
+            cols_map = {
+                "Start": "Start",
+                "End": "End",
+                "Duration (Days)": "Days Under", 
+                "Max Depth (%)": "Max Depth",
+                "Subsequent Peak (%)": "Next Peak",
+                "Days Bottom to Peak": "Bottom->Peak Days",
+                "Peak Date": "Peak Date",
+                "Status": "Status"
+            }
+            
+            # Ensure columns exist before selecting
+            final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
+            
+            display_df = display_df[final_cols].rename(columns=cols_map)
+            display_df = display_df.sort_values("Start", ascending=False)
+            
+            st.dataframe(
+                display_df.style.format({
+                    "Max Depth": "{:.2f}%",
+                    "Next Peak": "{:.2f}%",
+                    "Days Under": "{:.0f}",
+                    "Bottom->Peak Days": "{:.0f}",
+                }, na_rep="-"), 
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # Probability Histogram
+            st.subheader(f"Distribution of Time Under {window}MA")
+            
+            hist_fig = go.Figure()
+            
+            # Histogram
+            hist_fig.add_trace(go.Histogram(
+                x=filtered_events["Duration (Days)"], # Use filtered_events here
+                marker_color='#636EFA',
+                marker_line_color='black',
+                marker_line_width=1,
+                opacity=0.8,
+                nbinsx=50
+            ))
+            
+            hist_fig.update_layout(
+                template="plotly_dark",
+                height=400,
+                title=dict(text=f"Distribution of Time Under {window}MA", font=dict(size=14)),
+                xaxis_title="Duration (Days)",
+                yaxis_title="Frequency",
+                showlegend=False,
+                bargap=0.05,
+                hovermode="x unified"
+            )
+            
+            st.plotly_chart(hist_fig, use_container_width=True, key=f"ma_hist_{key_suffix}")
+
+        else:
+            st.info(f"No periods under {window}MA found longer than {min_days} days.")
 
 def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None):
     daily_ret = port_series.pct_change().dropna()
@@ -998,7 +1231,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         # Add Yearly column to pivot for display/calculation
         display_pivot = pivot.copy()
         display_pivot.columns = month_names
-        display_pivot["Yearly Return"] = yearly_col
+        # display_pivot["Yearly Return"] = yearly_col # Removed per user request
         
         # 3. Calculate Summary Statistics Table
         st.subheader("Summary")
@@ -1220,7 +1453,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
-    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma, tab_cheatsheet = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA", "📜 Cheat Sheet"])
+    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma, tab_150ma, tab_cheatsheet = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA", "📉 150MA", "📜 Cheat Sheet"])
 
     with tab_summary:
         st.subheader(f"{portfolio_name} Seasonal Summary")
@@ -1340,201 +1573,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
     with tab_200dma:
-        st.subheader(f"{portfolio_name} 200-Day Moving Average Analysis")
-        
-        # Controls
-        c_ctrl1, c_ctrl2 = st.columns(2)
-        merge_tol = c_ctrl1.slider(
-            "Merge Events Tolerance (Days)", 
-            min_value=0, max_value=30, value=3, step=1,
-            help="**Merge Tolerance**: Ignores short recoveries. If the price recovers above 200DMA for fewer than X days before dropping again, it is considered a single continuous 'Under' event. Useful for filtering out fake breakouts."
-        )
-        min_days = c_ctrl2.slider(
-            "Signal Filter (Min Days)", 
-            min_value=0, max_value=90, value=0, step=1,
-            help="**Signal Filter**: Excludes short-lived drops below the 200DMA (noise). Events shorter than X days will be hidden from the analysis table and statistics."
-        )
+        render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, show_stage_analysis=False)
 
-        # Calculate Stats (Reactive)
-        dma_series, events_df = calculations.analyze_200dma(port_series, tolerance_days=merge_tol)
-        
-        if dma_series is None or dma_series.dropna().empty: 
-             st.info("Insufficient data to calculate 200DMA (need >200 days).")
-        else:
-             # Just in case events_df is empty but we have DMA
-            if events_df.empty:
-                st.info("Price has never been below 200DMA in this period.")
-            else:
-                # Apply Min Days Filter for Display/Stats
-                filtered_events = events_df[events_df["Duration (Days)"] >= min_days]
-            
-            # Chart
-            fig = go.Figure()
-            
-            # Base Price (Blue)
-            fig.add_trace(go.Scatter(
-                x=port_series.index, y=port_series,
-                name="Price",
-                line=dict(color='#2E86C1', width=2),
-                hovertemplate="Price: $%{y:,.0f}<extra></extra>"
-            ))
-            
-            # Price Below 200DMA (Red Overlay)
-            price_below = port_series.copy()
-            # Mask values where Price >= DMA (keep only Below)
-            price_below[port_series >= dma_series] = None 
-            
-            fig.add_trace(go.Scatter(
-                x=price_below.index, y=price_below,
-                name="Below 200DMA",
-                line=dict(color='#FFD700', width=2),
-                hovertemplate="Price: $%{y:,.0f}<extra></extra>",
-                showlegend=False # Cleaner legend
-            ))
-
-            fig.add_trace(go.Scatter(
-                x=dma_series.index, y=dma_series,
-                name="200DMA",
-                line=dict(color='#E74C3C', width=1.5),
-                hovertemplate="200DMA: $%{y:,.0f}<extra></extra>"
-            ))
-            fig.update_layout(
-                title="Price vs 200DMA",
-                template="plotly_dark",
-                height=400,
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                xaxis_title="Date",
-                yaxis_title="Price ($)",
-                yaxis_type="log",
-                hovermode="x unified"
-            )
-            st.plotly_chart(fig, use_container_width=True)
-
-            if not events_df.empty:
-                # Summary Metrics (Based on FILTERED events)
-                # Note: If filtered_events is empty, we handle that
-                
-                total_days = (port_series.index[-1] - port_series.index[0]).days
-                if not filtered_events.empty:
-                    days_under = filtered_events["Duration (Days)"].sum()
-                    pct_under = (days_under / total_days) * 100 if total_days > 0 else 0
-                    
-                    longest_event_idx = filtered_events["Duration (Days)"].idxmax()
-                    longest_event = filtered_events.loc[longest_event_idx]
-                    
-                    l_dur = longest_event['Duration (Days)']
-                    l_depth = longest_event['Max Depth (%)']
-                else:
-                    days_under = 0
-                    pct_under = 0
-                    l_dur = 0
-                    l_depth = 0
-                
-                c1, c2, c3 = st.columns(3)
-                c1.metric("Time Under 200DMA", f"{pct_under:.1f}%", f"{days_under} days total")
-                c2.metric("Longest Period Under", f"{l_dur} days", f"Max Depth: {l_depth:.2f}%")
-                
-                # Check current status FROM RAW (most accurate for 'Current') or Filtered?
-                # Probably Raw for current status, but let's stick to the merged understanding.
-                # If we merged the ongoing event with a previous one, the 'Ongoing' event in events_df has the correct start date.
-                # So we just check the LAST event in events_df (which contains the merged view).
-                
-                last_event = events_df.iloc[-1]
-                last_price = port_series.iloc[-1]
-                last_dma = dma_series.iloc[-1]
-                
-                # If the last event is "Ongoing", then we are "Under" (conceptually, or within tolerance)
-                # But strictly, price might be above DMA but within tolerance gap.
-                # analyze_200dma marks status as "Ongoing" if the gap is < tolerance.
-                
-                if last_event["Status"] == "Ongoing":
-                     c3.metric("Current Status", "🔴 Below/Risk 200DMA", f"Duration: {last_event['Duration (Days)']} days")
-                elif last_price < last_dma:
-                     # Should have been caught as ongoing, unless analyze logic is weird.
-                     c3.metric("Current Status", "🔴 Below 200DMA", "Just started")
-                else:
-                    # We are above and outside tolerance
-                    # Find last end
-                    last_end = last_event["End Date"]
-                    if pd.notna(last_end):
-                        days_above = (port_series.index[-1] - last_end).days
-                        c3.metric("Current Status", "🟢 Above 200DMA", f"For {days_above} days")
-                    else:
-                        c3.metric("Current Status", "🟢 Above 200DMA")
-                
-                # Events Table
-                st.subheader("Periods Under 200DMA")
-                
-                display_df = filtered_events.copy()
-                if not display_df.empty:
-                    # Formatting Dates
-                    display_df["Start"] = display_df["Start Date"].dt.date
-                    display_df["End"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
-                    if "Peak Date" in display_df.columns:
-                        display_df["Peak Date"] = display_df["Peak Date"].apply(lambda x: x.date() if pd.notna(x) else "-")
-                    
-                    # Selection & Renaming for cleaner UI
-                    cols_map = {
-                        "Start": "Start",
-                        "End": "End",
-                        "Duration (Days)": "Days Under", 
-                        # "Duration (Weeks)": "Weeks", # Optional, maybe hide? User said cluttered.
-                        "Max Depth (%)": "Max Depth",
-                        "Subsequent Peak (%)": "Next Peak",
-                        "Days Bottom to Peak": "Bottom->Peak Days",
-                        "Peak Date": "Peak Date",
-                        "Status": "Status"
-                    }
-                    
-                    # Ensure columns exist before selecting
-                    final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
-                    
-                    display_df = display_df[final_cols].rename(columns=cols_map)
-                    display_df = display_df.sort_values("Start", ascending=False)
-                    
-                    st.dataframe(
-                        display_df.style.format({
-                            "Max Depth": "{:.2f}%",
-                            "Next Peak": "{:.2f}%",
-                            "Days Under": "{:.0f}",
-                            "Bottom->Peak Days": "{:.0f}",
-                            "Weeks": "{:.1f}"
-                        }, na_rep="-"), 
-                        use_container_width=True,
-                        hide_index=True
-                    )
-
-                    
-                    # Probability Histogram
-                    st.subheader("Distribution of Time Under 200DMA")
-                    
-                    hist_fig = go.Figure()
-                    
-                    # Histogram
-                    hist_fig.add_trace(go.Histogram(
-                        x=filtered_events["Duration (Days)"],
-                        marker_color='#636EFA',
-                        marker_line_color='black',
-                        marker_line_width=1,
-                        opacity=0.8,
-                        nbinsx=50
-                    ))
-                    
-                    hist_fig.update_layout(
-                        template="plotly_dark",
-                        height=400,
-                        title=dict(text="Distribution of Time Under 200DMA", font=dict(size=14)),
-                        xaxis_title="Duration (Days)",
-                        yaxis_title="Frequency",
-                        showlegend=False,
-                        bargap=0.05,
-                        hovermode="x unified"
-                    )
-                    
-                    st.plotly_chart(hist_fig, use_container_width=True)
-
-                else:
-                    st.info(f"No periods under 200DMA found longer than {min_days} days.")
+    with tab_150ma:
+        render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=150, show_stage_analysis=True)
 
     with tab_cheatsheet:
         # Determine target series and name
