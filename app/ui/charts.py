@@ -1173,10 +1173,22 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 | **Start / End** | When the price dropped below / recovered above the {window}MA |
 | **Days Under** | Total calendar days spent below the MA |
 | **Max Depth** | Deepest point below the MA (calculated as `(Price - MA) / MA`) |
-| **Next Peak** | How much the price rallied after recovery, before the next drop (or to present) |
-| **Bottom→Peak Days** | Days from the deepest point (Max Depth date) to the subsequent peak price |
-| **Peak Date** | Date when the subsequent peak was reached |
+| **Post-MA Rally** | % gain from **recovery date** (MA crossover) to the subsequent peak |
+| **Bottom→Peak** | % gain from the **lowest price** to the subsequent peak (full rebound) |
+| **Recovery Days** | Calendar days from **lowest point** (Max Depth date) to **subsequent peak** |
 | **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below |
+| **Pattern** | Recovery shape classification (see below) |
+
+**Recovery Patterns** *(classified using median thresholds from this dataset)*:
+
+| Pattern | Criteria | What It Means |
+|---------|----------|---------------|
+| ⚡ **V-Shape** | Fast (≤ median days) + Strong (≥ median %) | **Best case.** Sharp selloff met with aggressive buying. Market quickly finds a floor and rockets higher. Often seen after panic selling or capitulation events. |
+| 📈 **Grind** | Slow (> median days) + Strong (> median %) | **Patience rewarded.** Base-building recovery that eventually delivers strong returns. Requires holding through volatility but ends well. |
+| 🐌 **Choppy** | Slow (> median days) + Weak (< median %) | **Frustrating.** Extended period of sideways action with minimal payoff. May indicate structural weakness or regime change. |
+| 📉 **Weak** | Fast (≤ median days) + Weak (< median %) | **Dead cat bounce.** Quick but shallow recovery that doesn't recoup losses. Often followed by more downside. |
+
+*Thresholds are relative to this asset's history—what's "fast" for bonds differs from stocks.*
             """)
         
         display_df = filtered_events.copy() # Use filtered_events here
@@ -1193,9 +1205,9 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 "End": "End",
                 "Duration (Days)": "Days Under", 
                 "Max Depth (%)": "Max Depth",
-                "Subsequent Peak (%)": "Next Peak",
-                "Days Bottom to Peak": "Bottom->Peak Days",
-                "Peak Date": "Peak Date",
+                "Subsequent Peak (%)": "Post-MA Rally",
+                "Bottom to Peak (%)": "Bottom→Peak",
+                "Days Bottom to Peak": "Recovery Days",
                 "Status": "Status"
             }
             
@@ -1205,12 +1217,50 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             display_df = display_df[final_cols].rename(columns=cols_map)
             display_df = display_df.sort_values("Start", ascending=False)
             
+            # Add Recovery Pattern to Status for recovered events
+            def classify_recovery(row):
+                status = row.get("Status", "")
+                if "Recovered" not in str(status):
+                    return status
+                
+                days = row.get("Recovery Days")
+                pct = row.get("Bottom→Peak")
+                
+                if pd.isna(days) or pd.isna(pct):
+                    return status
+                
+                # Use median thresholds for classification
+                median_days = display_df["Recovery Days"].median()
+                median_pct = display_df["Bottom→Peak"].median()
+                
+                short_days = days <= median_days
+                high_pct = pct >= median_pct
+                
+                if short_days and high_pct:
+                    pattern = "⚡ V-Shape"
+                elif not short_days and high_pct:
+                    pattern = "📈 Grind"
+                elif not short_days and not high_pct:
+                    pattern = "🐌 Choppy"
+                else:  # short_days and low_pct
+                    pattern = "📉 Weak"
+                
+                return pattern
+            
+            display_df["Pattern"] = display_df.apply(classify_recovery, axis=1)
+            
+            # Reorder columns: Status before Pattern
+            final_display_cols = ["Start", "End", "Days Under", "Max Depth", "Post-MA Rally", "Bottom→Peak", "Recovery Days", "Status", "Pattern"]
+            final_display_cols = [c for c in final_display_cols if c in display_df.columns]
+            display_df = display_df[final_display_cols]
+            
             st.dataframe(
                 display_df.style.format({
                     "Max Depth": "{:.2f}%",
-                    "Next Peak": "{:.2f}%",
+                    "Bottom→Peak": "{:.1f}%",
+                    "Post-MA Rally": "{:.1f}%",
                     "Days Under": "{:.0f}",
-                    "Bottom->Peak Days": "{:.0f}",
+                    "Recovery Days": "{:.0f}",
                 }, na_rep="-"), 
                 use_container_width=True,
                 hide_index=True

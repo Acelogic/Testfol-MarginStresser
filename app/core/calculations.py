@@ -311,6 +311,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
         peak_pct = None
         peak_date = pd.NaT
         days_bottom_to_peak = None
+        bottom_to_peak_pct = None
         
         # Determine calc_end for depth/bottom calculation
         if pd.isna(e_date):
@@ -353,6 +354,13 @@ def analyze_ma(series, window=200, tolerance_days=0):
                 peak_date = recovery_slice.idxmax()
                 peak_pct = ((max_price / recovery_price) - 1) * 100
                 
+                # Calculate Bottom to Peak % (from actual low to peak)
+                if pd.notna(bottom_date):
+                    bottom_price = series.loc[bottom_date]
+                    bottom_to_peak_pct = ((max_price / bottom_price) - 1) * 100
+                else:
+                    bottom_to_peak_pct = None
+                
                 # Check for Active/Current Status
                 # If this is the last event and it is recovered, it means the recovery is ongoing (Current)
                 if i == len(merged_events) - 1:
@@ -363,6 +371,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
                     days_bottom_to_peak = (peak_date - bottom_date).days
             else:
                 peak_pct = 0.0
+                bottom_to_peak_pct = None
             
         final_output.append({
             "Start Date": s_date,
@@ -372,6 +381,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
             "Duration (Months)": duration / 30.44,
             "Max Depth (%)": max_depth,
             "Subsequent Peak (%)": peak_pct,
+            "Bottom to Peak (%)": bottom_to_peak_pct,
             "Peak Date": peak_date,
             "Days Bottom to Peak": days_bottom_to_peak,
             "Status": status
