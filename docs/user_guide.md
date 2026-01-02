@@ -83,6 +83,19 @@ A robust stochastic simulation to stress-test your strategy against thousands of
 -   **Combined Chart**: Shows Portfolio Value (Gross Assets), Net Equity, and Loan Balance on one chart to visualize leverage dynamics.
 -   **Tax Analysis**: Breakdown of annual tax liabilities and the difference between paying with cash vs. margin.
 
+#### 📉 Technical Analysis
+The application includes a comprehensive technical analysis suite to help you identify market trends and regimes.
+
+-   **Moving Averages (150MA & 200MA)**: 
+    -   Dedicated tabs for analyzing price action relative to the 150-Day and 200-Day Moving Averages.
+    -   **Metrics**: View "Time Under MA", "Longest Period Under", and "Max Depth" to understand historical drawdown behaviors.
+-   **Stan Weinstein Stage Analysis (150MA Tab)**:
+    -   Estimates the current market phase based on Price vs. 150MA and the Slope of the MA.
+    -   **Stage 1 (Basing)**: Market consolidation.
+    -   **Stage 2 (Advancing)**: Bull market trend (Price > Rising MA). Includes "Corrections".
+    -   **Stage 3 (Topping)**: Distribution phase.
+    -   **Stage 4 (Declining)**: Bear market trend (Price < Falling MA). Includes "Bear Rallies".
+
 #### 🩻 X-Ray Analyzer
 The X-Ray engine allows you to peer inside your ETFs to see the actual underlying exposures. It supports a wide range of assets including:
 

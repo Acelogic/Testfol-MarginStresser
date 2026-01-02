@@ -118,7 +118,7 @@ sequenceDiagram
 | `shadow_backtest.py` | FIFO tax lot tracking, rebalancing simulation | `run_shadow_backtest()` |
 | `tax_library.py` | Historical US tax rates (1913-2025), gain calculations | `calculate_gains()`, `get_tax_rate()` |
 | `monte_carlo.py` | Bootstrap simulation for risk analysis | `run_simulation()`, `plot_cone()` |
-| `calculations.py` | Statistics, returns, Sharpe ratios | `generate_stats()`, `calculate_drawdown()` |
+| `calculations.py` | Statistics, returns, Sharpe, **Stage Analysis** | `analyze_stage()`, `generate_stats()` |
 
 ### `app/ui/` - User Interface
 
@@ -127,7 +127,7 @@ sequenceDiagram
 | `sidebar.py` | Date range picker, run button | `render_sidebar()` |
 | `configuration.py` | Portfolio config, margin params, benchmarks | `render_config()` |
 | `results.py` | Main results orchestration, tabs | `render_results()` |
-| `charts.py` | All chart generation (Plotly) | `plot_portfolio()`, `plot_composition()`, `plot_sankey()` |
+| `charts.py` | All chart generation (Plotly) | `render_ma_analysis_tab()`, `render_multi_portfolio_chart()` |
 | `asset_explorer.py` | Deep-dive analysis for individual assets | `render_asset_explorer()` |
 
 ### `app/services/` - External Communication
@@ -135,7 +135,7 @@ sequenceDiagram
 | File | Purpose | Key Functions |
 |------|---------|---------------|
 | `testfol_api.py` | API wrapper & Margin Logic | `fetch_backtest()`, `simulate_margin()` |
-| `data_service.py` | Complex data sourcing (FRED, splicing) | `get_fed_funds_rate()`, `get_ticker_data()` |
+| `data_service.py` | Complex data sourcing (FRED, splicing, SIM tickers) | `get_fed_funds_rate()`, `fetch_component_data()` |
 | `backend.py` | Legacy price utilities | `get_component_prices()` |
 
 ### `app/common/` - Utilities

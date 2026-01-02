@@ -16,7 +16,8 @@ This tool allows you to simulate leveraged portfolio performance over historical
 -   **Advanced Margin Stress Testing**: Simulate margin loans, maintenance requirements, and margin calls with high fidelity.
 -   **Tax-Aware Backtesting**: Simulates tax impact on equity (FIFO/LIFO/HIFO) and drag from tax payments.
 -   **Monte Carlo Simulation**: Stress test your portfolio against thousands of random market paths.
--   **ETF X-Ray Analyzer**: Decompsoe ETFs (including Leveraged & Simulated) into their underlying exposures.
+-   **Technical Analysis Suite**: Analyze trends using **150-Day & 200-Day Moving Averages** and **Stan Weinstein Stage Analysis** (Basing, Advancing, Topping, Declining).
+-   **ETF X-Ray Analyzer**: Decompose ETFs (including Leveraged & Simulated) into their underlying exposures.
 
 ## Documentation Navigation
 For specific guides, please refer to the detailed documentation:
@@ -70,7 +71,7 @@ graph TB
 | Engine | Location | Purpose |
 |--------|----------|---------|
 | **Macro Engine** | `app/services/testfol_api.py` | Fetches total return series from testfol.io. Acts as "Market Truth" source. |
-| **Data Service** | `app/services/data_service.py` | Handles complex data fetching, including `NDXMEGASIM` splicing (CSV + API). |
+| **Data Service** | `app/services/data_service.py` | Handles complex data sourcing: 1) `*SIM` tickers force Testfol API for extended history. 2) `NDXMEGASIM` splicing (Local CSV + Live). 3) Real-time prices via yfinance. |
 | **Shadow Engine** | `app/core/shadow_backtest.py` | Reconstructs portfolio trade-by-trade. Tracks every tax lot (date, cost basis, quantity). Calculates ST vs LT gains. |
 | **Margin Simulator** | `app/services/testfol_api.py` | Applies margin loan logical models (Fixed, Variable, Tiered). Calculates daily interest, equity %, and margin calls. |
 
