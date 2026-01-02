@@ -1061,15 +1061,28 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             
             l_dur = longest_event['Duration (Days)']
             l_depth = longest_event['Max Depth (%)']
+            
+            # Calculate median Bottom -> Peak days (only for recovered events)
+            if "Days Bottom to Peak" in filtered_events.columns:
+                recovered_events = filtered_events[filtered_events["Days Bottom to Peak"].notna()]
+                if not recovered_events.empty:
+                    avg_bottom_to_peak = recovered_events["Days Bottom to Peak"].median()
+                else:
+                    avg_bottom_to_peak = None
+            else:
+                avg_bottom_to_peak = None
         else:
             days_under = 0
             pct_under = 0
             l_dur = 0
             l_depth = 0
+            avg_bottom_to_peak = None
         
-        c1, c2, c3 = st.columns(3)
+        c1, c2, c3, c4 = st.columns(4)
         c1.metric(f"Time Under {window}MA", f"{pct_under:.1f}%", f"{days_under} days total")
         c2.metric("Longest Period Under", f"{l_dur} days", f"Max Depth: {l_depth:.2f}%")
+        if avg_bottom_to_peak is not None:
+            c3.metric("Median Bottom→Peak", f"{avg_bottom_to_peak:.0f} days", "Typical recovery")
         
         # Check current status
         last_event = events_df.iloc[-1]
@@ -1077,18 +1090,18 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         last_dma = dma_series.iloc[-1]
         
         if last_event["Status"] == "Ongoing":
-                c3.metric("Current Status", f"🔴 Below/Risk {window}MA", f"Duration: {last_event['Duration (Days)']} days")
+                c4.metric("Status", f"🔴 Below {window}MA", f"{last_event['Duration (Days)']} days")
         elif last_price < last_dma:
-                c3.metric("Current Status", f"🔴 Below {window}MA", "Just started")
+                c4.metric("Status", f"🔴 Below {window}MA", "Just started")
         else:
             # We are above and outside tolerance
             # Find last end
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 days_above = (port_series.index[-1] - last_end).days
-                c3.metric("Current Status", f"🟢 Above {window}MA", f"For {days_above} days")
+                c4.metric("Status", f"🟢 Above {window}MA", f"{days_above} days")
             else:
-                c3.metric("Current Status", f"🟢 Above {window}MA")
+                c4.metric("Status", f"🟢 Above {window}MA")
         
         # Stage Analysis Display
         if show_stage_analysis and stage_series is not None and not stage_series.empty:
@@ -1096,12 +1109,18 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             current_slope = slope_series.iloc[-1]
             
             # Determine color/icon for Stage
+            # Stage 1 (Basing) = cautiously bullish (coming out of decline)
+            # Stage 3 (Topping) = cautiously bearish (coming off advance)
             if "Stage 2" in current_stage:
                 s_color = "🟢"
             elif "Stage 4" in current_stage:
                 s_color = "🔴"
+            elif "Stage 1" in current_stage and "1/3" not in current_stage:
+                s_color = "🟡"  # Basing - neutral but post-decline
+            elif "Stage 3" in current_stage:
+                s_color = "🟠"  # Topping - warning after advance
             else:
-                s_color = "🟡"
+                s_color = "⚪"  # Indeterminate
             
             # Trend Text
             if current_slope > 0.001: trend_txt = "Rising ↗️"
@@ -1115,19 +1134,50 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 
             with st.expander("ℹ️ About Weinstein Market Stages"):
                 st.markdown("""
-                **Stan Weinstein's 4 Stages:**
-                1.  **Stage 1 (Basing):** Price consolidates sideways. MA flattens. Market prepares for a move.
-                2.  **Stage 2 (Advancing):** Price breaks out above rising MA. The "Bull Market" phase. Trend is Up.
-                    *   *(Correction): Price dips below rising MA. Often a buying opportunity if trend persists.*
-                3.  **Stage 3 (Topping):** Price volatility increases, momentum slows. MA flattens/rolls over. Distribution phase.
-                4.  **Stage 4 (Declining):** Price breaks below falling MA. The "Bear Market" phase. Trend is Down.
-                    *   *(Bear Rally): Price pops above falling MA. often a "bull trap" or selling opportunity.*
+                **Stan Weinstein's 4 Stages** *(from "Secrets for Profiting in Bull and Bear Markets")*:
                 
-                *Note: This estimation uses a simplified logic based on Price vs MA and MA Slope.*
-                """)
+                | Stage | Name | MA Trend | Price vs MA | Implication |
+                |-------|------|----------|-------------|-------------|
+                | 🟡 **1** | **Basing** | Flat (after falling) | Near/around | Accumulation. Bottoming process. |
+                | 🟢 **2** | **Advancing** | Rising | Above | Bull market. Strong uptrend. |
+                | 🟠 **3** | **Topping** | Flat (after rising) | Near/around | Distribution. Trend exhaustion. |
+                | 🔴 **4** | **Declining** | Falling | Below | Bear market. Strong downtrend. |
+                
+                **Sub-Phases:**
+                -   **Stage 2 (Correction):** Price dips below *rising* MA. Often a buying dip if trend intact.
+                -   **Stage 4 (Bear Rally):** Price pops above *falling* MA. Often a "bull trap" or selling opportunity.
+                
+                **This Implementation:**
+                -   Uses **{window}-day MA** (Weinstein used 30-week/~150-day on weekly charts).
+                -   **Adaptive threshold**: "Flat" is relative to the asset's recent volatility.
+                -   **Stage 1 vs 3**: Distinguished by *prior trend* (1 follows decline, 3 follows advance).
+                -   **5-day smoothing**: Reduces daily noise/whipsaw.
+                """.replace("{window}", str(window)))
         
         # Events Table
         st.subheader(f"Periods Under {window}MA")
+        
+        with st.expander("ℹ️ Understanding the Metrics"):
+            st.markdown(f"""
+**Summary Metrics (Top Row):**
+| Metric | Meaning |
+|--------|---------|
+| **Time Under {window}MA** | Total % of the period where price was below the moving average |
+| **Longest Period Under** | The single longest continuous stretch below the MA, with its max depth |
+| **Median Bottom→Peak** | Typical (median) number of days from the lowest point to the subsequent peak |
+| **Status** | Current position: 🟢 Above or 🔴 Below the {window}MA |
+
+**Table Columns:**
+| Column | Meaning |
+|--------|---------|
+| **Start / End** | When the price dropped below / recovered above the {window}MA |
+| **Days Under** | Total calendar days spent below the MA |
+| **Max Depth** | Deepest point below the MA (calculated as `(Price - MA) / MA`) |
+| **Next Peak** | How much the price rallied after recovery, before the next drop (or to present) |
+| **Bottom→Peak Days** | Days from the deepest point (Max Depth date) to the subsequent peak price |
+| **Peak Date** | Date when the subsequent peak was reached |
+| **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below |
+            """)
         
         display_df = filtered_events.copy() # Use filtered_events here
         if not display_df.empty:

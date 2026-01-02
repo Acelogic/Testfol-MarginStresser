@@ -91,10 +91,11 @@ The application includes a comprehensive technical analysis suite to help you id
     -   **Metrics**: View "Time Under MA", "Longest Period Under", and "Max Depth" to understand historical drawdown behaviors.
 -   **Stan Weinstein Stage Analysis (150MA Tab)**:
     -   Estimates the current market phase based on Price vs. 150MA and the Slope of the MA.
-    -   **Stage 1 (Basing)**: Market consolidation.
-    -   **Stage 2 (Advancing)**: Bull market trend (Price > Rising MA). Includes "Corrections".
-    -   **Stage 3 (Topping)**: Distribution phase.
-    -   **Stage 4 (Declining)**: Bear market trend (Price < Falling MA). Includes "Bear Rallies".
+    -   **Stage 1 (Basing)** 🟡: Flat MA after a decline. Accumulation/bottoming phase.
+    -   **Stage 2 (Advancing)** 🟢: Bull market trend (Price > Rising MA). Includes "Corrections" when price dips below rising MA.
+    -   **Stage 3 (Topping)** 🟠: Flat MA after an advance. Distribution/exhaustion phase.
+    -   **Stage 4 (Declining)** 🔴: Bear market trend (Price < Falling MA). Includes "Bear Rallies" when price pops above falling MA.
+    -   **Methodology**: Uses adaptive volatility-based thresholds, distinguishes Stage 1 from 3 based on prior trend context, and applies 5-day smoothing to reduce daily noise.
 
 #### 🩻 X-Ray Analyzer
 The X-Ray engine allows you to peer inside your ETFs to see the actual underlying exposures. It supports a wide range of assets including:

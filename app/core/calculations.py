@@ -477,18 +477,23 @@ def calculate_cheat_sheet(series, ohlc_data=None):
     df = df.sort_values("Price", ascending=False).reset_index(drop=True)
     return df
 
-def analyze_stage(series, ma_window=150, slope_period=20, slope_threshold=0.001):
+def analyze_stage(series, ma_window=150, slope_period=20, slope_threshold=None, smoothing_window=5):
     """
     Estimates the Stan Weinstein Stage based on Price vs MA and MA Slope.
+    
+    Weinstein's methodology uses weekly charts with a 30-week MA. This implementation
+    adapts to daily data with a 150-day MA (equivalent to ~30 weeks).
 
     Args:
         series: Price series.
-        ma_window: Period for the Moving Average (default 150).
+        ma_window: Period for the Moving Average (default 150, ~30 weeks).
         slope_period: Period to calculate the slope (ROC) of the MA (default 20).
-        slope_threshold: Threshold for "Flat" vs Rising/Falling (default 0.1%).
+        slope_threshold: Threshold for "Flat" vs Rising/Falling. If None, uses 
+                         adaptive threshold based on asset volatility (0.5 * daily std).
+        smoothing_window: Window for smoothing stage output to reduce whipsaw (default 5).
 
     Returns:
-        stage_series: Series of strings (e.g., "Stage 2 (Advancing)", "Stage 4 (Declining)", "Stage 1/3 (Neutral)")
+        stage_series: Series of strings (e.g., "Stage 2 (Advancing)", "Stage 4 (Declining)")
         slope_series: Series of slope values (ROC of MA).
         ma_series: The calculated MA series.
     """
@@ -501,38 +506,108 @@ def analyze_stage(series, ma_window=150, slope_period=20, slope_threshold=0.001)
     # 2. Calculate Slope of MA (Rate of Change over slope_period)
     # Slope = (MA_t / MA_{t-n}) - 1
     slope_series = ma_series.pct_change(periods=slope_period)
-
-    # 3. Determine Stage
-    # We'll use a simple vectorised approach
     
-    # Conditions
-    is_rising = slope_series > slope_threshold
-    is_falling = slope_series < -slope_threshold
+    # 3. Adaptive Slope Threshold (if not provided)
+    # Use 0.5 * the rolling standard deviation of daily returns over slope_period
+    # This makes the "flat" determination relative to the asset's volatility
+    if slope_threshold is None:
+        daily_returns = series.pct_change()
+        rolling_vol = daily_returns.rolling(window=slope_period).std()
+        # Scale: sqrt(slope_period) to annualize-ish the threshold comparison
+        adaptive_threshold = 0.5 * rolling_vol * np.sqrt(slope_period)
+        # Fallback minimum threshold to avoid zero
+        adaptive_threshold = adaptive_threshold.clip(lower=0.001)
+    else:
+        adaptive_threshold = slope_threshold
+
+    # 4. Determine Raw Stage
+    # Conditions (vectorized, handle adaptive threshold being a Series)
+    if isinstance(adaptive_threshold, pd.Series):
+        is_rising = slope_series > adaptive_threshold
+        is_falling = slope_series < -adaptive_threshold
+    else:
+        is_rising = slope_series > adaptive_threshold
+        is_falling = slope_series < -adaptive_threshold
+    
     is_flat = (~is_rising) & (~is_falling)
     
     price_above = series > ma_series
     price_below = series < ma_series
     
-    # Create Series
-    stages = pd.Series("Unknown", index=series.index)
+    # Create numeric stage encoding for smoothing
+    # 2 = Stage 2, 4 = Stage 4, 1 = Stage 1, 3 = Stage 3
+    # Sub-stages: 2.1 = Correction, 4.1 = Bear Rally
+    stage_codes = pd.Series(0.0, index=series.index)
     
-    # Logic Table
-    # Rising MA + Price Above -> Stage 2
-    stages.loc[is_rising & price_above] = "Stage 2 (Advancing)"
+    # Rising MA + Price Above -> Stage 2 (Advancing)
+    stage_codes.loc[is_rising & price_above] = 2.0
     
-    # Rising MA + Price Below -> Uptrend Correction (Still technically Stage 2 context, or early 3/4)
-    # Weinstein: If price breaks below rising 30w MA, it's a warning, but trend technically up until MA turns.
-    stages.loc[is_rising & price_below] = "Stage 2 (Correction)"
+    # Rising MA + Price Below -> Stage 2 (Correction)
+    stage_codes.loc[is_rising & price_below] = 2.1
     
-    # Falling MA + Price Below -> Stage 4
-    stages.loc[is_falling & price_below] = "Stage 4 (Declining)"
+    # Falling MA + Price Below -> Stage 4 (Declining)
+    stage_codes.loc[is_falling & price_below] = 4.0
     
-    # Falling MA + Price Above -> Bear Rally
-    stages.loc[is_falling & price_above] = "Stage 4 (Bear Rally)"
+    # Falling MA + Price Above -> Stage 4 (Bear Rally)
+    stage_codes.loc[is_falling & price_above] = 4.1
     
-    # Flat MA -> Stage 1 or 3
-    # Distinguishing 1 (Base) vs 3 (Top) requires context (prior move). 
-    # For simplicity/statelessness:
-    stages.loc[is_flat] = "Stage 1/3 (Neutral)"
+    # Flat MA -> Need to determine Stage 1 vs Stage 3 from prior trend
+    # Look back to find the last non-flat stage
+    stage_codes.loc[is_flat] = np.nan  # Mark for later resolution
+    
+    # 5. Distinguish Stage 1 (Basing) vs Stage 3 (Topping)
+    # Stage 1: Flat MA following a decline (came from Stage 4)
+    # Stage 3: Flat MA following an advance (came from Stage 2)
+    
+    # Forward-fill the last known trending stage to determine context
+    last_trend = stage_codes.copy()
+    # Only keep clear trend stages (2.0, 2.1, 4.0, 4.1)
+    last_trend[last_trend == 0] = np.nan
+    last_trend = last_trend.ffill()
+    
+    # Now assign Stage 1 or 3 based on prior trend
+    was_stage_2 = (last_trend >= 2.0) & (last_trend < 3.0)  # 2.0 or 2.1
+    was_stage_4 = (last_trend >= 4.0) & (last_trend < 5.0)  # 4.0 or 4.1
+    
+    # Apply Stage 1/3 logic
+    stage_codes.loc[is_flat & was_stage_4] = 1.0  # Basing after decline
+    stage_codes.loc[is_flat & was_stage_2] = 3.0  # Topping after advance
+    
+    # Any remaining flat with no prior context -> default to neutral
+    stage_codes.loc[is_flat & stage_codes.isna()] = 1.5  # Indeterminate
+    
+    # Fill any remaining NaN (start of series before MA is valid)
+    stage_codes = stage_codes.fillna(0)
+    
+    # 6. Apply Smoothing to reduce whipsaw
+    # Use median over the smoothing window (fast, preserves stage values)
+    if smoothing_window > 1:
+        # Median is fast and reasonably preserves discrete codes
+        smoothed_codes = stage_codes.rolling(window=smoothing_window, min_periods=1, center=True).median()
+        # Round back to nearest valid code
+        smoothed_codes = smoothed_codes.round(1)
+    else:
+        smoothed_codes = stage_codes
+    
+    # 7. Map codes back to string labels
+    def code_to_stage(code):
+        if code == 2.0:
+            return "Stage 2 (Advancing)"
+        elif code == 2.1:
+            return "Stage 2 (Correction)"
+        elif code == 4.0:
+            return "Stage 4 (Declining)"
+        elif code == 4.1:
+            return "Stage 4 (Bear Rally)"
+        elif code == 1.0:
+            return "Stage 1 (Basing)"
+        elif code == 3.0:
+            return "Stage 3 (Topping)"
+        elif code == 1.5:
+            return "Stage 1/3 (Neutral)"
+        else:
+            return "Unknown"
+    
+    stages = smoothed_codes.apply(code_to_stage)
 
     return stages, slope_series, ma_series
