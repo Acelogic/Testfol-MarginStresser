@@ -233,3 +233,111 @@ def generate_stats(series):
         "ulcer": 0.0, # Not vital for now
         "sortino": 0.0 # Not vital for now
     }
+
+def analyze_200dma(series, tolerance_days=0):
+    """
+    Analyzes the series against its 200-day Moving Average.
+    Args:
+        series: Price series
+        tolerance_days: Maximum days above 200DMA to consider as same event (noise filter)
+    Returns:
+        dma_series: The 200DMA series.
+        events_df: DataFrame of periods where price < 200DMA.
+    """
+    if series.empty:
+        return None, pd.DataFrame()
+
+    dma_series = series.rolling(window=200).mean()
+    
+    # Identify where Price < DMA
+    is_under = series < dma_series
+    
+    # Identify switch points
+    state = is_under.astype(int)
+    change = state.diff().fillna(0)
+    
+    starts = series.index[change == 1]
+    ends = series.index[change == -1]
+    
+    raw_events = []
+    
+    # 1. Collect Raw Events
+    for s_date in starts:
+        valid_ends = ends[ends > s_date]
+        
+        if len(valid_ends) > 0:
+            e_date = valid_ends[0]
+            raw_events.append({"Start": s_date, "End": e_date, "Status": "Recovered"})
+        else:
+            raw_events.append({"Start": s_date, "End": pd.NaT, "Status": "Ongoing"})
+            
+    if not raw_events:
+        return dma_series, pd.DataFrame()
+        
+    # 2. Merge Events Logic
+    merged_events = []
+    if raw_events:
+        current_event = raw_events[0]
+        
+        for next_event in raw_events[1:]:
+            # Check gap
+            # Gap is time between Prev End and Next Start
+            if pd.notna(current_event["End"]):
+                gap = (next_event["Start"] - current_event["End"]).days
+                
+                if gap <= tolerance_days:
+                    # Merge!
+                    # Extend current event end to next event end
+                    current_event["End"] = next_event["End"]
+                    current_event["Status"] = next_event["Status"] # Inherit ongoing status if applicable
+                else:
+                    # No merge, push current and start new
+                    merged_events.append(current_event)
+                    current_event = next_event
+            else:
+                # Current event is ongoing, cannot merge a "next" event (shouldn't happen logically if sorted)
+                merged_events.append(current_event)
+                current_event = next_event
+                
+        merged_events.append(current_event)
+    
+    # 3. Calculate Stats for Merged Events
+    final_output = []
+    for evt in merged_events:
+        s_date = evt["Start"]
+        e_date = evt["End"]
+        
+        if pd.isna(e_date):
+            # Ongoing
+            now = series.index[-1]
+            duration = (now - s_date).days
+            calc_end = series.index[-1] # For depth calculation
+            status = "Ongoing"
+        else:
+            duration = (e_date - s_date).days
+            calc_end = e_date
+            status = "Recovered"
+            
+        # Analyze period
+        # Note: If merged, this includes the 'gap' days where price > 200DMA
+        # This is strictly correct for "Time since first break" but might affect "Max Depth" slightly if the gap was huge (but it's limited by tolerance)
+        sub_series = series[s_date:calc_end]
+        sub_dma = dma_series[s_date:calc_end]
+        
+        if not sub_series.empty:
+            drawdown_from_dma = (sub_series - sub_dma) / sub_dma
+            max_depth = drawdown_from_dma.min() * 100
+        else:
+            max_depth = 0.0
+            
+        final_output.append({
+            "Start Date": s_date,
+            "End Date": e_date,
+            "Duration (Days)": duration,
+            "Duration (Weeks)": duration / 7,
+            "Duration (Months)": duration / 30.44,
+            "Max Depth (%)": max_depth,
+            "Status": status
+        })
+
+    return dma_series, pd.DataFrame(final_output)
