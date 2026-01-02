@@ -1296,12 +1296,28 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             
             # Chart
             fig = go.Figure()
+            
+            # Base Price (Blue)
             fig.add_trace(go.Scatter(
                 x=port_series.index, y=port_series,
                 name="Price",
                 line=dict(color='#2E86C1', width=2),
                 hovertemplate="Price: $%{y:,.0f}<extra></extra>"
             ))
+            
+            # Price Below 200DMA (Red Overlay)
+            price_below = port_series.copy()
+            # Mask values where Price >= DMA (keep only Below)
+            price_below[port_series >= dma_series] = None 
+            
+            fig.add_trace(go.Scatter(
+                x=price_below.index, y=price_below,
+                name="Below 200DMA",
+                line=dict(color='#FFD700', width=2),
+                hovertemplate="Price: $%{y:,.0f}<extra></extra>",
+                showlegend=False # Cleaner legend
+            ))
+
             fig.add_trace(go.Scatter(
                 x=dma_series.index, y=dma_series,
                 name="200DMA",
@@ -1377,17 +1393,39 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 
                 display_df = filtered_events.copy()
                 if not display_df.empty:
-                    display_df["Start Date"] = display_df["Start Date"].dt.date
-                    display_df["End Date"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
-                    display_df = display_df.sort_values("Start Date", ascending=False)
+                    # Formatting Dates
+                    display_df["Start"] = display_df["Start Date"].dt.date
+                    display_df["End"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+                    if "Peak Date" in display_df.columns:
+                        display_df["Peak Date"] = display_df["Peak Date"].apply(lambda x: x.date() if pd.notna(x) else "-")
+                    
+                    # Selection & Renaming for cleaner UI
+                    cols_map = {
+                        "Start": "Start",
+                        "End": "End",
+                        "Duration (Days)": "Days Under", 
+                        # "Duration (Weeks)": "Weeks", # Optional, maybe hide? User said cluttered.
+                        "Max Depth (%)": "Max Depth",
+                        "Subsequent Peak (%)": "Next Peak",
+                        "Days Bottom to Peak": "Bottom->Peak Days",
+                        "Peak Date": "Peak Date",
+                        "Status": "Status"
+                    }
+                    
+                    # Ensure columns exist before selecting
+                    final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
+                    
+                    display_df = display_df[final_cols].rename(columns=cols_map)
+                    display_df = display_df.sort_values("Start", ascending=False)
                     
                     st.dataframe(
                         display_df.style.format({
-                            "Max Depth (%)": "{:.2f}%",
-                            "Duration (Days)": "{:.0f}",
-                            "Duration (Weeks)": "{:.1f}",
-                            "Duration (Months)": "{:.1f}"
-                        }), 
+                            "Max Depth": "{:.2f}%",
+                            "Next Peak": "{:.2f}%",
+                            "Days Under": "{:.0f}",
+                            "Bottom->Peak Days": "{:.0f}",
+                            "Weeks": "{:.1f}"
+                        }, na_rep="-"), 
                         use_container_width=True,
                         hide_index=True
                     )

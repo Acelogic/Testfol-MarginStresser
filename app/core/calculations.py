@@ -303,32 +303,65 @@ def analyze_200dma(series, tolerance_days=0):
     
     # 3. Calculate Stats for Merged Events
     final_output = []
-    for evt in merged_events:
+    for i, evt in enumerate(merged_events):
         s_date = evt["Start"]
         e_date = evt["End"]
         
+        peak_pct = None
+        peak_date = pd.NaT
+        days_bottom_to_peak = None
+        
+        # Determine calc_end for depth/bottom calculation
         if pd.isna(e_date):
             # Ongoing
             now = series.index[-1]
             duration = (now - s_date).days
-            calc_end = series.index[-1] # For depth calculation
+            calc_end = series.index[-1] 
             status = "Ongoing"
         else:
             duration = (e_date - s_date).days
             calc_end = e_date
             status = "Recovered"
-            
-        # Analyze period
-        # Note: If merged, this includes the 'gap' days where price > 200DMA
-        # This is strictly correct for "Time since first break" but might affect "Max Depth" slightly if the gap was huge (but it's limited by tolerance)
+
+        # Analyze Period (calculate Bottom/Depth first)
         sub_series = series[s_date:calc_end]
         sub_dma = dma_series[s_date:calc_end]
         
+        bottom_date = pd.NaT
         if not sub_series.empty:
             drawdown_from_dma = (sub_series - sub_dma) / sub_dma
             max_depth = drawdown_from_dma.min() * 100
+            # bottom_date is the date where (Price - DMA)/DMA is minimal (deepest)
+            bottom_date = drawdown_from_dma.idxmin()
         else:
             max_depth = 0.0
+
+        # Calculate Subsequent Peak (Only if Recovered)
+        if status == "Recovered":
+            # Period: From Recovery (e_date) to Next Drop (next_evt.Start) or Now
+            if i + 1 < len(merged_events):
+                next_start = merged_events[i+1]["Start"]
+            else:
+                next_start = series.index[-1]
+            
+            recovery_slice = series[e_date:next_start]
+            
+            if not recovery_slice.empty:
+                recovery_price = series.loc[e_date]
+                max_price = recovery_slice.max()
+                peak_date = recovery_slice.idxmax()
+                peak_pct = ((max_price / recovery_price) - 1) * 100
+                
+                # Check for Active/Current Status
+                # If this is the last event and it is recovered, it means the recovery is ongoing (Current)
+                if i == len(merged_events) - 1:
+                    status = "Recovered (Current)"
+                
+                # Calculate Days from Bottom to Peak
+                if pd.notna(bottom_date) and pd.notna(peak_date):
+                    days_bottom_to_peak = (peak_date - bottom_date).days
+            else:
+                peak_pct = 0.0
             
         final_output.append({
             "Start Date": s_date,
@@ -337,6 +370,9 @@ def analyze_200dma(series, tolerance_days=0):
             "Duration (Weeks)": duration / 7,
             "Duration (Months)": duration / 30.44,
             "Max Depth (%)": max_depth,
+            "Subsequent Peak (%)": peak_pct,
+            "Peak Date": peak_date,
+            "Days Bottom to Peak": days_bottom_to_peak,
             "Status": status
         })
 
