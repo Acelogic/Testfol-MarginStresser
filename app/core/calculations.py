@@ -377,3 +377,101 @@ def analyze_200dma(series, tolerance_days=0):
         })
 
     return dma_series, pd.DataFrame(final_output)
+
+def calculate_pivot_points(high, low, close):
+    """Calculates Classic Pivot Points."""
+    p = (high + low + close) / 3
+    r1 = (2 * p) - low
+    s1 = (2 * p) - high
+    r2 = p + (high - low)
+    s2 = p - (high - low)
+    r3 = high + 2 * (p - low)
+    s3 = low - 2 * (high - p)
+    
+    return [
+        {"Price": r3, "Label": "Pivot Point 3rd Level Resistance", "Type": "Pivot Resistance"},
+        {"Price": r2, "Label": "Pivot Point 2nd Level Resistance", "Type": "Pivot Resistance"},
+        {"Price": r1, "Label": "Pivot Point 1st Level Resistance", "Type": "Pivot Resistance"},
+        {"Price": p, "Label": "Pivot Point", "Type": "Pivot Point"},
+        {"Price": s1, "Label": "Pivot Point 1st Level Support", "Type": "Pivot Support"},
+        {"Price": s2, "Label": "Pivot Point 2nd Level Support", "Type": "Pivot Support"},
+        {"Price": s3, "Label": "Pivot Point 3rd Level Support", "Type": "Pivot Support"}
+    ]
+
+def calculate_cheat_sheet(series, ohlc_data=None):
+    """
+    Calculates technical levels for a "Trader's Cheat Sheet" (Ladder View).
+    Returns:
+        pd.DataFrame: Sorted DataFrame with columns ['Price', 'Label', 'Type'].
+    Args:
+        series (pd.Series): Price history (Close).
+        ohlc_data (dict, optional): 'High', 'Low', 'Close' of Previous Period for Pivot Points.
+    """
+    if series.empty or len(series) < 20:
+        return None
+
+    current_price = series.iloc[-1]
+    levels = []
+    
+    # 1. Current Price
+    levels.append({"Price": current_price, "Label": "Current Price", "Type": "Current"})
+    
+    # 2. Moving Averages
+    for w in [9, 20, 50, 100, 200]:
+        if len(series) >= w:
+            val = series.rolling(w).mean().iloc[-1]
+            label = f"Price Crosses {w} Day Moving Average"
+            levels.append({"Price": val, "Label": label, "Type": "Moving Average"})
+        
+    # 3. Highs / Lows & Retracements
+    periods = {
+        "52 Week": 252,
+        "13 Week": 65, 
+        "1 Month": 21
+    }
+    
+    for name, p in periods.items():
+        if len(series) >= p:
+            slice_pd = series.iloc[-p:]
+            h = slice_pd.max()
+            l = slice_pd.min()
+            rng = h - l
+            
+            levels.append({"Price": h, "Label": f"{name} High", "Type": "High/Low"})
+            levels.append({"Price": l, "Label": f"{name} Low", "Type": "High/Low"})
+            
+            if rng > 0:
+                # Retracements from High (Down)
+                levels.append({"Price": h - (rng * 0.382), "Label": f"38.2% Retracement From {name} High", "Type": "Fibonacci"})
+                levels.append({"Price": h - (rng * 0.50), "Label": f"50% Retracement From {name} High/Low", "Type": "Fibonacci"})
+                levels.append({"Price": h - (rng * 0.618), "Label": f"61.8% Retracement From {name} High", "Type": "Fibonacci"})
+                
+                # Retracements from Low (Up)
+                levels.append({"Price": l + (rng * 0.382), "Label": f"38.2% Retracement From {name} Low", "Type": "Fibonacci"})
+                levels.append({"Price": l + (rng * 0.618), "Label": f"61.8% Retracement From {name} Low", "Type": "Fibonacci"})
+
+    # 4. Standard Deviations (using 20-day std)
+    if len(series) >= 20:
+        ma20 = series.rolling(20).mean().iloc[-1]
+        std20 = series.rolling(20).std().iloc[-1]
+        
+        # Standard Deviation Resistance/Support approx
+        levels.append({"Price": current_price + std20, "Label": "Price 1 Standard Deviation Resistance", "Type": "StdDev"})
+        levels.append({"Price": current_price + (2*std20), "Label": "Price 2 Standard Deviations Resistance", "Type": "StdDev"})
+        levels.append({"Price": current_price - std20, "Label": "Price 1 Standard Deviation Support", "Type": "StdDev"})
+        levels.append({"Price": current_price - (2*std20), "Label": "Price 2 Standard Deviations Support", "Type": "StdDev"})
+
+    # 5. Pivot Points & Session Levels
+    if ohlc_data and all(k in ohlc_data for k in ['High', 'Low', 'Close']):
+        pivots = calculate_pivot_points(ohlc_data['High'], ohlc_data['Low'], ohlc_data['Close'])
+        levels.extend(pivots)
+        
+        # Add Session Levels
+        levels.append({"Price": ohlc_data['High'], "Label": "High", "Type": "Session Level"})
+        levels.append({"Price": ohlc_data['Low'], "Label": "Low", "Type": "Session Level"})
+        levels.append({"Price": ohlc_data['Close'], "Label": "Previous Close", "Type": "Session Level"})
+
+    df = pd.DataFrame(levels)
+    df = df.drop_duplicates(subset=["Label"])
+    df = df.sort_values("Price", ascending=False).reset_index(drop=True)
+    return df

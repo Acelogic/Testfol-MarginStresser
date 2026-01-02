@@ -117,6 +117,31 @@ def fetch_component_data(tickers, start_date, end_date):
             # No need for the extra st.cache_data layer here since specific args change often,
             # but this function is cached with st.cache_data at the top level anyway.
             
+            # 1. Try Yahoo Finance First (For Real Market Prices)
+            try:
+                from app.core.shadow_backtest import parse_ticker
+                # Resolve real ticker (e.g. QQQSIM -> QQQ)
+                mapped_ticker, _ = parse_ticker(base)
+                
+                # Use history() showing real price
+                yf_obj = yf.Ticker(mapped_ticker)
+                # Ensure dates are strings
+                sd_str = start_date.strftime("%Y-%m-%d") if hasattr(start_date, 'strftime') else str(start_date)
+                ed_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, 'strftime') else str(end_date)
+                
+                hist = yf_obj.history(start=sd_str, end=ed_str, auto_adjust=True)
+                if not hist.empty and 'Close' in hist.columns:
+                    # Normalize Timezone to Naive to prevent mismatch with other data sources
+                    if hist.index.tz is not None:
+                        hist.index = hist.index.tz_localize(None)
+                        
+                    combined_prices[base] = hist['Close']
+                    continue
+            except Exception:
+                pass # Fail silently and use fallback
+
+            # 2. Testfol API Fallback (For Synthetic/Custom Tickers)
+            # Returns an Equity Curve (Backtest starting at 10,000)
             broad_start = "1900-01-01" 
             broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
             
