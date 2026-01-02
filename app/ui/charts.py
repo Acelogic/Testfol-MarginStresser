@@ -1150,7 +1150,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
-    tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
+    tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma = st.tabs(["📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA"])
     
     with tab_annual:
         st.subheader(f"{portfolio_name} Annual Returns")
@@ -1264,6 +1264,165 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             use_container_width=True,
             hide_index=True
         )
+
+    with tab_200dma:
+        st.subheader(f"{portfolio_name} 200-Day Moving Average Analysis")
+        
+        # Controls
+        c_ctrl1, c_ctrl2 = st.columns(2)
+        merge_tol = c_ctrl1.slider(
+            "Merge Events Tolerance (Days)", 
+            min_value=0, max_value=30, value=3, step=1,
+            help="**Merge Tolerance**: Ignores short recoveries. If the price recovers above 200DMA for fewer than X days before dropping again, it is considered a single continuous 'Under' event. Useful for filtering out fake breakouts."
+        )
+        min_days = c_ctrl2.slider(
+            "Signal Filter (Min Days)", 
+            min_value=0, max_value=90, value=0, step=1,
+            help="**Signal Filter**: Excludes short-lived drops below the 200DMA (noise). Events shorter than X days will be hidden from the analysis table and statistics."
+        )
+
+        # Calculate Stats (Reactive)
+        dma_series, events_df = calculations.analyze_200dma(port_series, tolerance_days=merge_tol)
+        
+        if dma_series is None or dma_series.dropna().empty: 
+             st.info("Insufficient data to calculate 200DMA (need >200 days).")
+        else:
+             # Just in case events_df is empty but we have DMA
+            if events_df.empty:
+                st.info("Price has never been below 200DMA in this period.")
+            else:
+                # Apply Min Days Filter for Display/Stats
+                filtered_events = events_df[events_df["Duration (Days)"] >= min_days]
+            
+            # Chart
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(
+                x=port_series.index, y=port_series,
+                name="Price",
+                line=dict(color='#2E86C1', width=2),
+                hovertemplate="Price: $%{y:,.0f}<extra></extra>"
+            ))
+            fig.add_trace(go.Scatter(
+                x=dma_series.index, y=dma_series,
+                name="200DMA",
+                line=dict(color='#E74C3C', width=1.5),
+                hovertemplate="200DMA: $%{y:,.0f}<extra></extra>"
+            ))
+            fig.update_layout(
+                title="Price vs 200DMA",
+                template="plotly_dark",
+                height=400,
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                xaxis_title="Date",
+                yaxis_title="Price ($)",
+                yaxis_type="log",
+                hovermode="x unified"
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            if not events_df.empty:
+                # Summary Metrics (Based on FILTERED events)
+                # Note: If filtered_events is empty, we handle that
+                
+                total_days = (port_series.index[-1] - port_series.index[0]).days
+                if not filtered_events.empty:
+                    days_under = filtered_events["Duration (Days)"].sum()
+                    pct_under = (days_under / total_days) * 100 if total_days > 0 else 0
+                    
+                    longest_event_idx = filtered_events["Duration (Days)"].idxmax()
+                    longest_event = filtered_events.loc[longest_event_idx]
+                    
+                    l_dur = longest_event['Duration (Days)']
+                    l_depth = longest_event['Max Depth (%)']
+                else:
+                    days_under = 0
+                    pct_under = 0
+                    l_dur = 0
+                    l_depth = 0
+                
+                c1, c2, c3 = st.columns(3)
+                c1.metric("Time Under 200DMA", f"{pct_under:.1f}%", f"{days_under} days total")
+                c2.metric("Longest Period Under", f"{l_dur} days", f"Max Depth: {l_depth:.2f}%")
+                
+                # Check current status FROM RAW (most accurate for 'Current') or Filtered?
+                # Probably Raw for current status, but let's stick to the merged understanding.
+                # If we merged the ongoing event with a previous one, the 'Ongoing' event in events_df has the correct start date.
+                # So we just check the LAST event in events_df (which contains the merged view).
+                
+                last_event = events_df.iloc[-1]
+                last_price = port_series.iloc[-1]
+                last_dma = dma_series.iloc[-1]
+                
+                # If the last event is "Ongoing", then we are "Under" (conceptually, or within tolerance)
+                # But strictly, price might be above DMA but within tolerance gap.
+                # analyze_200dma marks status as "Ongoing" if the gap is < tolerance.
+                
+                if last_event["Status"] == "Ongoing":
+                     c3.metric("Current Status", "🔴 Below/Risk 200DMA", f"Duration: {last_event['Duration (Days)']} days")
+                elif last_price < last_dma:
+                     # Should have been caught as ongoing, unless analyze logic is weird.
+                     c3.metric("Current Status", "🔴 Below 200DMA", "Just started")
+                else:
+                    # We are above and outside tolerance
+                    # Find last end
+                    last_end = last_event["End Date"]
+                    if pd.notna(last_end):
+                        days_above = (port_series.index[-1] - last_end).days
+                        c3.metric("Current Status", "🟢 Above 200DMA", f"For {days_above} days")
+                    else:
+                        c3.metric("Current Status", "🟢 Above 200DMA")
+                
+                # Events Table
+                st.subheader("Periods Under 200DMA")
+                
+                display_df = filtered_events.copy()
+                if not display_df.empty:
+                    display_df["Start Date"] = display_df["Start Date"].dt.date
+                    display_df["End Date"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+                    display_df = display_df.sort_values("Start Date", ascending=False)
+                    
+                    st.dataframe(
+                        display_df.style.format({
+                            "Max Depth (%)": "{:.2f}%",
+                            "Duration (Days)": "{:.0f}",
+                            "Duration (Weeks)": "{:.1f}",
+                            "Duration (Months)": "{:.1f}"
+                        }), 
+                        use_container_width=True,
+                        hide_index=True
+                    )
+
+                    
+                    # Probability Histogram
+                    st.subheader("Distribution of Time Under 200DMA")
+                    
+                    hist_fig = go.Figure()
+                    
+                    # Histogram
+                    hist_fig.add_trace(go.Histogram(
+                        x=filtered_events["Duration (Days)"],
+                        marker_color='#636EFA',
+                        marker_line_color='black',
+                        marker_line_width=1,
+                        opacity=0.8,
+                        nbinsx=50
+                    ))
+                    
+                    hist_fig.update_layout(
+                        template="plotly_dark",
+                        height=400,
+                        title=dict(text="Distribution of Time Under 200DMA", font=dict(size=14)),
+                        xaxis_title="Duration (Days)",
+                        yaxis_title="Frequency",
+                        showlegend=False,
+                        bargap=0.05,
+                        hovermode="x unified"
+                    )
+                    
+                    st.plotly_chart(hist_fig, use_container_width=True)
+                    
+                else:
+                    st.info(f"No periods under 200DMA found longer than {min_days} days.")
 def render_rebalance_sankey(trades_df, view_freq="Yearly", unique_id=None):
     if trades_df.empty:
         return
