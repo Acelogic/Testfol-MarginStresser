@@ -339,6 +339,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
             max_depth = 0.0
 
         # Calculate Subsequent Peak (Only if Recovered)
+        days_to_ath = None
         if status == "Recovered":
             # Period: From Recovery (e_date) to Next Drop (next_evt.Start) or Now
             if i + 1 < len(merged_events):
@@ -361,6 +362,18 @@ def analyze_ma(series, window=200, tolerance_days=0):
                 else:
                     bottom_to_peak_pct = None
                 
+                # Calculate Days to ATH from MA crossover
+                # Find the ATH before this drawdown started
+                pre_drawdown = series[:s_date]
+                if not pre_drawdown.empty:
+                    previous_ath = pre_drawdown.max()
+                    # Find first date after recovery where price exceeds previous ATH
+                    post_recovery = series[e_date:]
+                    ath_reached = post_recovery[post_recovery >= previous_ath]
+                    if not ath_reached.empty:
+                        ath_date = ath_reached.index[0]
+                        days_to_ath = (ath_date - e_date).days
+                
                 # Check for Active/Current Status
                 # If this is the last event and it is recovered, it means the recovery is ongoing (Current)
                 if i == len(merged_events) - 1:
@@ -372,6 +385,17 @@ def analyze_ma(series, window=200, tolerance_days=0):
             else:
                 peak_pct = 0.0
                 bottom_to_peak_pct = None
+        else:
+            # Ongoing event - calculate current stats from bottom to now
+            if pd.notna(bottom_date):
+                bottom_price = series.loc[bottom_date]
+                current_price = series.iloc[-1]
+                # Current gain from bottom (not a peak, but current)
+                bottom_to_peak_pct = ((current_price / bottom_price) - 1) * 100
+                # Days from bottom to now
+                days_bottom_to_peak = (series.index[-1] - bottom_date).days
+                # No Post-MA Rally since still under MA
+                peak_pct = None
             
         final_output.append({
             "Start Date": s_date,
@@ -384,6 +408,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
             "Bottom to Peak (%)": bottom_to_peak_pct,
             "Peak Date": peak_date,
             "Days Bottom to Peak": days_bottom_to_peak,
+            "Days to ATH": days_to_ath,
             "Status": status
         })
 
