@@ -1039,15 +1039,20 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
     
     # Add Peak markers (Green diamonds) - Uses filtered events to match table
     if not filtered_events.empty and "Peak Date" in filtered_events.columns:
-        peak_dates = filtered_events["Peak Date"].dropna()
-        if not peak_dates.empty:
-            # Get price at each peak date
+        # Need to get both peak dates and their corresponding rally values
+        peak_data = filtered_events[["Peak Date", "Subsequent Peak (%)"]].dropna(subset=["Peak Date"])
+        if not peak_data.empty:
+            # Get price at each peak date and pair with rally %
             peak_prices = []
             valid_dates = []
-            for d in peak_dates:
+            rally_values = []
+            for _, row in peak_data.iterrows():
+                d = row["Peak Date"]
+                rally = row["Subsequent Peak (%)"]
                 if d in port_series.index:
                     peak_prices.append(port_series.loc[d])
                     valid_dates.append(d)
+                    rally_values.append(rally if pd.notna(rally) else 0)
             
             if valid_dates:
                 fig.add_trace(go.Scatter(
@@ -1061,7 +1066,8 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                         color='#00CC96',  # Green
                         line=dict(width=1, color='white')
                     ),
-                    hovertemplate="Peak: $%{y:,.0f}<br>%{x|%b %d, %Y}<extra></extra>"
+                    customdata=rally_values,
+                    hovertemplate="Peak: $%{y:,.0f} (+%{customdata:.1f}%)<br>%{x|%b %d, %Y}<extra></extra>"
                 ))
     
     # Add Bottom markers (Red triangles) - Uses filtered events to match table
