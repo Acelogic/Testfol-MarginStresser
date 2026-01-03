@@ -1037,71 +1037,85 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         hovertemplate=f"{window}MA: $%{{y:,.0f}}<extra></extra>"
     ))
     
-    # Add Peak markers (Green diamonds) - Uses filtered events to match table
-    if not filtered_events.empty and "Peak Date" in filtered_events.columns:
-        # Need to get both peak dates and their corresponding rally values
-        peak_data = filtered_events[["Peak Date", "Subsequent Peak (%)"]].dropna(subset=["Peak Date"])
+    # Add Peak markers - Show ALL from events_df, grey out non-filtered
+    if not events_df.empty and "Peak Date" in events_df.columns:
+        # Get filtered peak dates for comparison
+        filtered_peak_dates = set(filtered_events["Peak Date"].dropna()) if not filtered_events.empty else set()
+        
+        # Get all peaks from raw events
+        peak_data = events_df[["Peak Date", "Bottom to Peak (%)"]].dropna(subset=["Peak Date"])
         if not peak_data.empty:
-            # Get price at each peak date and pair with rally %
-            peak_prices = []
-            valid_dates = []
-            rally_values = []
             for _, row in peak_data.iterrows():
                 d = row["Peak Date"]
-                rally = row["Subsequent Peak (%)"]
+                rally = row["Bottom to Peak (%)"]
                 if d in port_series.index:
-                    peak_prices.append(port_series.loc[d])
-                    valid_dates.append(d)
-                    rally_values.append(rally if pd.notna(rally) else 0)
-            
-            if valid_dates:
-                fig.add_trace(go.Scatter(
-                    x=valid_dates, 
-                    y=peak_prices,
-                    mode='markers',
-                    name="Peak",
-                    marker=dict(
-                        symbol='diamond',
-                        size=10,
-                        color='#00CC96',  # Green
-                        line=dict(width=1, color='white')
-                    ),
-                    customdata=rally_values,
-                    hovertemplate="Peak: $%{y:,.0f} (+%{customdata:.1f}%)<br>%{x|%b %d, %Y}<extra></extra>"
-                ))
+                    is_filtered = d in filtered_peak_dates
+                    rally_val = rally if pd.notna(rally) else 0
+                    filtered_label = "" if is_filtered else " (filtered)"
+                    fig.add_trace(go.Scatter(
+                        x=[d], 
+                        y=[port_series.loc[d]],
+                        mode='markers',
+                        name="Peak" if is_filtered else "Peak (Filtered)",
+                        legendgroup="peak" if is_filtered else "peak_filtered",
+                        showlegend=False,
+                        visible=True if is_filtered else 'legendonly',
+                        marker=dict(
+                            symbol='diamond',
+                            size=10 if is_filtered else 7,
+                            color='#00CC96' if is_filtered else 'rgba(100, 100, 100, 0.5)',
+                            line=dict(width=1, color='white' if is_filtered else 'grey')
+                        ),
+                        hovertemplate=f"Peak: $%{{y:,.0f}} (+{rally_val:.1f}%)<br>%{{x|%b %d, %Y}}{filtered_label}<extra></extra>"
+                    ))
+        
+        # Add legend entries with legendgroup for toggle
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', name="Peak",
+            legendgroup="peak",
+            marker=dict(symbol='diamond', size=10, color='#00CC96', line=dict(width=1, color='white'))))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', name="Peak (Filtered)",
+            legendgroup="peak_filtered", visible='legendonly',
+            marker=dict(symbol='diamond', size=7, color='rgba(100, 100, 100, 0.5)', line=dict(width=1, color='grey'))))
     
-    # Add Bottom markers (Red triangles) - Uses filtered events to match table
-    if not filtered_events.empty and "Bottom Date" in filtered_events.columns:
-        # Need to get both bottom dates and their corresponding depth values
-        bottom_data = filtered_events[["Bottom Date", "Max Depth (%)"]].dropna(subset=["Bottom Date"])
+    # Add Bottom markers - Show ALL from events_df, grey out non-filtered
+    if not events_df.empty and "Bottom Date" in events_df.columns:
+        # Get filtered bottom dates for comparison
+        filtered_bottom_dates = set(filtered_events["Bottom Date"].dropna()) if not filtered_events.empty else set()
+        
+        # Get all bottoms from raw events
+        bottom_data = events_df[["Bottom Date", "Max Depth (%)"]].dropna(subset=["Bottom Date"])
         if not bottom_data.empty:
-            # Get price at each bottom date and pair with depth
-            bottom_prices = []
-            valid_bottom_dates = []
-            depth_values = []
             for _, row in bottom_data.iterrows():
                 d = row["Bottom Date"]
                 depth = row["Max Depth (%)"]
                 if d in port_series.index:
-                    bottom_prices.append(port_series.loc[d])
-                    valid_bottom_dates.append(d)
-                    depth_values.append(depth)
-            
-            if valid_bottom_dates:
-                fig.add_trace(go.Scatter(
-                    x=valid_bottom_dates, 
-                    y=bottom_prices,
-                    mode='markers',
-                    name="Bottom",
-                    marker=dict(
-                        symbol='triangle-down',
-                        size=10,
-                        color='#EF553B',  # Red
-                        line=dict(width=1, color='white')
-                    ),
-                    customdata=depth_values,
-                    hovertemplate="Bottom: $%{y:,.0f} (%{customdata:.1f}%)<br>%{x|%b %d, %Y}<extra></extra>"
-                ))
+                    is_filtered = d in filtered_bottom_dates
+                    depth_val = depth if pd.notna(depth) else 0
+                    filtered_label = "" if is_filtered else " (filtered)"
+                    fig.add_trace(go.Scatter(
+                        x=[d], 
+                        y=[port_series.loc[d]],
+                        mode='markers',
+                        name="Bottom" if is_filtered else "Bottom (Filtered)",
+                        legendgroup="bottom" if is_filtered else "bottom_filtered",
+                        showlegend=False,
+                        visible=True if is_filtered else 'legendonly',
+                        marker=dict(
+                            symbol='triangle-down',
+                            size=10 if is_filtered else 7,
+                            color='#EF553B' if is_filtered else 'rgba(100, 100, 100, 0.5)',
+                            line=dict(width=1, color='white' if is_filtered else 'grey')
+                        ),
+                        hovertemplate=f"Bottom: $%{{y:,.0f}} ({depth_val:.1f}%)<br>%{{x|%b %d, %Y}}{filtered_label}<extra></extra>"
+                    ))
+        
+        # Add legend entries with legendgroup for toggle
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', name="Bottom",
+            legendgroup="bottom",
+            marker=dict(symbol='triangle-down', size=10, color='#EF553B', line=dict(width=1, color='white'))))
+        fig.add_trace(go.Scatter(x=[None], y=[None], mode='markers', name="Bottom (Filtered)",
+            legendgroup="bottom_filtered", visible='legendonly',
+            marker=dict(symbol='triangle-down', size=7, color='rgba(100, 100, 100, 0.5)', line=dict(width=1, color='grey'))))
     fig.update_layout(
         title=f"Price vs {window}MA",
         template="plotly_dark",
