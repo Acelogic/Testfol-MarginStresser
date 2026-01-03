@@ -1074,6 +1074,16 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             
             # Calculate median max depth
             median_depth = filtered_events["Max Depth (%)"].median()
+            
+            # Calculate median Days to ATH (only for events that reached ATH)
+            if "Days to ATH" in filtered_events.columns:
+                ath_events = filtered_events[filtered_events["Days to ATH"].notna()]
+                if not ath_events.empty:
+                    median_days_to_ath = ath_events["Days to ATH"].median()
+                else:
+                    median_days_to_ath = None
+            else:
+                median_days_to_ath = None
         else:
             days_under = 0
             pct_under = 0
@@ -1081,33 +1091,35 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             l_depth = 0
             avg_bottom_to_peak = None
             median_depth = None
+            median_days_to_ath = None
         
-        c1, c2, c3, c4, c5 = st.columns(5)
-        c1.metric(f"Time Under {window}MA", f"{pct_under:.1f}%", f"{days_under} days total")
-        c2.metric("Longest Period Under", f"{l_dur:.0f} days", f"Depth: {l_depth:.2f}%")
-        if median_depth is not None:
-            c3.metric("Median Depth", f"{median_depth:.2f}%", "Typical drawdown")
-        if avg_bottom_to_peak is not None:
-            c4.metric("Median Recovery", f"{avg_bottom_to_peak:.0f} days", "Bottom→Peak")
+        c1, c2, c3, c4, c5, c6 = st.columns(6)
         
-        # Check current status
+        # Check current status (Show first for quick glance)
         last_event = events_df.iloc[-1]
         last_price = port_series.iloc[-1]
         last_dma = dma_series.iloc[-1]
         
         if last_event["Status"] == "Ongoing":
-                c5.metric("Status", f"🔴 Below {window}MA", f"{last_event['Duration (Days)']} days")
+                c1.metric("Status", f"🔴 Below {window}MA", f"{last_event['Duration (Days)']} days")
         elif last_price < last_dma:
-                c5.metric("Status", f"🔴 Below {window}MA", "Just started")
+                c1.metric("Status", f"🔴 Below {window}MA", "Just started")
         else:
-            # We are above and outside tolerance
-            # Find last end
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 days_above = (port_series.index[-1] - last_end).days
-                c5.metric("Status", f"🟢 Above {window}MA", f"{days_above} days")
+                c1.metric("Status", f"🟢 Above {window}MA", f"{days_above} days")
             else:
-                c5.metric("Status", f"🟢 Above {window}MA")
+                c1.metric("Status", f"🟢 Above {window}MA")
+        
+        c2.metric(f"Time Under {window}MA", f"{pct_under:.1f}%", f"{days_under} days total")
+        c3.metric("Longest Period Under", f"{l_dur:.0f} days", f"Depth: {l_depth:.2f}%")
+        if median_depth is not None:
+            c4.metric("Median Depth", f"{median_depth:.2f}%", "Typical drawdown")
+        if avg_bottom_to_peak is not None:
+            c5.metric("Median Recovery", f"{avg_bottom_to_peak:.0f} days", "Bottom→Peak")
+        if median_days_to_ath is not None:
+            c6.metric("Median ATH", f"{median_days_to_ath:.0f} days", "MA Cross→New High")
         
         # Stage Analysis Display
         if show_stage_analysis and stage_series is not None and not stage_series.empty:
