@@ -1182,7 +1182,8 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 | **Post-MA Rally** | % gain from **recovery date** (MA crossover) to the subsequent peak |
 | **Bottom→Peak** | % gain from the **lowest price** to the subsequent peak (full rebound) |
 | **Recovery Days** | Calendar days from **lowest point** (Max Depth date) to **subsequent peak** |
-| **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below |
+| **Days to ATH** | Days from **MA crossover** until price makes a **new all-time high** (vs pre-drawdown ATH) |
+| **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below (shown with 🟠 highlight) |
 | **Pattern** | Recovery shape classification (see below) |
 
 **Recovery Patterns** *(classified using median thresholds from this dataset)*:
@@ -1214,6 +1215,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 "Subsequent Peak (%)": "Post-MA Rally",
                 "Bottom to Peak (%)": "Bottom→Peak",
                 "Days Bottom to Peak": "Recovery Days",
+                "Days to ATH": "Days to ATH",
                 "Status": "Status"
             }
             
@@ -1256,17 +1258,26 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             display_df["Pattern"] = display_df.apply(classify_recovery, axis=1)
             
             # Reorder columns: Status before Pattern
-            final_display_cols = ["Start", "End", "Days Under", "Max Depth", "Post-MA Rally", "Bottom→Peak", "Recovery Days", "Status", "Pattern"]
+            final_display_cols = ["Start", "End", "Days Under", "Max Depth", "Post-MA Rally", "Bottom→Peak", "Recovery Days", "Days to ATH", "Status", "Pattern"]
             final_display_cols = [c for c in final_display_cols if c in display_df.columns]
             display_df = display_df[final_display_cols]
             
+            # Style function to highlight ongoing rows
+            def highlight_ongoing(row):
+                if "Ongoing" in str(row.get("Status", "")):
+                    return ['background-color: rgba(255, 165, 0, 0.2)'] * len(row)  # Orange tint
+                return [''] * len(row)
+            
             st.dataframe(
-                display_df.style.format({
+                display_df.style
+                .apply(highlight_ongoing, axis=1)
+                .format({
                     "Max Depth": "{:.2f}%",
                     "Bottom→Peak": "{:.1f}%",
                     "Post-MA Rally": "{:.1f}%",
                     "Days Under": "{:.0f}",
                     "Recovery Days": "{:.0f}",
+                    "Days to ATH": "{:.0f}",
                 }, na_rep="-"), 
                 use_container_width=True,
                 hide_index=True
