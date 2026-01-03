@@ -801,7 +801,8 @@ When yFinance data starts later than your chart, the tax engine initializes your
             comparison_series=comp_resampled,
             unique_id=portfolio_name,
             portfolio_name=portfolio_name,
-            component_data=component_prices
+            component_data=component_prices,
+            raw_port_series=port_series  # Full testfol data for MA analysis
         )
         
     with res_tab_rebal:

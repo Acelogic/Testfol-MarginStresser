@@ -999,6 +999,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             return
 
     # Just in case events_df is empty but we have DMA
+    filtered_events = pd.DataFrame()  # Initialize for chart use
     if events_df.empty:
         st.info(f"Price has never been below {window}MA in this period.")
     else:
@@ -1035,12 +1036,73 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         line=dict(color='#E74C3C', width=1.5),
         hovertemplate=f"{window}MA: $%{{y:,.0f}}<extra></extra>"
     ))
+    
+    # Add Peak markers (Green diamonds) - Uses filtered events to match table
+    if not filtered_events.empty and "Peak Date" in filtered_events.columns:
+        peak_dates = filtered_events["Peak Date"].dropna()
+        if not peak_dates.empty:
+            # Get price at each peak date
+            peak_prices = []
+            valid_dates = []
+            for d in peak_dates:
+                if d in port_series.index:
+                    peak_prices.append(port_series.loc[d])
+                    valid_dates.append(d)
+            
+            if valid_dates:
+                fig.add_trace(go.Scatter(
+                    x=valid_dates, 
+                    y=peak_prices,
+                    mode='markers',
+                    name="Peak",
+                    marker=dict(
+                        symbol='diamond',
+                        size=10,
+                        color='#00CC96',  # Green
+                        line=dict(width=1, color='white')
+                    ),
+                    hovertemplate="Peak: $%{y:,.0f}<br>%{x|%b %d, %Y}<extra></extra>"
+                ))
+    
+    # Add Bottom markers (Red triangles) - Uses filtered events to match table
+    if not filtered_events.empty and "Bottom Date" in filtered_events.columns:
+        # Need to get both bottom dates and their corresponding depth values
+        bottom_data = filtered_events[["Bottom Date", "Max Depth (%)"]].dropna(subset=["Bottom Date"])
+        if not bottom_data.empty:
+            # Get price at each bottom date and pair with depth
+            bottom_prices = []
+            valid_bottom_dates = []
+            depth_values = []
+            for _, row in bottom_data.iterrows():
+                d = row["Bottom Date"]
+                depth = row["Max Depth (%)"]
+                if d in port_series.index:
+                    bottom_prices.append(port_series.loc[d])
+                    valid_bottom_dates.append(d)
+                    depth_values.append(depth)
+            
+            if valid_bottom_dates:
+                fig.add_trace(go.Scatter(
+                    x=valid_bottom_dates, 
+                    y=bottom_prices,
+                    mode='markers',
+                    name="Bottom",
+                    marker=dict(
+                        symbol='triangle-down',
+                        size=10,
+                        color='#EF553B',  # Red
+                        line=dict(width=1, color='white')
+                    ),
+                    customdata=depth_values,
+                    hovertemplate="Bottom: $%{y:,.0f} (%{customdata:.1f}%)<br>%{x|%b %d, %Y}<extra></extra>"
+                ))
     fig.update_layout(
         title=f"Price vs {window}MA",
         template="plotly_dark",
-        height=400,
+        height=500,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
         xaxis_title="Date",
+        xaxis=dict(range=[port_series.index[0], port_series.index[-1]]),  # Force full date range
         yaxis_title="Price ($)",
         yaxis_type="log",
         hovermode="x unified"
@@ -1180,23 +1242,33 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 **Summary Metrics (Top Row):**
 | Metric | Meaning |
 |--------|---------|
+| **Status** | Current position: 🟢 Above or 🔴 Below the {window}MA |
 | **Time Under {window}MA** | Total % of the period where price was below the moving average |
 | **Longest Period Under** | The single longest continuous stretch below the MA, with its max depth |
-| **Median Bottom→Peak** | Typical (median) number of days from the lowest point to the subsequent peak |
-| **Status** | Current position: 🟢 Above or 🔴 Below the {window}MA |
+| **Median Depth** | Typical (median) drawdown below the MA |
+| **Median Recovery** | Typical (median) number of days from the lowest point to the subsequent peak |
+| **Median ATH** | Typical (median) number of days from MA crossover to a new all-time high |
 
 **Table Columns:**
 | Column | Meaning |
 |--------|---------|
 | **Start / End** | When the price dropped below / recovered above the {window}MA |
 | **Days Under** | Total calendar days spent below the MA |
-| **Max Depth** | Deepest point below the MA (calculated as `(Price - MA) / MA`) |
+| **Max Depth** | Price drawdown from event start to the lowest point (`(Bottom - Start) / Start`) |
 | **Post-MA Rally** | % gain from **recovery date** (MA crossover) to the subsequent peak |
 | **Bottom→Peak** | % gain from the **lowest price** to the subsequent peak (full rebound) |
-| **Recovery Days** | Calendar days from **lowest point** (Max Depth date) to **subsequent peak** |
+| **Recovery Days** | Calendar days from **lowest price** to **subsequent peak** |
 | **Days to ATH** | Days from **MA crossover** until price makes a **new all-time high** (vs pre-drawdown ATH) |
 | **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below (shown with 🟠 highlight) |
 | **Pattern** | Recovery shape classification (see below) |
+
+**What is "Peak"?**
+> The **subsequent peak** is the highest price reached between the MA recovery date and either:
+> - The start of the *next* drawdown event (next time price drops below MA), or
+> - The end of the data (if no subsequent drawdown occurred).
+>
+> This represents the **local high** during the rally—not necessarily a new all-time high. 
+> To see when the price made a *new ATH*, check the **Days to ATH** column.
 
 **Recovery Patterns** *(classified using median thresholds from this dataset)*:
 
@@ -1274,15 +1346,16 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             final_display_cols = [c for c in final_display_cols if c in display_df.columns]
             display_df = display_df[final_display_cols]
             
-            # Style function to highlight ongoing rows
-            def highlight_ongoing(row):
-                if "Ongoing" in str(row.get("Status", "")):
-                    return ['background-color: rgba(255, 165, 0, 0.2)'] * len(row)  # Orange tint
+            # Style function to highlight ongoing and current rows
+            def highlight_rows(row):
+                status = str(row.get("Status", ""))
+                if "Ongoing" in status or "Current" in status:
+                    return ['background-color: rgba(255, 215, 0, 0.2)'] * len(row)  # Yellow/Gold tint
                 return [''] * len(row)
             
             st.dataframe(
                 display_df.style
-                .apply(highlight_ongoing, axis=1)
+                .apply(highlight_rows, axis=1)
                 .format({
                     "Max Depth": "{:.2f}%",
                     "Bottom→Peak": "{:.1f}%",
@@ -1326,7 +1399,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         else:
             st.info(f"No periods under {window}MA found longer than {min_days} days.")
 
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None):
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
     quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
@@ -1702,10 +1775,13 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
     with tab_200dma:
-        render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, show_stage_analysis=False)
+        # Use raw_port_series (full testfol data) for MA analysis if available, otherwise fall back to port_series
+        ma_series = raw_port_series if raw_port_series is not None and not raw_port_series.empty else port_series
+        render_ma_analysis_tab(ma_series, portfolio_name, unique_id, window=200, show_stage_analysis=False)
 
     with tab_150ma:
-        render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=150, show_stage_analysis=True)
+        ma_series = raw_port_series if raw_port_series is not None and not raw_port_series.empty else port_series
+        render_ma_analysis_tab(ma_series, portfolio_name, unique_id, window=150, show_stage_analysis=True)
 
     with tab_cheatsheet:
         # Determine target series and name

@@ -331,10 +331,12 @@ def analyze_ma(series, window=200, tolerance_days=0):
         
         bottom_date = pd.NaT
         if not sub_series.empty:
-            drawdown_from_dma = (sub_series - sub_dma) / sub_dma
-            max_depth = drawdown_from_dma.min() * 100
-            # bottom_date is the date where (Price - DMA)/DMA is minimal (deepest)
-            bottom_date = drawdown_from_dma.idxmin()
+            # bottom_date is the date of the absolute lowest price
+            bottom_date = sub_series.idxmin()
+            bottom_price = sub_series.loc[bottom_date]
+            start_price = sub_series.iloc[0]
+            # max_depth is now the price drawdown from start of event
+            max_depth = ((bottom_price - start_price) / start_price) * 100
         else:
             max_depth = 0.0
 
@@ -404,6 +406,7 @@ def analyze_ma(series, window=200, tolerance_days=0):
             "Duration (Weeks)": duration / 7,
             "Duration (Months)": duration / 30.44,
             "Max Depth (%)": max_depth,
+            "Bottom Date": bottom_date,
             "Subsequent Peak (%)": peak_pct,
             "Bottom to Peak (%)": bottom_to_peak_pct,
             "Peak Date": peak_date,
