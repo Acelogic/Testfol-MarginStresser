@@ -69,8 +69,42 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
     elif data_source == 'stooq':
         new_df = download_from_stooq(unique_tickers, start_date)
     else:
+        # Default: Yahoo Finance with Fallback
         new_df = download_from_yfinance(unique_tickers, start_date)
-    
+        
+        # --- Fallback Logic ---
+        # Identify missing tickers (requested but not returned OR returned as all NaNs)
+        downloaded_tickers = new_df.columns.tolist() if not new_df.empty else []
+        
+        # Check 1: Tickers not in columns
+        missing_tickers = [t for t in unique_tickers if t not in downloaded_tickers]
+        
+        # Check 2: Tickers in columns but all NaN (yfinance often does this for delisted)
+        if not new_df.empty:
+            nan_tickers = [t for t in downloaded_tickers if new_df[t].isna().all()]
+            if nan_tickers:
+                # print(f"Found {len(nan_tickers)} all-NaN tickers from yfinance.")
+                missing_tickers.extend(nan_tickers)
+                # Drop them from new_df so we can cleanly merge Stooq data
+                new_df = new_df.drop(columns=nan_tickers)
+        
+        missing_tickers = list(set(missing_tickers))
+        
+        if missing_tickers:
+            print(f"Primary source (yfinance) missed {len(missing_tickers)} tickers. Attempting fallback to Stooq...")
+            stooq_df = download_from_stooq(missing_tickers, start_date)
+            
+            if not stooq_df.empty:
+                print(f"Stooq recovered {len(stooq_df.columns)} tickers: {stooq_df.columns.tolist()}")
+                
+                # Merge Stooq results into new_df
+                if new_df.empty:
+                    new_df = stooq_df
+                else:
+                    new_df = new_df.join(stooq_df, how='outer').sort_index()
+            else:
+                 print("Stooq fallback yielded no data.")
+
     if new_df is None or new_df.empty:
         print("ERROR: No data downloaded!")
         return pd.DataFrame()

@@ -11,6 +11,7 @@ import config
 import changes_parser
 import calendar
 import ndx_parser
+import price_manager
 
 # Configuration
 INPUT_CSV = config.COMPONENTS_FILE
@@ -18,11 +19,25 @@ MAPPING_FILE = os.path.join(config.ASSETS_DIR, "name_mapping.json")
 OUTPUT_FILE = config.WEIGHTS_FILE
 PROXY_TICKER = "QQQ"
 
-def load_data():
-    print("Loading data...")
-    df = pd.read_csv(INPUT_CSV)
+def load_data(): # Load Components
+    print(f"Loading {config.COMPONENTS_FILE}...")
+    df = pd.read_csv(config.COMPONENTS_FILE)
     df['Date'] = pd.to_datetime(df['Date'])
     
+    # FILTERING: Remove corrupt rows (e.g. where Company name is a date)
+    # Valid company names don't start with digits (usually)
+    # This matches the fix in ndx_scanner.py
+    df = df[~df['Company'].str.match(r'^\d{4}-\d{2}-\d{2}', na=False)]
+    
+    # Ensure Value is positive
+    df['Value'] = pd.to_numeric(df['Value'], errors='coerce')
+    df = df[df['Value'] > 0]
+
+    # Filter future dates (to avoid speculative/forward-looking data)
+    today = pd.Timestamp.now().normalize()
+    df = df[df['Date'] <= today]
+
+    # Load Name Mapping
     with open(MAPPING_FILE, "r") as f:
         mapping = json.load(f)
     
@@ -94,21 +109,7 @@ def get_unique_tickers(mapping):
         tickers.append(PROXY_TICKER)
     return tickers
 
-def fetch_prices(tickers):
-    print(f"Fetching prices for {len(tickers)} tickers...")
-    # Chunking to avoid massive requests? YF handles mass download well.
-    # But URL length limit might be an issue.
-    # 270 tickers is fine.
-    
-    start_date = "1999-01-01"
-    
-    try:
-        # Download Adj Close only
-        data = yf.download(tickers, start=start_date, auto_adjust=True, threads=True, progress=True)['Close']
-        return data
-    except Exception as e:
-        print(f"Error fetching prices: {e}")
-        return pd.DataFrame()
+
 
 def get_rebalance_dates(start_year=2000, end_year=2025):
     """
@@ -152,9 +153,11 @@ def get_rebalance_dates(start_year=2000, end_year=2025):
 def reconstruct():
     df, mapping = load_data()
     tickers = get_unique_tickers(mapping)
-    prices = fetch_prices(tickers)
     
-    if prices.empty:
+    # Use Centralized Price Manager (handles caching)
+    prices = price_manager.get_price_data(tickers, start_date="1999-01-01")
+    
+    if prices is None or prices.empty:
         print("No price data. Aborting.")
         return
 

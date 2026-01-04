@@ -976,13 +976,13 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
     
     merge_tol = c_ctrl1.slider(
         "Merge Events Tolerance (Days)", 
-        min_value=0, max_value=30, value=3, step=1,
+        min_value=0, max_value=30, value=14, step=1,
         key=f"ma_merge_{key_suffix}",
         help=f"**Merge Tolerance**: Ignores short recoveries. If the price recovers above {window}MA for fewer than X days before dropping again, it is considered a single continuous 'Under' event. Useful for filtering out fake breakouts."
     )
     min_days = c_ctrl2.slider(
         "Signal Filter (Min Days)", 
-        min_value=0, max_value=90, value=0, step=1,
+        min_value=0, max_value=90, value=14, step=1,
         key=f"ma_min_{key_suffix}",
         help=f"**Signal Filter**: Excludes short-lived drops below the {window}MA (noise). Events shorter than X days will be hidden from the analysis table and statistics."
     )

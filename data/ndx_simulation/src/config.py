@@ -20,7 +20,7 @@ COMPONENTS_FILE = os.path.join(ASSETS_DIR, "nasdaq_components.csv")
 WEIGHTS_FILE = os.path.join(RESULTS_DIR, "nasdaq_quarterly_weights.csv")
 CHANGES_FILE = os.path.join(ASSETS_DIR, "nasdaq_changes.csv")
 PRICE_CACHE_FILE = os.path.join(CACHE_DIR, "prices_cache.pkl")
-BENCHMARK_TICKER = "^NDX"
+BENCHMARK_TICKER = "QQQ"
 
 # --- Common Methodology Constants ---
 # (Can be overridden by specific strategies)

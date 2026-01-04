@@ -131,8 +131,8 @@ def get_mega2_holdings(df_date):
     mega_df['FinalWeight'] = mega_df['Ticker'].map(final_weights)
     return mega_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
 
-CONST_FILE_M1 = "output/ndx_mega_constituents.csv"
-CONST_FILE_M2 = "output/ndx_mega2_constituents.csv"
+CONST_FILE_M1 = os.path.join(config.RESULTS_DIR, "ndx_mega_constituents.csv")
+CONST_FILE_M2 = os.path.join(config.RESULTS_DIR, "ndx_mega2_constituents.csv")
 
 def get_holdings_from_history(history_df, target_date):
     """
@@ -159,6 +159,10 @@ def main():
     try:
         df = pd.read_csv(WEIGHTS_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
+        
+        # Filter future dates (Defense in depth)
+        today = pd.Timestamp.now().normalize()
+        df = df[df['Date'] <= today]
     except FileNotFoundError:
         print(f"Error: {WEIGHTS_FILE} not found. Run reconstruct_weights.py first.")
         sys.exit(1)

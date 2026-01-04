@@ -3,13 +3,14 @@ import pandas as pd
 from app.common import utils
 from app.services import testfol_api as api
 from . import asset_explorer
+from . import ndx_scanner
 
 def render():
     """Renders the configuration tabs and returns a config dictionary."""
     
     st.subheader("Strategy Configuration")
     
-    tab_port, tab_margin, tab_asset, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "⚙️ Settings"])
+    tab_port, tab_margin, tab_asset, tab_ndx, tab_settings = st.tabs(["💼 Portfolio", "🏦 Margin & Financing", "🧩 Asset Explorer", "📊 NDX Scanner", "⚙️ Settings"])
     
     
     config = {}
@@ -430,6 +431,9 @@ def render():
         # It doesn't modify the simulation config, just visualizes data.
         asset_explorer.render_asset_explorer()
 
+    with tab_ndx:
+        # NDX-100 Moving Average Scanner
+        ndx_scanner.render_ndx_scanner()
 
     with tab_settings:
         c1, c2 = st.columns(2)
@@ -476,6 +480,10 @@ def render():
                     shutil.rmtree(etf_cache_dir)
                     os.makedirs(etf_cache_dir, exist_ok=True)
                     cleared = True
+                
+                # 3. Streamlit Data Cache (NDX Scanner, etc.)
+                st.cache_data.clear()
+                cleared = True
                 
                 if cleared:
                     st.success("All caches cleared!")
