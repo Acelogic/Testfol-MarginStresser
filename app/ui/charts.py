@@ -1416,8 +1416,195 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             
             st.plotly_chart(hist_fig, use_container_width=True, key=f"ma_hist_{key_suffix}")
 
-        else:
-            st.info(f"No periods under {window}MA found longer than {min_days} days.")
+
+# -----------------------------------------------------------------------------
+# Cheat Sheet Analysis
+# -----------------------------------------------------------------------------
+def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=None):
+    # Determine target series and name
+    target_series = port_series
+    target_name = portfolio_name
+    
+    if component_data is not None and not component_data.empty:
+        if isinstance(component_data, pd.DataFrame):
+            cols = list(component_data.columns)
+            if len(cols) == 1:
+                    target_name = cols[0]
+                    target_series = component_data[target_name]
+            elif len(cols) > 1:
+                    target_name = st.selectbox("Select Asset to Analyze", cols, key=f"cs_sel_{unique_id}")
+                    target_series = component_data[target_name]
+                    
+    # Fetch OHLC for Pivot Points
+    ohlc_data = None
+    try:
+            from app.core.shadow_backtest import parse_ticker
+            import yfinance as yf
+            
+            mapped_ticker, _ = parse_ticker(target_name)
+            if not target_series.empty:
+                last_dt = target_series.index[-1]
+                start_f = (last_dt - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
+                end_f = (last_dt + pd.Timedelta(days=3)).strftime('%Y-%m-%d')
+                
+                base_yf = yf.Ticker(mapped_ticker)
+                hist_ohlc = base_yf.history(start=start_f, end=end_f, auto_adjust=True)
+                
+                if hist_ohlc.index.tz is not None:
+                    hist_ohlc.index = hist_ohlc.index.tz_localize(None)
+
+                if not hist_ohlc.empty:
+                    if last_dt in hist_ohlc.index:
+                        ref_bar = hist_ohlc.loc[last_dt]
+                    else:
+                        ref_bar = hist_ohlc.iloc[-1]
+                    
+                    ohlc_data = {
+                        'High': ref_bar['High'], 
+                        'Low': ref_bar['Low'], 
+                        'Close': ref_bar['Close']
+                    }
+    except Exception:
+            pass
+            
+    st.subheader(f"{target_name} Trader's Cheat Sheet")
+    cs_df = calculations.calculate_cheat_sheet(target_series, ohlc_data=ohlc_data)
+    
+    if cs_df is None or cs_df.empty:
+            st.info("Insufficient data for Technical Analysis.")
+    else:
+            # Transform to 3-Column Layout (Barchart Style)
+            # Left Column: High/Low, StdDev, Pivot S/R, Session Levels
+            # Right Column: Moving Averages, Fibonacci, Pivot Point (P)
+            
+            left_types = ["High/Low", "StdDev", "Pivot Support", "Pivot Resistance", "Session Level"]
+            
+            display_rows = []
+            for _, row in cs_df.iterrows():
+                lbl = row['Label']
+                typ = row['Type']
+                px = row['Price']
+                
+                # Format Price as String immediately to allow centering (Numeric defaults to Right)
+                px_str = "{:,.2f}".format(px)
+                
+                if typ == "Current":
+                    display_rows.append({"Support/Resistance Levels": "Latest", "Price": px_str, "Key Turning Points": "Latest", "Type": "Current"})
+                elif typ in left_types:
+                    display_rows.append({"Support/Resistance Levels": lbl, "Price": px_str, "Key Turning Points": "", "Type": "Left"})
+                else:
+                    display_rows.append({"Support/Resistance Levels": "", "Price": px_str, "Key Turning Points": lbl, "Type": "Right"})
+        
+            disp_df = pd.DataFrame(display_rows)
+            
+            # Identify Current Price Row Index for coloring
+            try:
+                curr_idx = disp_df[disp_df["Type"] == "Current"].index[0]
+            except IndexError:
+                curr_idx = -1
+
+            # Dark Mode Toggle
+            is_dark = st.toggle("Dark Mode Colors", value=True, key=f"cs_dark_{unique_id}")
+            
+            if is_dark:
+                # Dark Mode Palette
+                c_res_bg = "#4a1c1c" # Dark Red BG
+                c_res_txt = "#ffcdd2" # Light Red Text
+                c_sup_bg = "#1b3e20" # Dark Green BG
+                c_sup_txt = "#c8e6c9" # Light Green Text
+                c_neutral_bg = "#262730" # Streamlit Secondary Dark BG
+                c_neutral_txt = "#fafafa" # White Text
+                c_current_bg = "#FFD700"
+                c_current_txt = "black"
+            else:
+                # Light Mode Palette (Barchart)
+                c_res_bg = "#FFEBEE"
+                c_res_txt = "#B71C1C"
+                c_sup_bg = "#E8F5E9"
+                c_sup_txt = "#1B5E20"
+                c_neutral_bg = "white"
+                c_neutral_txt = "#333333"
+                c_current_bg = "#FFD700"
+                c_current_txt = "black"
+
+            def style_barchart(row):
+                idx = row.name
+                styles = []
+                
+                # Determine Active Colors based on Row Position
+                if idx < curr_idx: # Resistance
+                    bg_active = c_res_bg
+                    txt_active = c_res_txt
+                    weight = "600"
+                elif idx > curr_idx: # Support
+                    bg_active = c_sup_bg
+                    txt_active = c_sup_txt
+                    weight = "600"
+                else: # Current
+                    # Current Row is special: Full Gold
+                    return [f'background-color: {c_current_bg}; color: {c_current_txt}; font-weight: bold; text-align: center !important; vertical-align: middle;'] * len(row)
+
+                # Default (Empty/Price) Style
+                bg_neutral = c_neutral_bg
+                txt_neutral = c_neutral_txt
+                
+                # Helper to check if string is non-empty
+                def is_populated(val):
+                    return bool(val and str(val).strip())
+
+                # Col 0: Support/Resistance Levels (Left) => Right Align
+                # Using iloc to access by position is safer if col names change slightly
+                val_left = row.iloc[0] 
+                if is_populated(val_left):
+                    s_left = f'background-color: {bg_active}; color: {txt_active}; font-weight: {weight};'
+                else:
+                    s_left = f'background-color: {bg_neutral}; color: {txt_neutral};'
+                styles.append(f'{s_left} text-align: right !important; padding-right: 15px; vertical-align: middle;')
+                
+                # Col 1: Price (Center) => Center Align
+                styles.append(f'background-color: {bg_neutral}; color: {txt_neutral}; font-weight: normal; text-align: center !important; vertical-align: middle;')
+                
+                # Col 2: Key Turning Points (Right) => Left Align
+                val_right = row.iloc[2]
+                if is_populated(val_right):
+                    s_right = f'background-color: {bg_active}; color: {txt_active}; font-weight: {weight};'
+                else:
+                    s_right = f'background-color: {bg_neutral}; color: {txt_neutral};'
+                styles.append(f'{s_right} text-align: left !important; padding-left: 15px; vertical-align: middle;')
+                
+                return styles
+
+            # Display
+            final_view = disp_df.drop(columns=["Type"])
+            
+            st.dataframe(
+                final_view.style.apply(style_barchart, axis=1), 
+                use_container_width=True, 
+                height=(len(final_view) + 1) * 35,
+                hide_index=True
+            )
+            
+            # Legend and Explanation
+            st.markdown("""
+            <div style="margin-top: 20px; font-size: 0.9em; color: #888;">
+            <p><strong>Standard deviation</strong> is calculated using the closing price over the past 20-periods. To calculate standard deviation:</p>
+            <ul style="list-style-type: disc; margin-left: 20px;">
+                <li><strong>Step 1:</strong> Average = Calculate the average closing price over the past 20-days.</li>
+                <li><strong>Step 2:</strong> Difference = Calculate the variance from the Average for each Price.</li>
+                <li><strong>Step 3:</strong> Square the variance of each data point.</li>
+                <li><strong>Step 4:</strong> Sum of the squared variance value.</li>
+                <li><strong>Step 5:</strong> For Standard Deviation 2 multiple the result by 2. For Standard Deviation 3 multiple the result by 3.</li>
+                <li><strong>Step 6:</strong> Divide the result by the number of data points in the series less 1.</li>
+                <li><strong>Step 7:</strong> The final result is the Square root of the result of Step 6.</li>
+            </ul>
+            
+            <p><strong>Legend:</strong></p>
+            <ul style="list-style-type: none; padding-left: 10px;">
+                <li><span style="color: #E8F5E9; background-color: #E8F5E9; border: 1px solid #ccc;">&nbsp;&nbsp;&nbsp;&nbsp;</span> <strong>Green areas below the Last Price</strong> will tend to provide support to limit the downward move.</li>
+                <li><span style="color: #FFEBEE; background-color: #FFEBEE; border: 1px solid #ccc;">&nbsp;&nbsp;&nbsp;&nbsp;</span> <strong>Red areas above the Last Price</strong> will tend to provide resistance to limit the upward move.</li>
+            </ul>
+            </div>
+            """, unsafe_allow_html=True)
 
 def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None):
     daily_ret = port_series.pct_change().dropna()
@@ -1675,7 +1862,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
-    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_200dma, tab_150ma, tab_cheatsheet = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 200DMA", "📉 150MA", "📜 Cheat Sheet"])
+    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
 
     with tab_summary:
         st.subheader(f"{portfolio_name} Seasonal Summary")
@@ -1794,200 +1981,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             hide_index=True
         )
 
-    with tab_200dma:
-        # Use raw_port_series (full testfol data) for MA analysis if available, otherwise fall back to port_series
-        ma_series = raw_port_series if raw_port_series is not None and not raw_port_series.empty else port_series
-        render_ma_analysis_tab(ma_series, portfolio_name, unique_id, window=200, show_stage_analysis=False)
 
-    with tab_150ma:
-        ma_series = raw_port_series if raw_port_series is not None and not raw_port_series.empty else port_series
-        render_ma_analysis_tab(ma_series, portfolio_name, unique_id, window=150, show_stage_analysis=True)
-
-    with tab_cheatsheet:
-        # Determine target series and name
-        target_series = port_series
-        target_name = portfolio_name
-        
-        if component_data is not None and not component_data.empty:
-            if isinstance(component_data, pd.DataFrame):
-                cols = list(component_data.columns)
-                if len(cols) == 1:
-                     target_name = cols[0]
-                     target_series = component_data[target_name]
-                elif len(cols) > 1:
-                     target_name = st.selectbox("Select Asset to Analyze", cols, key=f"cs_sel_{unique_id}")
-                     target_series = component_data[target_name]
-                     
-        # Fetch OHLC for Pivot Points
-        ohlc_data = None
-        try:
-             from app.core.shadow_backtest import parse_ticker
-             import yfinance as yf
-             
-             mapped_ticker, _ = parse_ticker(target_name)
-             if not target_series.empty:
-                 last_dt = target_series.index[-1]
-                 start_f = (last_dt - pd.Timedelta(days=7)).strftime('%Y-%m-%d')
-                 end_f = (last_dt + pd.Timedelta(days=3)).strftime('%Y-%m-%d')
-                 
-                 base_yf = yf.Ticker(mapped_ticker)
-                 hist_ohlc = base_yf.history(start=start_f, end=end_f, auto_adjust=True)
-                 
-                 if hist_ohlc.index.tz is not None:
-                      hist_ohlc.index = hist_ohlc.index.tz_localize(None)
-
-                 if not hist_ohlc.empty:
-                     if last_dt in hist_ohlc.index:
-                         ref_bar = hist_ohlc.loc[last_dt]
-                     else:
-                         ref_bar = hist_ohlc.iloc[-1]
-                     
-                     ohlc_data = {
-                          'High': ref_bar['High'], 
-                          'Low': ref_bar['Low'], 
-                          'Close': ref_bar['Close']
-                     }
-        except Exception:
-             pass
-             
-        st.subheader(f"{target_name} Trader's Cheat Sheet")
-        cs_df = calculations.calculate_cheat_sheet(target_series, ohlc_data=ohlc_data)
-        
-        if cs_df is None or cs_df.empty:
-             st.info("Insufficient data for Technical Analysis.")
-        else:
-             # Transform to 3-Column Layout (Barchart Style)
-             # Left Column: High/Low, StdDev, Pivot S/R, Session Levels
-             # Right Column: Moving Averages, Fibonacci, Pivot Point (P)
-             
-             left_types = ["High/Low", "StdDev", "Pivot Support", "Pivot Resistance", "Session Level"]
-             
-             display_rows = []
-             for _, row in cs_df.iterrows():
-                 lbl = row['Label']
-                 typ = row['Type']
-                 px = row['Price']
-                 
-                 # Format Price as String immediately to allow centering (Numeric defaults to Right)
-                 px_str = "{:,.2f}".format(px)
-                 
-                 if typ == "Current":
-                     display_rows.append({"Support/Resistance Levels": "Latest", "Price": px_str, "Key Turning Points": "Latest", "Type": "Current"})
-                 elif typ in left_types:
-                     display_rows.append({"Support/Resistance Levels": lbl, "Price": px_str, "Key Turning Points": "", "Type": "Left"})
-                 else:
-                     display_rows.append({"Support/Resistance Levels": "", "Price": px_str, "Key Turning Points": lbl, "Type": "Right"})
-            
-             disp_df = pd.DataFrame(display_rows)
-             
-             # Identify Current Price Row Index for coloring
-             try:
-                 curr_idx = disp_df[disp_df["Type"] == "Current"].index[0]
-             except IndexError:
-                 curr_idx = -1
-
-             # Dark Mode Toggle
-             is_dark = st.toggle("Dark Mode Colors", value=True)
-             
-             if is_dark:
-                 # Dark Mode Palette
-                 c_res_bg = "#4a1c1c" # Dark Red BG
-                 c_res_txt = "#ffcdd2" # Light Red Text
-                 c_sup_bg = "#1b3e20" # Dark Green BG
-                 c_sup_txt = "#c8e6c9" # Light Green Text
-                 c_neutral_bg = "#262730" # Streamlit Secondary Dark BG
-                 c_neutral_txt = "#fafafa" # White Text
-                 c_current_bg = "#FFD700"
-                 c_current_txt = "black"
-             else:
-                 # Light Mode Palette (Barchart)
-                 c_res_bg = "#FFEBEE"
-                 c_res_txt = "#B71C1C"
-                 c_sup_bg = "#E8F5E9"
-                 c_sup_txt = "#1B5E20"
-                 c_neutral_bg = "white"
-                 c_neutral_txt = "#333333"
-                 c_current_bg = "#FFD700"
-                 c_current_txt = "black"
-
-             def style_barchart(row):
-                 idx = row.name
-                 styles = []
-                 
-                 # Determine Active Colors based on Row Position
-                 if idx < curr_idx: # Resistance
-                      bg_active = c_res_bg
-                      txt_active = c_res_txt
-                      weight = "600"
-                 elif idx > curr_idx: # Support
-                      bg_active = c_sup_bg
-                      txt_active = c_sup_txt
-                      weight = "600"
-                 else: # Current
-                      # Current Row is special: Full Gold
-                      return [f'background-color: {c_current_bg}; color: {c_current_txt}; font-weight: bold; text-align: center !important; vertical-align: middle;'] * len(row)
-
-                 # Default (Empty/Price) Style
-                 bg_neutral = c_neutral_bg
-                 txt_neutral = c_neutral_txt
-                 
-                 # Helper to check if string is non-empty
-                 def is_populated(val):
-                     return bool(val and str(val).strip())
-
-                 # Col 0: Support/Resistance Levels (Left) => Right Align
-                 # Using iloc to access by position is safer if col names change slightly
-                 val_left = row.iloc[0] 
-                 if is_populated(val_left):
-                      s_left = f'background-color: {bg_active}; color: {txt_active}; font-weight: {weight};'
-                 else:
-                      s_left = f'background-color: {bg_neutral}; color: {txt_neutral};'
-                 styles.append(f'{s_left} text-align: right !important; padding-right: 15px; vertical-align: middle;')
-                 
-                 # Col 1: Price (Center) => Center Align
-                 styles.append(f'background-color: {bg_neutral}; color: {txt_neutral}; font-weight: normal; text-align: center !important; vertical-align: middle;')
-                 
-                 # Col 2: Key Turning Points (Right) => Left Align
-                 val_right = row.iloc[2]
-                 if is_populated(val_right):
-                      s_right = f'background-color: {bg_active}; color: {txt_active}; font-weight: {weight};'
-                 else:
-                      s_right = f'background-color: {bg_neutral}; color: {txt_neutral};'
-                 styles.append(f'{s_right} text-align: left !important; padding-left: 15px; vertical-align: middle;')
-                 
-                 return styles
-
-             # Display
-             final_view = disp_df.drop(columns=["Type"])
-             
-             st.dataframe(
-                 final_view.style.apply(style_barchart, axis=1), 
-                 use_container_width=True, 
-                 height=(len(final_view) + 1) * 35,
-                 hide_index=True
-             )
-             
-             # Legend and Explanation
-             st.markdown("""
-             <div style="margin-top: 20px; font-size: 0.9em; color: #888;">
-             <p><strong>Standard deviation</strong> is calculated using the closing price over the past 20-periods. To calculate standard deviation:</p>
-             <ul style="list-style-type: disc; margin-left: 20px;">
-                 <li><strong>Step 1:</strong> Average = Calculate the average closing price over the past 20-days.</li>
-                 <li><strong>Step 2:</strong> Difference = Calculate the variance from the Average for each Price.</li>
-                 <li><strong>Step 3:</strong> Square the variance of each data point.</li>
-                 <li><strong>Step 4:</strong> Sum of the squared variance value.</li>
-                 <li><strong>Step 5:</strong> For Standard Deviation 2 multiple the result by 2. For Standard Deviation 3 multiple the result by 3.</li>
-                 <li><strong>Step 6:</strong> Divide the result by the number of data points in the series less 1.</li>
-                 <li><strong>Step 7:</strong> The final result is the Square root of the result of Step 6.</li>
-             </ul>
-             
-             <p><strong>Legend:</strong></p>
-             <ul style="list-style-type: none; padding-left: 10px;">
-                 <li><span style="color: #E8F5E9; background-color: #E8F5E9; border: 1px solid #ccc;">&nbsp;&nbsp;&nbsp;&nbsp;</span> <strong>Green areas below the Last Price</strong> will tend to provide support to limit the downward move.</li>
-                 <li><span style="color: #FFEBEE; background-color: #FFEBEE; border: 1px solid #ccc;">&nbsp;&nbsp;&nbsp;&nbsp;</span> <strong>Red areas above the Last Price</strong> will tend to provide resistance to limit the upward move.</li>
-             </ul>
-             </div>
-             """, unsafe_allow_html=True)
 def render_rebalance_sankey(trades_df, view_freq="Yearly", unique_id=None):
     if trades_df.empty:
         return
