@@ -321,18 +321,37 @@ def backtest():
     mega_values = mega_values.dropna()
     
     # Validation against NDX
+    # Validation against NDX
+    plt.figure(figsize=(14, 8))
+    chart_style.apply_style()
+    ax = plt.gca()
+    
+    # Plot Portfolio
+    plt.plot(mega_values, label='NDX Mega (Simulated)', linewidth=2.5)
+
     if config.BENCHMARK_TICKER in data.columns:
-        ndx = data[config.BENCHMARK_TICKER].reindex(mega_values.index).ffill()
-        ndx = ndx / ndx.iloc[0] * mega_values.iloc[0]
+        benchmark_data = data[config.BENCHMARK_TICKER].reindex(mega_values.index)
         
-        # Apply Styling
-        chart_style.apply_style()
-        
-        plt.figure(figsize=(14, 8))
-        ax = plt.gca()
-        
-        plt.plot(mega_values, label='NDX Mega (Simulated)', linewidth=2.5)
-        plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.8, color='#555555')
+        # Determine first valid index for scaling
+        first_valid_idx = benchmark_data.first_valid_index()
+        if first_valid_idx:
+            initial_val = benchmark_data.loc[first_valid_idx]
+            if pd.notna(initial_val) and initial_val != 0:
+                benchmark_curve = (benchmark_data / initial_val) * 100
+                
+                # Fill NaNs before the first valid index with 100 (flat start)
+                benchmark_curve = benchmark_curve.fillna(100)
+                
+                plt.plot(benchmark_curve.index, benchmark_curve, label=f"{config.BENCHMARK_TICKER} (Total Return)", color='black', alpha=0.6, linestyle='--')
+                
+                final_bench = benchmark_curve.iloc[-1]
+                print(f"Total Return {config.BENCHMARK_TICKER}: {final_bench - 100:.2f}%")
+            else:
+                 print(f"Warning: Benchmark {config.BENCHMARK_TICKER} has 0 or NaN initial value.")
+        else:
+            print(f"Warning: Benchmark {config.BENCHMARK_TICKER} has NO valid data.")
+    else:
+        print(f"Warning: Benchmark ticker {config.BENCHMARK_TICKER} not found in price data.")
         
         plt.title('NDX Mega Strategy vs Nasdaq-100 (2000-2025)')
         plt.yscale('log')

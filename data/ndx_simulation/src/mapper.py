@@ -119,6 +119,73 @@ def price_validate(ticker, date_str, shares, value):
     except:
         return False
 
+# Manual overrides for difficult to map companies (ADRs, complex class structures)
+MANUAL_OVERRIDES = {
+    "ARM Holdings PLC, ADR (b)": "ARM",
+    "ASML Holding N.V., New York Shares (Netherlands)": "ASML",
+    "Airbnb, Inc., Class A (b)": "ABNB",
+    "AstraZeneca PLC, ADR (United Kingdom)": "AZN",
+    "Atlassian Corp., Class A (b)": "TEAM",
+    "Autodesk, Inc. (b)": "ADSK",
+    "Baker Hughes Co., Class A": "BKR",
+    "Biogen, Inc. (b)": "BIIB",
+    "Charter Communications, Inc., Class A (b)": "CHTR",
+    "Coca-Cola Europacific Partners PLC (United Kingdom)": "CCEP",
+    "Copart, Inc. (b)": "CPRT",
+    "CrowdStrike Holdings, Inc., Class A (b)": "CRWD",
+    "Datadog, Inc., Class A (b)": "DDOG",
+    "DexCom, Inc. (b)": "DXCM",
+    "DoorDash, Inc., Class A (b)": "DASH",
+    "Fortinet, Inc. (b)": "FTNT",
+    "GLOBALFOUNDRIES, Inc. (b)": "GFS",
+    "IDEXX Laboratories, Inc. (b)": "IDXX",
+    "Illumina, Inc. (b)": "ILMN",
+    "Intuitive Surgical, Inc. (b)": "ISRG",
+    "Kraft Heinz Co. (The)": "KHC",
+    "Monolithic Power Systems, Inc.": "MPWR",
+    "Old Dominion Freight Line, Inc.": "ODFL",
+    "Palo Alto Networks, Inc. (b)": "PANW",
+    "Ross Stores, Inc.": "ROST",
+    "Synopsys, Inc. (b)": "SNPS",
+    "Take-Two Interactive Software, Inc. (b)": "TTWO",
+    "The Trade Desk, Inc., Class A": "TTD",
+    "Trade Desk, Inc. (The), Class A (b)": "TTD",
+    "Warner Bros. Discovery, Inc. (b)": "WBD",
+    "Workday, Inc., Class A (b)": "WDAY",
+    "Zscaler, Inc. (b)": "ZS",
+    "lululemon athletica, inc. (b)": "LULU",
+    "O’Reilly Automotive, Inc. (b)": "ORLY",
+    "Cadence Design Systems, Inc. (b)": "CDNS",
+    "CoStar Group, Inc. (b)": "CSGP",
+    "GE HealthCare Technologies, Inc.": "GEHC",
+    "Marriott International, Inc., Class A": "MAR",
+    "MercadoLibre, Inc.": "MELI",
+    "MercadoLibre, Inc. (Brazil) (b)": "MELI",
+    "Microchip Technology, Inc.": "MCHP",
+    "Micron Technology, Inc.": "MU",
+    "Moderna, Inc.": "MRNA",
+    "Moderna, Inc. (b)": "MRNA",
+    "MongoDB, Inc. (b)": "MDB",
+    "Monster Beverage Corp.": "MNST",
+    "ON Semiconductor Corp. (b)": "ON",
+    "PACCAR, Inc.": "PCAR",
+    "Regeneron Pharmaceuticals, Inc.": "REGN",
+    "Super Micro Computer, Inc. (b)": "SMCI",
+    "T-Mobile US, Inc.": "TMUS",
+    "Verisk Analytics, Inc.": "VRSK",
+    "Vertex Pharmaceuticals, Inc.": "VRTX",
+    "Tesla, Inc. (b)": "TSLA",
+    "Amazon.com, Inc. (b)": "AMZN",
+    "PDD Holdings, Inc., ADR (China) (b)": "PDD",
+    "Netflix, Inc. (b)": "NFLX",
+    "Alphabet, Inc., Class A": "GOOGL",
+    "Alphabet, Inc., Class C": "GOOG",
+    "Meta Platforms, Inc., Class A": "META",
+    "Comcast Corp., Class A": "CMCSA",
+    "Adobe, Inc. (b)": "ADBE",
+    "ANSYS, Inc. (b)": "ANSS"
+}
+
 def main():
     sec_data = load_sec_data()
     csv_names = get_unique_names()
@@ -131,20 +198,19 @@ def main():
     
     mapping = {}
     
+    # Pre-populate with manual overrides
+    mapping.update(MANUAL_OVERRIDES)
+    
     print(f"Mapping {len(csv_names)} names...")
     
     matches_found = 0
     
-    # We will try to validate using the first occurrence in CSV
-    # Need to load first occurrence data
-    first_occurrence = {} # {Name: (Date, Shares, Value)}
-    with open(INPUT_CSV, "r") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            if row["Company"] not in first_occurrence:
-                first_occurrence[row["Company"]] = (row["Date"], row["Shares"], row["Value"])
-                
     for name in csv_names:
+        # Check manual overrides first
+        if name in mapping:
+            matches_found += 1
+            continue
+            
         c_name = clean_name(name)
         ticker = None
         
@@ -156,10 +222,6 @@ def main():
             matches = difflib.get_close_matches(c_name, sec_map.keys(), n=1, cutoff=0.8)
             if matches:
                  ticker = sec_map[matches[0]]
-        
-        # 3. Validation? (Skipping for mass run to save time, but usually recommended)
-        # We can implement a "check" mode.
-        # But for now, let's just dump the map.
         
         if ticker:
             mapping[name] = ticker

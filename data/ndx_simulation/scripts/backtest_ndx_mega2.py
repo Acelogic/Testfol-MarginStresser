@@ -405,19 +405,56 @@ def backtest():
     
     # Comparison
     if config.BENCHMARK_TICKER in data.columns:
-        ndx = data[config.BENCHMARK_TICKER].reindex(mega_values.index).ffill()
-        ndx = ndx / ndx.iloc[0] * mega_values.iloc[0]
+        benchmark_data = data[config.BENCHMARK_TICKER].reindex(mega_values.index)
         
-        # Apply Styling
+        # Determine first valid index for scaling
+        first_valid_idx = benchmark_data.first_valid_index()
+        if first_valid_idx:
+            initial_val = benchmark_data.loc[first_valid_idx]
+            if pd.notna(initial_val) and initial_val != 0:
+                benchmark_curve = (benchmark_data / initial_val) * 100
+                
+                # Fill NaNs before the first valid index with 100 (flat start)
+                benchmark_curve = benchmark_curve.fillna(100)
+                
+                # Apply Styling
+                chart_style.apply_style()
+                
+                plt.figure(figsize=(14, 8))
+                ax = plt.gca()
+                
+                plt.plot(mega_values.index, (mega_values / mega_values.iloc[0]) * 100, label='NDX Mega 2.0 (Simulated)', linewidth=2.5)
+                plt.plot(benchmark_curve.index, benchmark_curve, label=f"{config.BENCHMARK_TICKER} (Total Return)", color='black', alpha=0.6, linestyle='--')
+                
+                plt.title('NDX Mega 2.0 Strategy vs Nasdaq-100 (2000-2025)')
+                plt.yscale('log')
+                plt.legend()
+                
+                chart_style.format_date_axis(ax)
+                chart_style.format_y_axis(ax, log=True)
+                chart_style.add_watermark(ax, "NDX Mega 2.0")
+                
+                out_img = os.path.join(config.RESULTS_DIR, "charts", "ndx_mega2_backtest.png")
+                plt.savefig(out_img, dpi=300, bbox_inches='tight')
+                print(f"Chart saved to {out_img}")
+                
+                tot_ret_mega = (mega_values.iloc[-1] / mega_values.iloc[0]) - 1
+                final_bench = benchmark_curve.iloc[-1]
+                print(f"Total Return Mega 2.0: {tot_ret_mega:.2%}")
+                print(f"Total Return {config.BENCHMARK_TICKER}: {final_bench - 100:.2f}%")
+            else:
+                 print(f"Warning: Benchmark {config.BENCHMARK_TICKER} has 0 or NaN initial value.")
+        else:
+            print(f"Warning: Benchmark {config.BENCHMARK_TICKER} has NO valid data.")
+    else:
+        print(f"Warning: Benchmark ticker {config.BENCHMARK_TICKER} not found in price data.")
+        
+        # If no benchmark, still plot the mega_values
         chart_style.apply_style()
-        
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
-        
-        plt.plot(mega_values, label='NDX Mega 2.0 (Simulated)', linewidth=2.5)
-        plt.plot(ndx, label='Nasdaq-100 (^NDX)', linestyle='--', alpha=0.8, color='#555555')
-        
-        plt.title('NDX Mega 2.0 Strategy vs Nasdaq-100 (2000-2025)')
+        plt.plot(mega_values.index, (mega_values / mega_values.iloc[0]) * 100, label='NDX Mega 2.0 (Simulated)', linewidth=2.5)
+        plt.title('NDX Mega 2.0 Strategy (2000-2025)')
         plt.yscale('log')
         plt.legend()
         
