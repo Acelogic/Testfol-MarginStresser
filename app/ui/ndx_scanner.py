@@ -136,18 +136,21 @@ def fetch_ma_data(tickers: list, tolerance_days: int = 0):
                         status = "🔴 Below"
                         duration = last_event["Duration (Days)"] # Days Under
                         
-                        # Calculate Max Depth (as Deviation %) for this event
+                        # Calculate Max Depth (as Drawdown % from Start Price) for this event
+                        # This matches calculations.py logic logic
                         start_date = last_event["Start Date"]
+                        
                         # Get data for the event duration
-                        # We need both Price and SMA series to calculate deviation
-                        # Filter to event period: Start -> Now
+                        # We need Price series to calculate drawdown
                         event_prices = series[start_date:]
-                        event_sma = dma_series[start_date:]
                         
                         if not event_prices.empty:
-                            # Deviation = (Price - SMA) / SMA
-                            deviations = ((event_prices - event_sma) / event_sma) * 100
-                            max_deviation = deviations.min() # Most negative deviation (Depth)
+                            start_price = event_prices.iloc[0] # Price at crossover
+                            min_price = event_prices.min()     # Lowest price during event
+                            
+                            # Drawdown % = (Min - Start) / Start
+                            # Should be negative
+                            max_deviation = ((min_price - start_price) / start_price) * 100
                     else:
                         # Last event recovered. We are currently Above.
                         # Duration = days since recovery?
