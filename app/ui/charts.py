@@ -1144,15 +1144,35 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             l_dur = longest_event['Duration (Days)']
             l_depth = longest_event['Max Depth (%)']
             
-            # Calculate median Bottom -> Peak days (only for recovered events)
-            if "Days Bottom to Peak" in filtered_events.columns:
-                recovered_events = filtered_events[filtered_events["Days Bottom to Peak"].notna()]
+            # Calculate median Recovery Days (Start to Recovered)
+            if "Recovery Days" in filtered_events.columns:
+                recovered_events = filtered_events[filtered_events["Recovery Days"].notna()]
                 if not recovered_events.empty:
-                    avg_bottom_to_peak = recovered_events["Days Bottom to Peak"].median()
+                    median_recovery = recovered_events["Recovery Days"].median()
                 else:
-                    avg_bottom_to_peak = None
+                    median_recovery = None
             else:
-                avg_bottom_to_peak = None
+                median_recovery = None
+
+            # Calculate Median Rally Days (Bottom -> Peak)
+            if "Days Bottom to Peak" in filtered_events.columns:
+                rally_events = filtered_events[filtered_events["Days Bottom to Peak"].notna()]
+                if not rally_events.empty:
+                    median_rally_days = rally_events["Days Bottom to Peak"].median()
+                else:
+                   median_rally_days = None
+            else:
+                median_rally_days = None
+
+            # Calculate Median Rally % (Bottom -> Peak)
+            if "Bottom to Peak (%)" in filtered_events.columns:
+                rally_pct_events = filtered_events[filtered_events["Bottom to Peak (%)"].notna()]
+                if not rally_pct_events.empty:
+                    median_rally_pct = rally_pct_events["Bottom to Peak (%)"].median()
+                else:
+                    median_rally_pct = None
+            else:
+                median_rally_pct = None
             
             # Calculate median max depth
             median_depth = filtered_events["Max Depth (%)"].median()
@@ -1171,11 +1191,13 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             pct_under = 0
             l_dur = 0
             l_depth = 0
-            avg_bottom_to_peak = None
+            median_recovery = None
+            median_rally_days = None
+            median_rally_pct = None
             median_depth = None
             median_days_to_ath = None
         
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
         
         # Check current status (Show first for quick glance)
         last_event = events_df.iloc[-1]
@@ -1198,10 +1220,14 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         c3.metric("Longest Period Under", f"{l_dur:.0f} days", f"Depth: {l_depth:.2f}%")
         if median_depth is not None:
             c4.metric("Median Depth", f"{median_depth:.2f}%", "Typical drawdown")
-        if avg_bottom_to_peak is not None:
-            c5.metric("Median Recovery", f"{avg_bottom_to_peak:.0f} days", "Bottom→Peak")
+        if median_recovery is not None:
+             c5.metric("Median Price Recovery", f"{median_recovery:.0f} days", "Start→Recovered")
+        if median_rally_days is not None:
+             c6.metric("Median Rally Days", f"{median_rally_days:.0f} days", "Bottom→Peak")
+        if median_rally_pct is not None:
+             c7.metric("Median Rally %", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
         if median_days_to_ath is not None:
-            c6.metric("Median ATH", f"{median_days_to_ath:.0f} days", "MA Cross→New High")
+            c8.metric("Median ATH", f"{median_days_to_ath:.0f} days", "MA Cross→New High")
         
         # Stage Analysis Display
         if show_stage_analysis and stage_series is not None and not stage_series.empty:
@@ -1266,18 +1292,21 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 | **Time Under {window}MA** | Total % of the period where price was below the moving average |
 | **Longest Period Under** | The single longest continuous stretch below the MA, with its max depth |
 | **Median Depth** | Typical (median) drawdown below the MA |
-| **Median Recovery** | Typical (median) number of days from the lowest point to the subsequent peak |
+| **Median Price Recovery** | Typical (median) days from event start to recover the start price |
+| **Median Rally** | Typical (median) days from the lowest point to the subsequent peak |
 | **Median ATH** | Typical (median) number of days from MA crossover to a new all-time high |
 
 **Table Columns:**
 | Column | Meaning |
 |--------|---------|
 | **Start / End** | When the price dropped below / recovered above the {window}MA |
-| **Days Under** | Total calendar days spent below the MA |
+| **Days Under MA** | Total calendar days spent below the MA |
 | **Max Depth** | Price drawdown from event start to the lowest point (`(Bottom - Start) / Start`) |
 | **Post-MA Rally** | % gain from **recovery date** (MA crossover) to the subsequent peak |
-| **Bottom→Peak** | % gain from the **lowest price** to the subsequent peak (full rebound) |
-| **Recovery Days** | Calendar days from **lowest price** to **subsequent peak** |
+| **Post-MA Rally Days** | Days from **recovery date** to the subsequent peak (Duration of post-recovery rally) |
+| **Price Recovery Days** | Calendar days from **event start** to first date price recovers to **start price** (searched post-bottom) |
+| **Rally Days** | Calendar days from **lowest price** to **subsequent peak** (Duration of the rally) |
+| **Rally %** | % gain from the **lowest price** to the subsequent peak (full rebound) |
 | **Days to ATH** | Days from **MA crossover** until price makes a **new all-time high** (vs pre-drawdown ATH) |
 | **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below (shown with 🟠 highlight) |
 | **Pattern** | Recovery shape classification (see below) |
@@ -1310,40 +1339,23 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             if "Peak Date" in display_df.columns:
                 display_df["Peak Date"] = display_df["Peak Date"].apply(lambda x: x.date() if pd.notna(x) else "-")
             
-            # Selection & Renaming for cleaner UI
-            cols_map = {
-                "Start": "Start",
-                "End": "End",
-                "Duration (Days)": "Days Under", 
-                "Max Depth (%)": "Max Depth",
-                "Subsequent Peak (%)": "Post-MA Rally",
-                "Bottom to Peak (%)": "Bottom→Peak",
-                "Days Bottom to Peak": "Recovery Days",
-                "Days to ATH": "Days to ATH",
-                "Status": "Status"
-            }
-            
-            # Ensure columns exist before selecting
-            final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
-            
-            display_df = display_df[final_cols].rename(columns=cols_map)
-            display_df = display_df.sort_values("Start", ascending=False)
-            
             # Add Recovery Pattern to Status for recovered events
+            # Calculate BEFORE renaming columns to access raw fields
             def classify_recovery(row):
                 status = row.get("Status", "")
                 if "Recovered" not in str(status):
                     return status
                 
-                days = row.get("Recovery Days")
-                pct = row.get("Bottom→Peak")
+                days = row.get("Days Bottom to Peak") # Use Rally signal duration
+                pct = row.get("Bottom to Peak (%)")
                 
                 if pd.isna(days) or pd.isna(pct):
                     return status
                 
                 # Use median thresholds for classification
-                median_days = display_df["Recovery Days"].median()
-                median_pct = display_df["Bottom→Peak"].median()
+                # Note: These medians should be calculated on the whole set
+                median_days = filtered_events["Days Bottom to Peak"].median()
+                median_pct = filtered_events["Bottom to Peak (%)"].median()
                 
                 short_days = days <= median_days
                 high_pct = pct >= median_pct
@@ -1360,9 +1372,32 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 return pattern
             
             display_df["Pattern"] = display_df.apply(classify_recovery, axis=1)
+
+            # Selection & Renaming for cleaner UI
+            cols_map = {
+                "Start": "Start",
+                "End": "End",
+                "Duration (Days)": "Days Under MA", 
+                "Max Depth (%)": "Max Depth",
+                "Subsequent Peak (%)": "Post-MA Rally",
+                "Post-MA Rally Days": "Post-MA Rally Days",
+                "Bottom to Peak (%)": "Rally %",
+                "Days Bottom to Peak": "Rally Days",
+                "Recovery Days": "Price Recovery Days", # New Metric
+                "Days to ATH": "Days to ATH",
+                "Status": "Status",
+                "Pattern": "Pattern"
+            }
+            
+            # Ensure columns exist before selecting
+            final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
+            
+            display_df = display_df[final_cols].rename(columns=cols_map)
+            display_df = display_df.sort_values("Start", ascending=False)
+            
             
             # Reorder columns: Status before Pattern
-            final_display_cols = ["Start", "End", "Days Under", "Max Depth", "Post-MA Rally", "Bottom→Peak", "Recovery Days", "Days to ATH", "Status", "Pattern"]
+            final_display_cols = ["Start", "End", "Days Under MA", "Max Depth", "Price Recovery Days", "Days to ATH", "Rally %", "Rally Days", "Post-MA Rally", "Post-MA Rally Days", "Status", "Pattern"]
             final_display_cols = [c for c in final_display_cols if c in display_df.columns]
             display_df = display_df[final_display_cols]
             
@@ -1378,12 +1413,14 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 .apply(highlight_rows, axis=1)
                 .format({
                     "Max Depth": "{:.2f}%",
-                    "Bottom→Peak": "{:.1f}%",
+                    "Rally %": "{:.1f}%",
                     "Post-MA Rally": "{:.1f}%",
-                    "Days Under": "{:.0f}",
-                    "Recovery Days": "{:.0f}",
+                    "Days Under MA": "{:.0f}",
+                    "Price Recovery Days": "{:.0f}",
+                    "Rally Days": "{:.0f}",
+                    "Post-MA Rally Days": "{:.0f}",
                     "Days to ATH": "{:.0f}",
-                }, na_rep="-"), 
+                }, na_rep="-"),  
                 use_container_width=True,
                 hide_index=True
             )

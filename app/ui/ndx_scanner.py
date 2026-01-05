@@ -10,6 +10,7 @@ import pandas as pd
 import yfinance as yf
 import os
 import json
+import time
 from datetime import datetime, timedelta
 from app.core import calculations
 
@@ -313,6 +314,71 @@ def render_ndx_scanner():
     col_s1.metric("🔴 Below 200 SMA", below_count)
     col_s2.metric("🟢 Above 200 SMA", above_count)
     col_s3.metric("Total Scanned", len(result_df))
+    
+    # --- Quick Analyze Action ---
+    st.markdown("##### 🚀 Quick Analyze")
+    qa_col1, qa_col2 = st.columns([3, 1])
+    
+    with qa_col1:
+        # Get list of tickers from the current filtered view
+        available_tickers = filtered_df['Ticker'].tolist()
+        selected_ticker_analyze = st.selectbox(
+            "Select Ticker to Analyze", 
+            available_tickers if available_tickers else ["No tickers available"],
+            key="scanner_ticker_select"
+        )
+        
+    with qa_col2:
+        # Align button with the selectbox input (compensate for label height)
+        st.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
+        if st.button("Load as New Portfolio", type="primary", use_container_width=True, disabled=not available_tickers):
+            if "portfolios" in st.session_state and st.session_state.portfolios:
+                if len(st.session_state.portfolios) < 5:
+                    import uuid
+                    new_id = f"p_scan_{uuid.uuid4().hex[:8]}"
+                    new_name = f"Analysis: {selected_ticker_analyze}"
+                    
+                    new_port = {
+                        "id": new_id,
+                        "name": new_name,
+                        "alloc_df": pd.DataFrame([
+                            {"Ticker": selected_ticker_analyze, "Weight %": 100.0, "Maint %": 25.0} # Default Maint
+                        ]),
+                        "rebalance": {
+                            "mode": "Standard",
+                            "freq": "Yearly",
+                            "month": 1,
+                            "day": 1,
+                            "compare_std": False
+                        },
+                         "cashflow": {
+                            "start_val": 10000.0,
+                            "amount": 0.0, 
+                            "freq": "Monthly", 
+                            "invest_div": True,
+                            "pay_down_margin": False
+                        }
+                    }
+                    
+                    st.session_state.portfolios.append(new_port)
+                    
+                    # Auto-select this new portfolio
+                    # We cannot modify 'portfolio_selector' directly after it's been rendered.
+                    # Instead, we update the index and clear the widget key to force a reset to default.
+                    st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
+                    
+                    if "portfolio_selector" in st.session_state:
+                        del st.session_state.portfolio_selector
+                    
+                    st.toast(f"✅ Added '{new_name}'! Switch to the Portfolio tab to view.", icon="🚀")
+                    
+                    # Rerun to refresh the app state
+                    time.sleep(0.5) # smooth transition
+                    st.rerun()
+                else:
+                    st.error("Maximum of 5 portfolios reached. Please delete one first.")
+            else:
+                st.error("Portfolio state not initialized.")
     
     # Display table
     st.dataframe(
