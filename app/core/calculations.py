@@ -340,6 +340,33 @@ def analyze_ma(series, window=200, tolerance_days=0):
         else:
             max_depth = 0.0
 
+        # Calculate Recovery Days (Time to recover to start price)
+            
+        recovery_days = None
+        recovery_date = pd.NaT
+        start_price = series.loc[s_date]
+
+        # Look for recovery after the BOTTOM date
+        # We search from bottom_date onwards to avoid early pre-drop chop triggers
+        if pd.notna(bottom_date) and bottom_date >= s_date:
+             search_start = bottom_date
+        else:
+             search_start = s_date
+
+        future_prices = series[search_start:]
+        
+        # If search_start is same as s_date, we might still grab day 1 e.g. if bottom is day 0
+        # But if bottom is day 0, then max_depth is 0 or -small, so immediate recovery is correct.
+        # If Bottom is later, we won't see the early chop.
+        
+        if len(future_prices) > 0:
+            # Find first date where Price >= Start Price
+            recovered_mask = future_prices >= start_price
+            
+            if recovered_mask.any():
+                recovery_date = recovered_mask.idxmax() # First True
+                recovery_days = (recovery_date - s_date).days
+
         # Calculate Subsequent Peak (Only if Recovered)
         days_to_ath = None
         if status == "Recovered":
@@ -411,7 +438,11 @@ def analyze_ma(series, window=200, tolerance_days=0):
             "Bottom to Peak (%)": bottom_to_peak_pct,
             "Peak Date": peak_date,
             "Days Bottom to Peak": days_bottom_to_peak,
+            "Days Bottom to Peak": days_bottom_to_peak,
             "Days to ATH": days_to_ath,
+            "Recovery Date": recovery_date,
+            "Recovery Days": recovery_days,
+            "Post-MA Rally Days": (peak_date - e_date).days if pd.notna(peak_date) and pd.notna(e_date) else None,
             "Status": status
         })
 
