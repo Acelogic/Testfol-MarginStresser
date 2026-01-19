@@ -1774,24 +1774,24 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         except: pass
 
         hover_main = []
-        z_rounded_main = (z_combined_main * 100).round(1)
+        z_rounded_main = (z_combined_main * 100).round(2)
         for i, row_label in enumerate(y_labels):
             row_txt = []
             for j, col_label in enumerate(quarter_names):
                 val = z_rounded_main[i][j]
                 if np.isnan(val): row_txt.append("")
-                elif row_label == "Average": row_txt.append(f"Average<br>{col_label}: {val:+.1f}%")
+                elif row_label == "Average": row_txt.append(f"Average<br>{col_label}: {val:+.2f}%")
                 else:
                     dr = date_map.get((int(row_label), j+1), "") if row_label.isdigit() else ""
                     dr_str = f"<br>{dr}" if dr else ""
-                    row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.1f}%{dr_str}")
+                    row_txt.append(f"Year: {row_label}<br>{col_label}: {val:+.2f}%{dr_str}")
             hover_main.append(row_txt)
 
         hover_yearly = []
-        z_rounded_yearly = (z_combined_yearly * 100).round(1)
+        z_rounded_yearly = (z_combined_yearly * 100).round(2)
         for i, row_label in enumerate(y_labels):
             val = z_rounded_yearly[i][0]
-            val_str = "" if np.isnan(val) else f"{val:+.1f}%"
+            val_str = "" if np.isnan(val) else f"{val:+.2f}%"
             if row_label == "Average": hover_yearly.append([f"Average Annual<br>{val_str}"])
             else: hover_yearly.append([f"Year: {row_label}<br>Annual: {val_str}"])
 
@@ -1801,14 +1801,11 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=[0.85, 0.15],
             row_heights=[n_years/(n_years+1), 1/(n_years+1)]
         )
-        
-        # Traces
-        # Traces
-        # Traces
-        fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(1), x=quarter_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(1), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
-        fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(1), x=quarter_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(1), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+
+        fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(2), x=quarter_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
+        fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(2), x=quarter_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
 
         fig.update_layout(title="Quarterly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
@@ -1867,20 +1864,20 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
         
         hover_main = []
-        z_rounded_main = (z_combined_main * 100).round(1)
+        z_rounded_main = (z_combined_main * 100).round(2)
         for i, row_label in enumerate(y_labels):
             row_txt = []
             for j, col_label in enumerate(month_names):
                 val = z_rounded_main[i][j]
-                val_str = "" if np.isnan(val) else f"{val:+.1f}%"
+                val_str = "" if np.isnan(val) else f"{val:+.2f}%"
                 row_txt.append(f"{row_label} {col_label}<br>{val_str}")
             hover_main.append(row_txt)
-            
+
         hover_yearly = []
-        z_rounded_yearly = (z_combined_yearly * 100).round(1)
+        z_rounded_yearly = (z_combined_yearly * 100).round(2)
         for i, row_label in enumerate(y_labels):
             val = z_rounded_yearly[i][0]
-            val_str = "" if np.isnan(val) else f"{val:+.1f}%"
+            val_str = "" if np.isnan(val) else f"{val:+.2f}%"
             hover_yearly.append([f"{row_label} Total<br>{val_str}"])
 
         n_years = len(y_labels) - 1
@@ -1888,11 +1885,11 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=[0.85, 0.15],
             row_heights=[n_years/(n_years+1), 1/(n_years+1)]
         )
-        
-        fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(1), x=month_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(1), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
-        fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(1), x=month_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(1), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.1f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+
+        fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(2), x=month_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
+        fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(2), x=month_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
 
         fig.update_layout(title="Monthly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
