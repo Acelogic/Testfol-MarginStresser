@@ -1221,11 +1221,11 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         if median_depth is not None:
             c4.metric("Median Depth", f"{median_depth:.2f}%", "Typical drawdown")
         if median_recovery is not None:
-             c5.metric("Median Price Recovery", f"{median_recovery:.0f} days", "Start→Recovered")
+             c5.metric("Median Price Recovery", f"{median_recovery:.0f} days", "Start→Breakeven")
         if median_rally_days is not None:
              c6.metric("Median Rally Days", f"{median_rally_days:.0f} days", "Bottom→Peak")
         if median_rally_pct is not None:
-             c7.metric("Median Rally %", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
+             c7.metric("Median Full Rally", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
         if median_days_to_ath is not None:
             c8.metric("Median ATH", f"{median_days_to_ath:.0f} days", "MA Cross→New High")
         
@@ -1292,7 +1292,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 | **Time Under {window}MA** | Total % of the period where price was below the moving average |
 | **Longest Period Under** | The single longest continuous stretch below the MA, with its max depth |
 | **Median Depth** | Typical (median) drawdown below the MA |
-| **Median Price Recovery** | Typical (median) days from event start to recover the start price |
+| **Median Price Recovery** | Typical (median) days from event start to recover the start price (breakeven) |
 | **Median Rally** | Typical (median) days from the lowest point to the subsequent peak |
 | **Median ATH** | Typical (median) number of days from MA crossover to a new all-time high |
 
@@ -1302,11 +1302,16 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
 | **Start / End** | When the price dropped below / recovered above the {window}MA |
 | **Days Under MA** | Total calendar days spent below the MA |
 | **Max Depth** | Price drawdown from event start to the lowest point (`(Bottom - Start) / Start`) |
+| **Breakeven Gain** | % gain from the **bottom** to the **start price** (breakeven). Shows how much the price rallied just to get back to even. |
 | **Post-MA Rally** | % gain from **recovery date** (MA crossover) to the subsequent peak |
 | **Post-MA Rally Days** | Days from **recovery date** to the subsequent peak (Duration of post-recovery rally) |
-| **Price Recovery Days** | Calendar days from **event start** to first date price recovers to **start price** (searched post-bottom) |
+| **Price Recovery Days** | Calendar days from **event start** to first date price recovers to **start price** (breakeven). For ongoing events, shows days elapsed so far. |
+| **True Recovery** | Calendar days from **event start** until **BOTH** price ≥ start price **AND** price > MA. This is when you're truly recovered—at breakeven and back in an uptrend. |
+| **Entry MA** | The MA value when price first dropped below it (your "entry" into the drawdown) |
+| **Exit MA** | The MA value when price recovered above it (your "exit" from the drawdown) |
+| **MA Δ%** | How much the MA changed during the event: `(Exit MA - Entry MA) / Entry MA`. Negative = MA fell (making it easier to cross back above even if price hasn't fully recovered) |
 | **Rally Days** | Calendar days from **lowest price** to **subsequent peak** (Duration of the rally) |
-| **Rally %** | % gain from the **lowest price** to the subsequent peak (full rebound) |
+| **Full Rally %** | % gain from the **lowest price** to the subsequent peak (full rebound) |
 | **Days to ATH** | Days from **MA crossover** until price makes a **new all-time high** (vs pre-drawdown ATH) |
 | **Status** | `Recovered` = crossed back above MA, `Ongoing` = still below (shown with 🟠 highlight) |
 | **Pattern** | Recovery shape classification (see below) |
@@ -1377,50 +1382,86 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             cols_map = {
                 "Start": "Start",
                 "End": "End",
-                "Duration (Days)": "Days Under MA", 
+                "Duration (Days)": "Days Under MA",
                 "Max Depth (%)": "Max Depth",
+                "Bottom to Recovery (%)": "Breakeven Gain",  # Actual rally from bottom to breakeven
                 "Subsequent Peak (%)": "Post-MA Rally",
                 "Post-MA Rally Days": "Post-MA Rally Days",
-                "Bottom to Peak (%)": "Rally %",
+                "Bottom to Peak (%)": "Full Rally %",
                 "Days Bottom to Peak": "Rally Days",
-                "Recovery Days": "Price Recovery Days", # New Metric
+                "Recovery Days": "Price Recovery Days",
                 "Days to ATH": "Days to ATH",
                 "Status": "Status",
-                "Pattern": "Pattern"
+                "Pattern": "Pattern",
+                # MA Context for accuracy (MA is a moving target)
+                "Entry MA": "Entry MA",
+                "Exit MA": "Exit MA",
+                "MA Change (%)": "MA Δ%",
+                "True Recovery Days": "True Recovery"
             }
-            
+
             # Ensure columns exist before selecting
             final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
-            
+
             display_df = display_df[final_cols].rename(columns=cols_map)
             display_df = display_df.sort_values("Start", ascending=False)
-            
-            
-            # Reorder columns: Status before Pattern
-            final_display_cols = ["Start", "End", "Days Under MA", "Max Depth", "Price Recovery Days", "Days to ATH", "Rally %", "Rally Days", "Post-MA Rally", "Post-MA Rally Days", "Status", "Pattern"]
+
+            # Add emoji indicators to Status for visual highlighting (since column_config doesn't support row styling)
+            display_df["Status"] = display_df["Status"].apply(
+                lambda x: f"🟡 {x}" if "Ongoing" in str(x) or "Current" in str(x) else x
+            )
+
+            # Toggle for MA context columns
+            show_ma_context = st.checkbox(
+                "Show MA Context",
+                value=False,
+                help="Show Entry MA, Exit MA, MA Δ%, and True Recovery columns. These help explain why 'Days Under MA' can differ from 'Price Recovery Days' since the MA moves during the drawdown.",
+                key=f"ma_context_{unique_id}_{window}"
+            )
+
+            # Reorder columns - Main metrics first, then optionally MA context columns
+            if show_ma_context:
+                final_display_cols = [
+                    "Start", "End", "Days Under MA", "Max Depth", "Breakeven Gain",
+                    "Price Recovery Days", "True Recovery",  # True Recovery = Price + MA recovered
+                    "Entry MA", "Exit MA", "MA Δ%",  # MA Context
+                    "Full Rally %", "Rally Days", "Post-MA Rally", "Post-MA Rally Days",
+                    "Days to ATH", "Status", "Pattern"
+                ]
+            else:
+                final_display_cols = [
+                    "Start", "End", "Days Under MA", "Max Depth", "Breakeven Gain",
+                    "Price Recovery Days",
+                    "Full Rally %", "Rally Days", "Post-MA Rally", "Post-MA Rally Days",
+                    "Days to ATH", "Status", "Pattern"
+                ]
             final_display_cols = [c for c in final_display_cols if c in display_df.columns]
             display_df = display_df[final_display_cols]
-            
-            # Style function to highlight ongoing and current rows
-            def highlight_rows(row):
-                status = str(row.get("Status", ""))
-                if "Ongoing" in status or "Current" in status:
-                    return ['background-color: rgba(255, 215, 0, 0.2)'] * len(row)  # Yellow/Gold tint
-                return [''] * len(row)
-            
+
+            # Column tooltips for hover explanations
+            column_config = {
+                "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the MA", format="YYYY-MM-DD"),
+                "End": st.column_config.DateColumn("End", help="Date when price recovered above the MA (or 'Ongoing')", format="YYYY-MM-DD"),
+                "Days Under MA": st.column_config.NumberColumn("Days Under MA", help="Total calendar days spent below the MA", format="%.0f"),
+                "Max Depth": st.column_config.NumberColumn("Max Depth", help="Price drawdown from event start to the lowest point", format="%.2f%%"),
+                "Breakeven Gain": st.column_config.NumberColumn("Breakeven Gain", help="% gain needed from the bottom to get back to start price (breakeven)", format="%.1f%%"),
+                "Price Recovery Days": st.column_config.NumberColumn("Price Recovery Days", help="Calendar days from event start to breakeven. For ongoing events, shows days elapsed so far.", format="%.0f"),
+                "True Recovery": st.column_config.NumberColumn("True Recovery", help="Days until BOTH price ≥ start price AND price > MA (truly recovered: at breakeven + in uptrend)", format="%.0f"),
+                "Entry MA": st.column_config.NumberColumn("Entry MA", help="MA value when price first dropped below it", format="$%.2f"),
+                "Exit MA": st.column_config.NumberColumn("Exit MA", help="MA value when price recovered above it", format="$%.2f"),
+                "MA Δ%": st.column_config.NumberColumn("MA Δ%", help="How much MA changed during event. Negative = MA fell, making crossover easier even if price hasn't fully recovered.", format="%+.1f%%"),
+                "Full Rally %": st.column_config.NumberColumn("Full Rally %", help="% gain from the lowest price to the subsequent peak (or current price for ongoing)", format="%.1f%%"),
+                "Rally Days": st.column_config.NumberColumn("Rally Days", help="Calendar days from lowest price to subsequent peak", format="%.0f"),
+                "Post-MA Rally": st.column_config.NumberColumn("Post-MA Rally", help="% gain from MA crossover to the subsequent peak", format="%.1f%%"),
+                "Post-MA Rally Days": st.column_config.NumberColumn("Post-MA Rally Days", help="Days from MA crossover to the subsequent peak", format="%.0f"),
+                "Days to ATH": st.column_config.NumberColumn("Days to ATH", help="Days from MA crossover until price makes a new all-time high", format="%.0f"),
+                "Status": st.column_config.TextColumn("Status", help="🟡 Ongoing = still below MA, Recovered = crossed back above MA"),
+                "Pattern": st.column_config.TextColumn("Pattern", help="Recovery shape classification based on duration and rally strength"),
+            }
+
             st.dataframe(
-                display_df.style
-                .apply(highlight_rows, axis=1)
-                .format({
-                    "Max Depth": "{:.2f}%",
-                    "Rally %": "{:.1f}%",
-                    "Post-MA Rally": "{:.1f}%",
-                    "Days Under MA": "{:.0f}",
-                    "Price Recovery Days": "{:.0f}",
-                    "Rally Days": "{:.0f}",
-                    "Post-MA Rally Days": "{:.0f}",
-                    "Days to ATH": "{:.0f}",
-                }, na_rep="-"),  
+                display_df,
+                column_config=column_config,
                 use_container_width=True,
                 hide_index=True
             )

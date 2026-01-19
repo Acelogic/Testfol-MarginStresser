@@ -448,6 +448,13 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                                         res['stats_source'] = 'rebased'
                         else:
                             # --- Local Portfolio (NDXMEGASIM): Use TWR-based rebasing ---
+                            # CRITICAL: Get config for THIS portfolio (not reuse from previous iteration)
+                            p = portfolios[i]
+                            alloc_map = dict(zip(p['alloc_df']['Ticker'], p['alloc_df']['Weight %']))
+                            gcf = config.get('global_cashflow', {})
+                            reb = p.get('rebalance', {})
+                            r_mode = reb.get('mode', 'Standard')
+
                             twr = res.get('twr_series')
                             if twr is not None and not twr.empty:
                                 twr_slice = twr[twr.index >= common_start]
@@ -499,6 +506,14 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
                                         res['twr_series'] = new_twr
                                         # Update shadow_range to match the new aligned execution
                                         res['shadow_range'] = f"{common_start.date()} to {end_date}"
+
+                                        # CRITICAL: Sync res['series'] with new_twr to ensure chart matches stats
+                                        # The chart uses res['series'] while stats use new_twr - they must be in sync
+                                        if new_twr is not None and not new_twr.empty:
+                                            synced_series = (new_twr / new_twr.iloc[0]) * global_start_val
+                                            res['series'] = synced_series
+                                            res['port_series'] = synced_series
+
                                         # Recalculate stats from new TWR
                                         res['stats'] = calculations.generate_stats(new_twr if new_twr is not None and not new_twr.empty else new_series)
                                         print(f"DEBUG: Re-ran shadow backtest for local {res['name']} from {common_start.date()}")
