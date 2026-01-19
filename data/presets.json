@@ -456,5 +456,76 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "NDXMEGASPLIT Nigged ",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 30.0,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 15.0,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3",
+                "Weight %": 5.0,
+                "Maint %": 75.0
+            },
+            {
+                "Ticker": "AAPL?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "MSFT?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "AVGO?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "AMZN?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "META?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "NVDA?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "GOOG?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            },
+            {
+                "Ticker": "TSLA?L=2",
+                "Weight %": 3.75,
+                "Maint %": 50.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]

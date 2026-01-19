@@ -328,7 +328,14 @@ def analyze_ma(series, window=200, tolerance_days=0):
         # Analyze Period (calculate Bottom/Depth first)
         sub_series = series[s_date:calc_end]
         sub_dma = dma_series[s_date:calc_end]
-        
+
+        # Get MA values at entry and exit for context
+        entry_ma = dma_series.loc[s_date] if s_date in dma_series.index else None
+        exit_ma = dma_series.loc[calc_end] if calc_end in dma_series.index else None
+        ma_change_pct = None
+        if entry_ma is not None and exit_ma is not None and entry_ma > 0:
+            ma_change_pct = ((exit_ma - entry_ma) / entry_ma) * 100
+
         bottom_date = pd.NaT
         if not sub_series.empty:
             # bottom_date is the date of the absolute lowest price
@@ -341,10 +348,18 @@ def analyze_ma(series, window=200, tolerance_days=0):
             max_depth = 0.0
 
         # Calculate Recovery Days (Time to recover to start price)
-            
+
         recovery_days = None
         recovery_date = pd.NaT
+        bottom_to_recovery_pct = None
         start_price = series.loc[s_date]
+
+        # Calculate Bottom to Recovery % (actual rally from bottom to starting price / breakeven)
+        # This is the inverse of the drawdown - a 30% drop requires a 42.9% rally to recover
+        if pd.notna(bottom_date) and not sub_series.empty:
+            bp = sub_series.loc[bottom_date]
+            if bp > 0:
+                bottom_to_recovery_pct = ((start_price / bp) - 1) * 100
 
         # Look for recovery after the BOTTOM date
         # We search from bottom_date onwards to avoid early pre-drop chop triggers
@@ -362,10 +377,29 @@ def analyze_ma(series, window=200, tolerance_days=0):
         if len(future_prices) > 0:
             # Find first date where Price >= Start Price
             recovered_mask = future_prices >= start_price
-            
+
             if recovered_mask.any():
                 recovery_date = recovered_mask.idxmax() # First True
-                recovery_days = (recovery_date - s_date).days
+                recovery_days = (recovery_date - s_date).days  # Event Start → Breakeven
+
+        # Calculate True Recovery Days (days until BOTH price >= start price AND price > MA)
+        # This is when you're actually fully recovered - in profit AND in uptrend
+        true_recovery_days = None
+        true_recovery_date = pd.NaT
+        if pd.notna(bottom_date):
+            future_series = series[bottom_date:]
+            future_ma = dma_series[bottom_date:]
+            if not future_series.empty and not future_ma.empty:
+                # Align the series
+                common_idx = future_series.index.intersection(future_ma.index)
+                if len(common_idx) > 0:
+                    aligned_prices = future_series.loc[common_idx]
+                    aligned_ma = future_ma.loc[common_idx]
+                    # Find where BOTH conditions are met
+                    true_recovery_mask = (aligned_prices >= start_price) & (aligned_prices > aligned_ma)
+                    if true_recovery_mask.any():
+                        true_recovery_date = true_recovery_mask.idxmax()
+                        true_recovery_days = (true_recovery_date - s_date).days
 
         # Calculate Subsequent Peak (Only if Recovered)
         days_to_ath = None
@@ -425,7 +459,11 @@ def analyze_ma(series, window=200, tolerance_days=0):
                 days_bottom_to_peak = (series.index[-1] - bottom_date).days
                 # No Post-MA Rally since still under MA
                 peak_pct = None
-            
+
+                # For ongoing events, show current progress
+                # Price Recovery Days = days since start (still counting)
+                recovery_days = (series.index[-1] - s_date).days
+
         final_output.append({
             "Start Date": s_date,
             "End Date": e_date,
@@ -434,16 +472,22 @@ def analyze_ma(series, window=200, tolerance_days=0):
             "Duration (Months)": duration / 30.44,
             "Max Depth (%)": max_depth,
             "Bottom Date": bottom_date,
+            "Bottom to Recovery (%)": bottom_to_recovery_pct,
             "Subsequent Peak (%)": peak_pct,
             "Bottom to Peak (%)": bottom_to_peak_pct,
             "Peak Date": peak_date,
-            "Days Bottom to Peak": days_bottom_to_peak,
             "Days Bottom to Peak": days_bottom_to_peak,
             "Days to ATH": days_to_ath,
             "Recovery Date": recovery_date,
             "Recovery Days": recovery_days,
             "Post-MA Rally Days": (peak_date - e_date).days if pd.notna(peak_date) and pd.notna(e_date) else None,
-            "Status": status
+            "Status": status,
+            # MA Context fields for accuracy
+            "Entry MA": entry_ma,
+            "Exit MA": exit_ma,
+            "MA Change (%)": ma_change_pct,
+            "True Recovery Days": true_recovery_days,
+            "True Recovery Date": true_recovery_date
         })
 
     return dma_series, pd.DataFrame(final_output)
