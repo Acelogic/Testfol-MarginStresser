@@ -1475,7 +1475,38 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 tolerance_days=merge_tol
             )
 
+            # Summary Statistics Row
             if not comparison_df.empty:
+                total_events = len(comparison_df)
+
+                # Extract alpha columns with NA handling
+                breach_alpha = comparison_df["Breach Entry Alpha (%)"].dropna()
+                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna()
+
+                # Calculate statistics
+                breach_wins = (breach_alpha > 0).sum() if len(breach_alpha) > 0 else 0
+                breach_win_rate = (breach_wins / len(breach_alpha) * 100) if len(breach_alpha) > 0 else 0
+                breach_avg = breach_alpha.mean() if len(breach_alpha) > 0 else 0
+                breach_median = breach_alpha.median() if len(breach_alpha) > 0 else 0
+
+                maxdepth_wins = (maxdepth_alpha > 0).sum() if len(maxdepth_alpha) > 0 else 0
+                maxdepth_win_rate = (maxdepth_wins / len(maxdepth_alpha) * 100) if len(maxdepth_alpha) > 0 else 0
+                maxdepth_avg = maxdepth_alpha.mean() if len(maxdepth_alpha) > 0 else 0
+                maxdepth_median = maxdepth_alpha.median() if len(maxdepth_alpha) > 0 else 0
+
+                # Display 8-column metrics row
+                m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
+                m1.metric("Total Events", total_events)
+                m2.metric("Breach Win Rate", f"{breach_win_rate:.1f}%")
+                m3.metric("Breach Avg Alpha", f"{breach_avg:+.1f}%")
+                m4.metric("Breach Median Alpha", f"{breach_median:+.1f}%")
+                m5.metric("Max-Depth Win Rate", f"{maxdepth_win_rate:.1f}%")
+                m6.metric("Max-Depth Avg Alpha", f"{maxdepth_avg:+.1f}%")
+                m7.metric("Max-Depth Median Alpha", f"{maxdepth_median:+.1f}%")
+                m8.metric("Events Analyzed", f"{len(breach_alpha)}/{len(maxdepth_alpha)}")
+
+                st.markdown("---")
+
                 # Prepare display DataFrame
                 comp_display = comparison_df.copy()
 
