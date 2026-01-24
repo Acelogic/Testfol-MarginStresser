@@ -492,6 +492,74 @@ def analyze_ma(series, window=200, tolerance_days=0):
 
     return dma_series, pd.DataFrame(final_output)
 
+def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
+    """
+    Compare breach event returns for a portfolio.
+
+    Detects all 200DMA breach events and calculates:
+    - Breach-to-recovery returns (entry at breach date)
+    - Max-depth-to-recovery returns (entry at lowest point)
+
+    Args:
+        portfolio_series: Price series for portfolio (pandas Series with DatetimeIndex)
+        window: MA window (default 200)
+        tolerance_days: Whipsaw filter - merge breaches within N days (default 14)
+
+    Returns:
+        pd.DataFrame with columns from analyze_ma() events_df plus:
+        - Breach Entry Return (%): Total return from breach start to recovery
+        - Max-Depth Entry Return (%): Total return from bottom to recovery
+    """
+    # 1. Call analyze_ma to get breach events
+    ma_series, events_df = analyze_ma(portfolio_series, window, tolerance_days)
+
+    # 2. Filter to only recovered events (skip ongoing breaches)
+    if events_df.empty:
+        return events_df
+
+    recovered_events = events_df[events_df['Status'].str.contains('Recovered', na=False)].copy()
+
+    if recovered_events.empty:
+        return recovered_events
+
+    # 3. Calculate returns for each recovered event
+    breach_returns = []
+    maxdepth_returns = []
+
+    for idx, row in recovered_events.iterrows():
+        start_date = row['Start Date']
+        end_date = row['End Date']
+        bottom_date = row['Bottom Date']
+
+        # Skip if any required date is NaT
+        if pd.isna(start_date) or pd.isna(end_date) or pd.isna(bottom_date):
+            breach_returns.append(None)
+            maxdepth_returns.append(None)
+            continue
+
+        # Breach Entry Return: entry at Start Date, exit at End Date
+        start_price = portfolio_series.loc[start_date]
+        end_price = portfolio_series.loc[end_date]
+        breach_return = ((end_price / start_price) - 1) * 100
+
+        # Max-Depth Entry Return: entry at Bottom Date, exit at End Date
+        bottom_price = portfolio_series.loc[bottom_date]
+
+        # Handle edge case where Bottom Date == End Date
+        if bottom_date == end_date:
+            maxdepth_return = 0.0
+        else:
+            maxdepth_return = ((end_price / bottom_price) - 1) * 100
+
+        breach_returns.append(breach_return)
+        maxdepth_returns.append(maxdepth_return)
+
+    # 4. Add return columns to dataframe
+    recovered_events['Breach Entry Return (%)'] = breach_returns
+    recovered_events['Max-Depth Entry Return (%)'] = maxdepth_returns
+
+    return recovered_events
+
 def calculate_pivot_points(high, low, close):
     """Calculates Classic Pivot Points."""
     p = (high + low + close) / 3
