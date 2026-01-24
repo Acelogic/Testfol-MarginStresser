@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+from app.services.testfol_api import fetch_backtest
 
 def calculate_cagr(series):
     if series.empty: return 0.0
@@ -499,6 +500,8 @@ def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
     Detects all 200DMA breach events and calculates:
     - Breach-to-recovery returns (entry at breach date)
     - Max-depth-to-recovery returns (entry at lowest point)
+    - SPYSIM benchmark returns for identical date windows
+    - Alpha (portfolio return minus SPYSIM return)
 
     Args:
         portfolio_series: Price series for portfolio (pandas Series with DatetimeIndex)
@@ -509,6 +512,10 @@ def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
         pd.DataFrame with columns from analyze_ma() events_df plus:
         - Breach Entry Return (%): Total return from breach start to recovery
         - Max-Depth Entry Return (%): Total return from bottom to recovery
+        - SPYSIM Breach Return (%): SPYSIM return for same breach window
+        - SPYSIM Max-Depth Return (%): SPYSIM return for same max-depth window
+        - Breach Entry Alpha (%): Portfolio return - SPYSIM return (breach entry)
+        - Max-Depth Entry Alpha (%): Portfolio return - SPYSIM return (max-depth entry)
     """
     # 1. Call analyze_ma to get breach events
     ma_series, events_df = analyze_ma(portfolio_series, window, tolerance_days)
@@ -522,9 +529,26 @@ def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
     if recovered_events.empty:
         return recovered_events
 
-    # 3. Calculate returns for each recovered event
+    # 3. Fetch SPYSIM benchmark data matching portfolio date range
+    spysim_series, _, _ = fetch_backtest(
+        start_date=portfolio_series.index[0],
+        end_date=portfolio_series.index[-1],
+        start_val=10000,  # Arbitrary base - only ratios matter
+        cashflow=0,
+        cashfreq="Monthly",
+        rolling=1,
+        invest_div=True,
+        rebalance="None",
+        allocation={"SPYSIM": 100}
+    )
+
+    # 4. Calculate returns for each recovered event
     breach_returns = []
     maxdepth_returns = []
+    spysim_breach_returns = []
+    spysim_maxdepth_returns = []
+    breach_alphas = []
+    maxdepth_alphas = []
 
     for idx, row in recovered_events.iterrows():
         start_date = row['Start Date']
@@ -535,6 +559,10 @@ def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
         if pd.isna(start_date) or pd.isna(end_date) or pd.isna(bottom_date):
             breach_returns.append(None)
             maxdepth_returns.append(None)
+            spysim_breach_returns.append(None)
+            spysim_maxdepth_returns.append(None)
+            breach_alphas.append(None)
+            maxdepth_alphas.append(None)
             continue
 
         # Breach Entry Return: entry at Start Date, exit at End Date
@@ -551,12 +579,54 @@ def compare_breach_events(portfolio_series, window=200, tolerance_days=14):
         else:
             maxdepth_return = ((end_price / bottom_price) - 1) * 100
 
+        # Calculate SPYSIM returns for same date windows
+        # Use Series.align() for proper date alignment (handles weekends/holidays)
+
+        # Breach window (Start Date to End Date)
+        portfolio_breach_window = portfolio_series.loc[start_date:end_date]
+        spysim_breach_window = spysim_series.loc[start_date:end_date]
+        aligned_port_breach, aligned_spy_breach = portfolio_breach_window.align(spysim_breach_window, join='inner')
+
+        if len(aligned_spy_breach) >= 2:
+            spysim_breach_return = ((aligned_spy_breach.iloc[-1] / aligned_spy_breach.iloc[0]) - 1) * 100
+        else:
+            spysim_breach_return = None
+
+        # Max-Depth window (Bottom Date to End Date)
+        portfolio_maxdepth_window = portfolio_series.loc[bottom_date:end_date]
+        spysim_maxdepth_window = spysim_series.loc[bottom_date:end_date]
+        aligned_port_maxdepth, aligned_spy_maxdepth = portfolio_maxdepth_window.align(spysim_maxdepth_window, join='inner')
+
+        if len(aligned_spy_maxdepth) >= 2:
+            spysim_maxdepth_return = ((aligned_spy_maxdepth.iloc[-1] / aligned_spy_maxdepth.iloc[0]) - 1) * 100
+        else:
+            spysim_maxdepth_return = None
+
+        # Calculate alpha (portfolio return - benchmark return)
+        if spysim_breach_return is not None:
+            breach_alpha = breach_return - spysim_breach_return
+        else:
+            breach_alpha = None
+
+        if spysim_maxdepth_return is not None:
+            maxdepth_alpha = maxdepth_return - spysim_maxdepth_return
+        else:
+            maxdepth_alpha = None
+
         breach_returns.append(breach_return)
         maxdepth_returns.append(maxdepth_return)
+        spysim_breach_returns.append(spysim_breach_return)
+        spysim_maxdepth_returns.append(spysim_maxdepth_return)
+        breach_alphas.append(breach_alpha)
+        maxdepth_alphas.append(maxdepth_alpha)
 
-    # 4. Add return columns to dataframe
+    # 5. Add return columns to dataframe
     recovered_events['Breach Entry Return (%)'] = breach_returns
     recovered_events['Max-Depth Entry Return (%)'] = maxdepth_returns
+    recovered_events['SPYSIM Breach Return (%)'] = spysim_breach_returns
+    recovered_events['SPYSIM Max-Depth Return (%)'] = spysim_maxdepth_returns
+    recovered_events['Breach Entry Alpha (%)'] = breach_alphas
+    recovered_events['Max-Depth Entry Alpha (%)'] = maxdepth_alphas
 
     return recovered_events
 
