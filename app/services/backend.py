@@ -10,6 +10,8 @@ import datetime as dt
 from app.services import testfol_api as api
 from app.services import xray_engine
 from app.core import shadow_backtest, tax_library, monte_carlo
+from app.core import calculations
+from app.services.json_utils import safe_float, safe_int, series_to_list, dates_to_strings, safe_dict
 
 app = FastAPI()
 
@@ -64,6 +66,86 @@ class MonteCarloRequest(BaseModel):
     initial_val: float = 10000.0
     monthly_cashflow: float = 0.0
     block_size: int = 1
+
+
+# --- New Request Models for Feature Parity ---
+
+class ChartDataRequest(BaseModel):
+    """Request for /chart_data endpoint."""
+    # Option A: Pass existing series
+    portfolio_series: Optional[List[List]] = None  # [[timestamps], [values]]
+
+    # Option B: Fetch fresh backtest
+    tickers: Optional[Dict[str, float]] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    rebalance_freq: str = "Quarterly"
+    invest_div: bool = True
+
+    # Analysis options
+    ma_windows: List[int] = [150, 200]
+    include_technicals: bool = True
+    include_stage: bool = True
+    tolerance_days: int = 14
+
+
+class PerformanceRequest(BaseModel):
+    """Request for /performance endpoint."""
+    tickers: Dict[str, float]
+    start_date: str
+    end_date: Optional[str] = None
+    start_val: float = 10000.0
+    rebalance_freq: str = "Quarterly"
+    cashflow: float = 0.0
+    cashflow_freq: str = "Monthly"
+    invest_div: bool = True
+
+    benchmark: Optional[str] = "SPYSIM"
+    include_drawdown_series: bool = True
+
+
+class TaxConfig(BaseModel):
+    """Tax configuration for /tax_rebal endpoint."""
+    income: float = 100000
+    filing_status: str = "Single"
+    state_tax_rate: float = 0.0
+    method: str = "2025_fixed"
+    use_std_deduction: bool = True
+
+
+class TaxRebalRequest(BaseModel):
+    """Request for /tax_rebal endpoint."""
+    tickers: Dict[str, float]
+    start_date: str
+    end_date: Optional[str] = None
+    start_val: float = 10000.0
+    rebalance_freq: str = "Quarterly"
+    cashflow: float = 0.0
+    cashflow_freq: str = "Monthly"
+    invest_div: bool = True
+
+    tax_config: TaxConfig = TaxConfig()
+    include_composition: bool = True
+    include_trades: bool = True
+
+
+class PortfolioConfig(BaseModel):
+    """Single portfolio configuration for /compare endpoint."""
+    name: str
+    tickers: Dict[str, float]
+    rebalance_freq: str = "Quarterly"
+
+
+class CompareRequest(BaseModel):
+    """Request for /compare endpoint."""
+    portfolios: List[PortfolioConfig]
+    start_date: str
+    end_date: Optional[str] = None
+    start_val: float = 10000.0
+
+    benchmark: Optional[str] = "SPYSIM"
+    align_to_common_start: bool = True
+
 
 @app.get("/")
 def health_check():
