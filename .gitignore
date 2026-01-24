@@ -216,3 +216,6 @@ data/etf_xray/cache/etf_filings/
 # API Cache
 data/api_cache/
 .planning/
+
+# Git Worktrees
+.worktrees/
