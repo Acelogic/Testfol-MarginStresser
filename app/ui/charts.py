@@ -1466,6 +1466,71 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 hide_index=True
             )
 
+            # Entry Strategy Comparison Table
+            st.subheader("Entry Strategy Comparison (vs SPYSIM)")
+
+            comparison_df = calculations.compare_breach_events(
+                port_series,
+                window=window,
+                tolerance_days=merge_tol
+            )
+
+            if not comparison_df.empty:
+                # Prepare display DataFrame
+                comp_display = comparison_df.copy()
+
+                # Convert date columns to .date for cleaner display
+                comp_display["Start"] = comp_display["Start Date"].dt.date
+                comp_display["End"] = comp_display["End Date"].dt.date
+                comp_display["Duration"] = comp_display["Duration (Days)"]
+
+                # Select and order columns for display
+                display_cols = [
+                    "Start", "End", "Duration",
+                    "Breach Entry Return (%)", "Max-Depth Entry Return (%)",
+                    "SPYSIM Breach Return (%)", "SPYSIM Max-Depth Return (%)",
+                    "Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"
+                ]
+                comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
+
+                # Sort by Start descending (most recent first)
+                comp_display = comp_display.sort_values("Start", ascending=False)
+
+                # Color styling function for alpha columns
+                def color_alpha(val):
+                    if pd.isna(val):
+                        return ''
+                    color = '#00CC96' if val >= 0 else '#EF553B'
+                    return f'color: {color}'
+
+                # Apply styling to alpha columns
+                alpha_cols = ["Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"]
+                alpha_cols_present = [c for c in alpha_cols if c in comp_display.columns]
+                styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+
+                # Column config with tooltips
+                comp_column_config = {
+                    "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the MA", format="YYYY-MM-DD"),
+                    "End": st.column_config.DateColumn("End", help="Date when price recovered above the MA", format="YYYY-MM-DD"),
+                    "Duration": st.column_config.NumberColumn("Duration", help="Total calendar days of the breach event", format="%.0f"),
+                    "Breach Entry Return (%)": st.column_config.NumberColumn("Breach Return", help="Portfolio return: entry at breach date, exit at recovery", format="%.1f%%"),
+                    "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Max-Depth Return", help="Portfolio return: entry at lowest point, exit at recovery", format="%.1f%%"),
+                    "SPYSIM Breach Return (%)": st.column_config.NumberColumn("SPY Breach", help="SPYSIM return for same breach window", format="%.1f%%"),
+                    "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Max-Depth", help="SPYSIM return for same max-depth window", format="%.1f%%"),
+                    "Breach Entry Alpha (%)": st.column_config.NumberColumn("Breach Alpha", help="Outperformance vs SPY at breach entry (positive = beat SPY)", format="%+.1f%%"),
+                    "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Max-Depth Alpha", help="Outperformance vs SPY at max-depth entry (positive = beat SPY)", format="%+.1f%%"),
+                }
+
+                st.dataframe(
+                    styled_df,
+                    column_config=comp_column_config,
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"comparison_table_{key_suffix}"
+                )
+            else:
+                st.info("No recovered breach events to compare. Entry comparison requires completed (recovered) events.")
+
             # Probability Histogram
             st.subheader(f"Distribution of Time Under {window}MA")
             
