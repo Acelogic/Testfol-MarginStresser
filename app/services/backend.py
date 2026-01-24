@@ -718,6 +718,210 @@ def get_tax_rebal(req: TaxRebalRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+
+@app.post("/compare")
+def compare_portfolios(req: CompareRequest):
+    """
+    Returns side-by-side comparison of multiple portfolios.
+    """
+    try:
+        if not req.portfolios:
+            raise HTTPException(status_code=400, detail="At least one portfolio required")
+
+        if len(req.portfolios) > 10:
+            raise HTTPException(status_code=400, detail="Maximum 10 portfolios allowed")
+
+        # 1. Fetch all portfolios
+        portfolio_data = []
+        all_start_dates = []
+        all_end_dates = []
+
+        for pf in req.portfolios:
+            try:
+                series, stats, _ = api.fetch_backtest(
+                    start_date=req.start_date,
+                    end_date=req.end_date if req.end_date else str(dt.date.today()),
+                    start_val=req.start_val,
+                    cashflow=0,
+                    cashfreq="Monthly",
+                    rolling=1,
+                    invest_div=True,
+                    rebalance=pf.rebalance_freq,
+                    allocation=pf.tickers
+                )
+
+                if not series.empty:
+                    all_start_dates.append(series.index.min())
+                    all_end_dates.append(series.index.max())
+                    portfolio_data.append({
+                        "name": pf.name,
+                        "series": series,
+                        "stats": stats
+                    })
+            except Exception as e:
+                print(f"Warning: Could not fetch portfolio {pf.name}: {e}")
+                portfolio_data.append({
+                    "name": pf.name,
+                    "series": pd.Series(dtype=float),
+                    "stats": {},
+                    "error": str(e)
+                })
+
+        # 2. Determine common date range
+        if req.align_to_common_start and all_start_dates:
+            common_start = max(all_start_dates)
+            common_end = min(all_end_dates)
+        else:
+            common_start = min(all_start_dates) if all_start_dates else None
+            common_end = max(all_end_dates) if all_end_dates else None
+
+        # 3. Fetch benchmark
+        benchmark_data = None
+        if req.benchmark:
+            try:
+                bench_series, _, _ = api.fetch_backtest(
+                    start_date=req.start_date,
+                    end_date=req.end_date if req.end_date else str(dt.date.today()),
+                    start_val=req.start_val,
+                    cashflow=0,
+                    cashfreq="Monthly",
+                    rolling=1,
+                    invest_div=True,
+                    rebalance="None",
+                    allocation={req.benchmark: 100}
+                )
+
+                if not bench_series.empty:
+                    # Align to common range
+                    if common_start:
+                        bench_series = bench_series[bench_series.index >= common_start]
+                    if common_end:
+                        bench_series = bench_series[bench_series.index <= common_end]
+
+                    # Rebase to start_val
+                    if not bench_series.empty and bench_series.iloc[0] != 0:
+                        bench_series = (bench_series / bench_series.iloc[0]) * req.start_val
+
+                    bench_calc_stats = calculations.generate_stats(bench_series)
+
+                    benchmark_data = {
+                        "name": req.benchmark,
+                        "stats": {
+                            "cagr": safe_float(bench_calc_stats.get("cagr", 0)),
+                            "sharpe": safe_float(bench_calc_stats.get("sharpe", 0)),
+                            "max_drawdown": safe_float(bench_calc_stats.get("max_drawdown", 0)),
+                            "volatility": safe_float(bench_calc_stats.get("std", 0)),
+                            "final_value": safe_float(bench_series.iloc[-1]) if not bench_series.empty else 0
+                        },
+                        "series": {
+                            "dates": dates_to_strings(bench_series.index),
+                            "values": series_to_list(bench_series)
+                        }
+                    }
+            except Exception as e:
+                print(f"Warning: Could not fetch benchmark {req.benchmark}: {e}")
+
+        # 4. Process each portfolio
+        processed_portfolios = []
+        cagr_ranking = []
+        sharpe_ranking = []
+        dd_ranking = []
+
+        for pf_data in portfolio_data:
+            series = pf_data["series"]
+            name = pf_data["name"]
+
+            if series.empty:
+                processed_portfolios.append({
+                    "name": name,
+                    "stats": {},
+                    "series": {"dates": [], "values": []},
+                    "drawdown": {"dates": [], "values": []},
+                    "error": pf_data.get("error")
+                })
+                continue
+
+            # Align to common range
+            if common_start:
+                series = series[series.index >= common_start]
+            if common_end:
+                series = series[series.index <= common_end]
+
+            if series.empty:
+                continue
+
+            # Rebase to start_val at common start
+            if series.iloc[0] != 0:
+                series = (series / series.iloc[0]) * req.start_val
+
+            # Calculate stats
+            calc_stats = calculations.generate_stats(series)
+
+            # Drawdown
+            running_max = series.cummax()
+            drawdown = (series / running_max) - 1.0
+
+            stats_dict = {
+                "cagr": safe_float(calc_stats.get("cagr", 0)),
+                "sharpe": safe_float(calc_stats.get("sharpe", 0)),
+                "max_drawdown": safe_float(calc_stats.get("max_drawdown", 0)),
+                "volatility": safe_float(calc_stats.get("std", 0)),
+                "final_value": safe_float(series.iloc[-1]) if not series.empty else 0
+            }
+
+            processed_portfolios.append({
+                "name": name,
+                "stats": stats_dict,
+                "series": {
+                    "dates": dates_to_strings(series.index),
+                    "values": series_to_list(series)
+                },
+                "drawdown": {
+                    "dates": dates_to_strings(drawdown.index),
+                    "values": series_to_list(drawdown)
+                }
+            })
+
+            # Track for rankings
+            cagr_ranking.append((name, stats_dict["cagr"] or 0))
+            sharpe_ranking.append((name, stats_dict["sharpe"] or 0))
+            dd_ranking.append((name, stats_dict["max_drawdown"] or 0))
+
+        # Add benchmark to rankings if exists
+        if benchmark_data:
+            cagr_ranking.append((benchmark_data["name"], benchmark_data["stats"]["cagr"] or 0))
+            sharpe_ranking.append((benchmark_data["name"], benchmark_data["stats"]["sharpe"] or 0))
+            dd_ranking.append((benchmark_data["name"], benchmark_data["stats"]["max_drawdown"] or 0))
+
+        # Sort rankings
+        cagr_ranking.sort(key=lambda x: x[1], reverse=True)
+        sharpe_ranking.sort(key=lambda x: x[1], reverse=True)
+        dd_ranking.sort(key=lambda x: x[1], reverse=True)  # Less negative = better
+
+        response = {
+            "common_start_date": common_start.strftime('%Y-%m-%d') if common_start else None,
+            "common_end_date": common_end.strftime('%Y-%m-%d') if common_end else None,
+            "portfolios": processed_portfolios,
+            "rankings": {
+                "by_cagr": [name for name, _ in cagr_ranking],
+                "by_sharpe": [name for name, _ in sharpe_ranking],
+                "by_max_drawdown": [name for name, _ in dd_ranking]
+            }
+        }
+
+        if benchmark_data:
+            response["benchmark"] = benchmark_data
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/run_stress_test")
 def run_stress_test(req: BacktestRequest):
     try:
