@@ -368,6 +368,183 @@ def get_chart_data(req: ChartDataRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/performance")
+def get_performance(req: PerformanceRequest):
+    """
+    Returns detailed performance stats, returns breakdown, and drawdown series.
+    """
+    try:
+        # 1. Fetch portfolio data
+        port_series, stats, _ = api.fetch_backtest(
+            start_date=req.start_date,
+            end_date=req.end_date if req.end_date else str(dt.date.today()),
+            start_val=req.start_val,
+            cashflow=req.cashflow,
+            cashfreq=req.cashflow_freq,
+            rolling=1,
+            invest_div=req.invest_div,
+            rebalance=req.rebalance_freq,
+            allocation=req.tickers
+        )
+
+        if port_series.empty:
+            raise HTTPException(status_code=400, detail="No data returned for portfolio")
+
+        # 2. Calculate detailed stats
+        portfolio_stats = calculations.generate_stats(port_series)
+
+        # Merge with API stats (API may have additional fields)
+        merged_stats = {
+            "cagr": safe_float(portfolio_stats.get("cagr", stats.get("cagr", 0))),
+            "sharpe": safe_float(portfolio_stats.get("sharpe", stats.get("sharpe", 0))),
+            "sortino": safe_float(stats.get("sortino", 0)),
+            "max_drawdown": safe_float(portfolio_stats.get("max_drawdown", stats.get("max_drawdown", 0))),
+            "volatility": safe_float(portfolio_stats.get("std", stats.get("std", 0))),
+            "best_year": safe_float(portfolio_stats.get("best_year", stats.get("best_year", 0))),
+            "worst_year": safe_float(portfolio_stats.get("worst_year", stats.get("worst_year", 0)))
+        }
+
+        response = {"stats": merged_stats}
+
+        # 3. Fetch and calculate benchmark stats
+        benchmark_stats = None
+        benchmark_series = None
+
+        if req.benchmark:
+            try:
+                benchmark_series, bench_api_stats, _ = api.fetch_backtest(
+                    start_date=req.start_date,
+                    end_date=req.end_date if req.end_date else str(dt.date.today()),
+                    start_val=req.start_val,
+                    cashflow=0,
+                    cashfreq="Monthly",
+                    rolling=1,
+                    invest_div=True,
+                    rebalance="None",
+                    allocation={req.benchmark: 100}
+                )
+
+                if not benchmark_series.empty:
+                    bench_calc_stats = calculations.generate_stats(benchmark_series)
+                    benchmark_stats = {
+                        "cagr": safe_float(bench_calc_stats.get("cagr", 0)),
+                        "sharpe": safe_float(bench_calc_stats.get("sharpe", 0)),
+                        "max_drawdown": safe_float(bench_calc_stats.get("max_drawdown", 0)),
+                        "volatility": safe_float(bench_calc_stats.get("std", 0))
+                    }
+            except Exception as e:
+                print(f"Warning: Could not fetch benchmark {req.benchmark}: {e}")
+
+        if benchmark_stats:
+            response["benchmark_stats"] = benchmark_stats
+            # Calculate alpha (handle None values with defaults)
+            port_cagr = merged_stats["cagr"] or 0
+            port_sharpe = merged_stats["sharpe"] or 0
+            port_dd = merged_stats["max_drawdown"] or 0
+            bench_cagr = benchmark_stats["cagr"] or 0
+            bench_sharpe = benchmark_stats["sharpe"] or 0
+            bench_dd = benchmark_stats["max_drawdown"] or 0
+            response["alpha"] = {
+                "cagr_diff": safe_float(port_cagr - bench_cagr),
+                "sharpe_diff": safe_float(port_sharpe - bench_sharpe),
+                "max_dd_diff": safe_float(port_dd - bench_dd)
+            }
+
+        # 4. Calculate returns breakdown
+        # Monthly
+        monthly_data = port_series.resample("ME").last()
+        monthly_returns = monthly_data.pct_change() * 100
+
+        monthly_list = []
+        if benchmark_series is not None and not benchmark_series.empty:
+            bench_monthly = benchmark_series.resample("ME").last().pct_change() * 100
+        else:
+            bench_monthly = pd.Series(dtype=float)
+
+        for date, val in monthly_returns.items():
+            if not pd.isna(val):
+                bench_val = bench_monthly.get(date, None)
+                monthly_list.append({
+                    "year": date.year,
+                    "month": date.month,
+                    "value": safe_float(val),
+                    "benchmark": safe_float(bench_val) if bench_val is not None and not pd.isna(bench_val) else None
+                })
+
+        # Quarterly
+        quarterly_data = port_series.resample("QE").last()
+        quarterly_returns = quarterly_data.pct_change() * 100
+
+        quarterly_list = []
+        if benchmark_series is not None and not benchmark_series.empty:
+            bench_quarterly = benchmark_series.resample("QE").last().pct_change() * 100
+        else:
+            bench_quarterly = pd.Series(dtype=float)
+
+        for date, val in quarterly_returns.items():
+            if not pd.isna(val):
+                bench_val = bench_quarterly.get(date, None)
+                quarterly_list.append({
+                    "year": date.year,
+                    "quarter": (date.month - 1) // 3 + 1,
+                    "value": safe_float(val),
+                    "benchmark": safe_float(bench_val) if bench_val is not None and not pd.isna(bench_val) else None
+                })
+
+        # Yearly
+        yearly_data = port_series.resample("YE").last()
+        yearly_returns = yearly_data.pct_change() * 100
+
+        yearly_list = []
+        if benchmark_series is not None and not benchmark_series.empty:
+            bench_yearly = benchmark_series.resample("YE").last().pct_change() * 100
+        else:
+            bench_yearly = pd.Series(dtype=float)
+
+        for date, val in yearly_returns.items():
+            if not pd.isna(val):
+                bench_val = bench_yearly.get(date, None)
+                yearly_list.append({
+                    "year": date.year,
+                    "value": safe_float(val),
+                    "benchmark": safe_float(bench_val) if bench_val is not None and not pd.isna(bench_val) else None
+                })
+
+        response["returns"] = {
+            "monthly": monthly_list,
+            "quarterly": quarterly_list,
+            "yearly": yearly_list
+        }
+
+        # 5. Drawdown series
+        if req.include_drawdown_series:
+            running_max = port_series.cummax()
+            drawdown = (port_series / running_max) - 1.0
+
+            dd_dates = dates_to_strings(drawdown.index)
+            dd_values = [safe_float(v) for v in drawdown.values]
+
+            response["drawdown_series"] = {
+                "dates": dd_dates,
+                "portfolio": dd_values
+            }
+
+            if benchmark_series is not None and not benchmark_series.empty:
+                bench_running_max = benchmark_series.cummax()
+                bench_drawdown = (benchmark_series / bench_running_max) - 1.0
+                # Align to portfolio dates
+                bench_drawdown_aligned = bench_drawdown.reindex(drawdown.index, method='ffill')
+                response["drawdown_series"]["benchmark"] = [safe_float(v) for v in bench_drawdown_aligned.values]
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/run_stress_test")
 def run_stress_test(req: BacktestRequest):
     try:
