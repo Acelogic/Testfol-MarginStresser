@@ -197,6 +197,177 @@ def run_monte_carlo(req: MonteCarloRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/chart_data")
+def get_chart_data(req: ChartDataRequest):
+    """
+    Returns MA analysis, technical levels, and stage analysis for chart overlays.
+    """
+    try:
+        # 1. Get or fetch portfolio series
+        if req.portfolio_series is not None:
+            # Use provided series
+            timestamps, values = req.portfolio_series
+            dates = pd.to_datetime(timestamps, unit='s')
+            port_series = pd.Series(values, index=dates, name="Portfolio")
+        elif req.tickers is not None and req.start_date is not None:
+            # Fetch fresh backtest
+            port_series, _, _ = api.fetch_backtest(
+                start_date=req.start_date,
+                end_date=req.end_date if req.end_date else str(dt.date.today()),
+                start_val=10000.0,
+                cashflow=0,
+                cashfreq="Monthly",
+                rolling=1,
+                invest_div=req.invest_div,
+                rebalance=req.rebalance_freq,
+                allocation=req.tickers
+            )
+        else:
+            raise HTTPException(status_code=400, detail="Must provide either portfolio_series or tickers+start_date")
+
+        if port_series.empty:
+            raise HTTPException(status_code=400, detail="No data returned for portfolio")
+
+        response = {}
+
+        # 2. MA Analysis for each window
+        ma_analysis = {}
+        for window in req.ma_windows:
+            ma_series, events_df = calculations.analyze_ma(
+                port_series,
+                window=window,
+                tolerance_days=req.tolerance_days
+            )
+
+            current_price = port_series.iloc[-1]
+            current_ma = ma_series.iloc[-1] if ma_series is not None and not ma_series.empty else None
+
+            # Build breach events list
+            breach_events = []
+            if not events_df.empty:
+                # Get comparison data with SPYSIM
+                comparison_df = calculations.compare_breach_events(
+                    port_series,
+                    window=window,
+                    tolerance_days=req.tolerance_days
+                )
+
+                for _, row in comparison_df.iterrows():
+                    breach_events.append({
+                        "start_date": row["Start Date"].strftime('%Y-%m-%d') if pd.notna(row["Start Date"]) else None,
+                        "end_date": row["End Date"].strftime('%Y-%m-%d') if pd.notna(row["End Date"]) else None,
+                        "duration_days": safe_int(row.get("Duration (Days)")),
+                        "max_depth_pct": safe_float(row.get("Max Depth (%)")),
+                        "bottom_date": row["Bottom Date"].strftime('%Y-%m-%d') if pd.notna(row.get("Bottom Date")) else None,
+                        "recovery_days": safe_int(row.get("Recovery Days")),
+                        "breach_return_pct": safe_float(row.get("Breach Entry Return (%)")),
+                        "max_depth_return_pct": safe_float(row.get("Max-Depth Entry Return (%)")),
+                        "spysim_breach_return_pct": safe_float(row.get("SPYSIM Breach Return (%)")),
+                        "spysim_maxdepth_return_pct": safe_float(row.get("SPYSIM Max-Depth Return (%)")),
+                        "breach_alpha_pct": safe_float(row.get("Breach Entry Alpha (%)")),
+                        "maxdepth_alpha_pct": safe_float(row.get("Max-Depth Entry Alpha (%)")),
+                        "status": row.get("Status", "Unknown")
+                    })
+
+                # Calculate summary statistics
+                total_events = len(comparison_df)
+                avg_duration = comparison_df["Duration (Days)"].mean() if "Duration (Days)" in comparison_df else 0
+                avg_depth = comparison_df["Max Depth (%)"].mean() if "Max Depth (%)" in comparison_df else 0
+
+                # Win rates (alpha > 0)
+                breach_alphas = comparison_df["Breach Entry Alpha (%)"].dropna()
+                maxdepth_alphas = comparison_df["Max-Depth Entry Alpha (%)"].dropna()
+                breach_win_rate = (breach_alphas > 0).mean() * 100 if len(breach_alphas) > 0 else 0
+                maxdepth_win_rate = (maxdepth_alphas > 0).mean() * 100 if len(maxdepth_alphas) > 0 else 0
+
+                summary = {
+                    "total_events": total_events,
+                    "avg_duration_days": safe_float(avg_duration),
+                    "avg_depth_pct": safe_float(avg_depth),
+                    "breach_win_rate": safe_float(breach_win_rate),
+                    "maxdepth_win_rate": safe_float(maxdepth_win_rate),
+                    "avg_breach_alpha": safe_float(breach_alphas.mean()) if len(breach_alphas) > 0 else 0,
+                    "avg_maxdepth_alpha": safe_float(maxdepth_alphas.mean()) if len(maxdepth_alphas) > 0 else 0
+                }
+            else:
+                summary = {
+                    "total_events": 0,
+                    "avg_duration_days": 0,
+                    "avg_depth_pct": 0,
+                    "breach_win_rate": 0,
+                    "maxdepth_win_rate": 0,
+                    "avg_breach_alpha": 0,
+                    "avg_maxdepth_alpha": 0
+                }
+
+            ma_analysis[str(window)] = {
+                "current_ma": safe_float(current_ma),
+                "price_vs_ma_pct": safe_float(((current_price / current_ma) - 1) * 100) if current_ma and current_ma > 0 else None,
+                "is_above_ma": bool(current_price > current_ma) if current_ma else None,
+                "breach_events": breach_events,
+                "summary": summary
+            }
+
+        response["ma_analysis"] = ma_analysis
+
+        # 3. Stage Analysis (Weinstein)
+        if req.include_stage:
+            stages, slope_series, _ = calculations.analyze_stage(port_series, ma_window=150)
+
+            if stages is not None:
+                current_stage = stages.iloc[-1] if not stages.empty else "Unknown"
+                current_slope = slope_series.iloc[-1] if slope_series is not None and not slope_series.empty else 0
+
+                # Convert stage history to lists
+                stage_timestamps = [int(pd.Timestamp(d).timestamp()) for d in stages.index if pd.notna(d)]
+                stage_codes = [v for v, d in zip(stages.tolist(), stages.index) if pd.notna(d)]
+
+                response["stage_analysis"] = {
+                    "current_stage": current_stage,
+                    "ma_slope": safe_float(current_slope),
+                    "stage_history": [stage_timestamps, stage_codes]
+                }
+            else:
+                response["stage_analysis"] = None
+
+        # 4. Technical Levels (Cheat Sheet)
+        if req.include_technicals:
+            # Get previous period OHLC for pivot points
+            ohlc_data = None
+            if len(port_series) > 1:
+                # Use last full month as "previous period"
+                monthly = port_series.resample("ME").agg(['first', 'max', 'min', 'last'])
+                if len(monthly) >= 2:
+                    prev_month = monthly.iloc[-2]
+                    ohlc_data = {
+                        'High': prev_month['max'],
+                        'Low': prev_month['min'],
+                        'Close': prev_month['last']
+                    }
+
+            cheat_sheet_df = calculations.calculate_cheat_sheet(port_series, ohlc_data=ohlc_data)
+
+            if cheat_sheet_df is not None and not cheat_sheet_df.empty:
+                technical_levels = []
+                for _, row in cheat_sheet_df.iterrows():
+                    technical_levels.append({
+                        "price": safe_float(row["Price"]),
+                        "label": row["Label"],
+                        "type": row["Type"]
+                    })
+                response["technical_levels"] = technical_levels
+            else:
+                response["technical_levels"] = []
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/run_stress_test")
 def run_stress_test(req: BacktestRequest):
     try:
