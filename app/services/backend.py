@@ -545,6 +545,179 @@ def get_performance(req: PerformanceRequest):
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+@app.post("/tax_rebal")
+def get_tax_rebal(req: TaxRebalRequest):
+    """
+    Returns tax impact analysis and rebalancing history.
+    """
+    try:
+        # 1. Run shadow backtest to get trades and tax data
+        tax_cfg = {
+            "method": req.tax_config.method,
+            "other_income": req.tax_config.income,
+            "filing_status": req.tax_config.filing_status,
+            "state_tax_rate": req.tax_config.state_tax_rate,
+            "use_std_deduction": req.tax_config.use_std_deduction
+        }
+
+        trades_df, pl_by_year, comp_df, unrealized, _, _, _ = shadow_backtest.run_shadow_backtest(
+            allocation=req.tickers,
+            start_val=req.start_val,
+            start_date=req.start_date,
+            end_date=req.end_date if req.end_date else str(dt.date.today()),
+            cashflow=req.cashflow,
+            cashflow_freq=req.cashflow_freq,
+            rebalance_freq=req.rebalance_freq,
+            tax_config=tax_cfg,
+            pay_down_margin=False
+        )
+
+        response = {}
+
+        # 2. Calculate tax by year
+        tax_by_year = []
+        total_tax_paid = 0.0
+        total_realized_pl = 0.0
+        current_loss_cf = 0.0
+
+        if not pl_by_year.empty:
+            # Calculate federal tax series with carryforward
+            fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
+                pl_by_year,
+                req.tax_config.income,
+                req.tax_config.filing_status,
+                method=req.tax_config.method,
+                use_standard_deduction=req.tax_config.use_std_deduction
+            )
+
+            # Calculate state tax with carryforward
+            state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
+            loss_cf_state = 0.0
+
+            if isinstance(pl_by_year, pd.DataFrame):
+                total_pl_series = pl_by_year["Realized P&L"]
+            else:
+                total_pl_series = pl_by_year
+
+            for y, pl in total_pl_series.sort_index().items():
+                net = pl - loss_cf_state
+                if net > 0:
+                    state_tax_series[y] = net * req.tax_config.state_tax_rate
+                    loss_cf_state = 0.0
+                else:
+                    loss_cf_state = abs(net)
+
+            # Build year-by-year breakdown
+            for year in sorted(fed_tax_series.index):
+                realized_pl = float(total_pl_series.get(year, 0) or 0)
+                fed_tax = float(fed_tax_series.get(year, 0) or 0)
+                state_tax = float(state_tax_series.get(year, 0) or 0)
+
+                # Get short-term vs long-term breakdown if available
+                st_pl = 0.0
+                lt_pl = 0.0
+                if isinstance(pl_by_year, pd.DataFrame):
+                    st_col = pl_by_year.get("Short-Term P&L")
+                    lt_col = pl_by_year.get("Long-Term P&L")
+                    if st_col is not None:
+                        st_pl = float(st_col.get(year, 0) or 0)
+                    if lt_col is not None:
+                        lt_pl = float(lt_col.get(year, 0) or 0)
+
+                tax_by_year.append({
+                    "year": int(year),
+                    "realized_pl": safe_float(realized_pl),
+                    "short_term_pl": safe_float(st_pl),
+                    "long_term_pl": safe_float(lt_pl),
+                    "federal_tax": safe_float(fed_tax),
+                    "state_tax": safe_float(state_tax),
+                    "total_tax": safe_float(fed_tax + state_tax),
+                    "loss_carryforward": 0.0  # TODO: track actual carryforward
+                })
+
+                total_tax_paid += fed_tax + state_tax
+                total_realized_pl += realized_pl
+
+        response["tax_by_year"] = tax_by_year
+
+        # Tax summary
+        effective_rate = (total_tax_paid / total_realized_pl) if total_realized_pl > 0 else 0
+        response["tax_summary"] = {
+            "total_tax_paid": safe_float(total_tax_paid),
+            "total_realized_pl": safe_float(total_realized_pl),
+            "effective_rate": safe_float(effective_rate),
+            "current_loss_carryforward": safe_float(current_loss_cf)
+        }
+
+        # 3. Trades history
+        if req.include_trades and not trades_df.empty:
+            trades_list = []
+            for _, row in trades_df.iterrows():
+                trade_amt = row.get("Trade Amount", 0)
+                trades_list.append({
+                    "date": row["Date"].strftime('%Y-%m-%d') if pd.notna(row.get("Date")) else None,
+                    "ticker": row.get("Ticker", ""),
+                    "action": "BUY" if trade_amt > 0 else "SELL",
+                    "amount": safe_float(abs(trade_amt)),
+                    "realized_pl": safe_float(row.get("Realized P&L", 0)),
+                    "holding_period": row.get("Holding Period", "unknown")
+                })
+            response["trades"] = trades_list
+        else:
+            response["trades"] = []
+
+        # 4. Composition snapshots
+        if req.include_composition and not comp_df.empty:
+            composition_list = []
+            for date in comp_df["Date"].unique():
+                date_df = comp_df[comp_df["Date"] == date]
+                total_val = date_df["Value"].sum()
+
+                holdings = []
+                for _, row in date_df.iterrows():
+                    weight = row["Value"] / total_val if total_val > 0 else 0
+                    holdings.append({
+                        "ticker": row["Ticker"],
+                        "value": safe_float(row["Value"]),
+                        "weight": safe_float(weight)
+                    })
+
+                composition_list.append({
+                    "date": date.strftime('%Y-%m-%d') if hasattr(date, 'strftime') else str(date),
+                    "holdings": holdings,
+                    "total_value": safe_float(total_val)
+                })
+            response["composition"] = composition_list
+        else:
+            response["composition"] = []
+
+        # 5. Unrealized P&L
+        if unrealized is not None and not unrealized.empty:
+            unrealized_total = unrealized["Unrealized P&L"].sum() if "Unrealized P&L" in unrealized.columns else 0
+            by_ticker = []
+            for _, row in unrealized.iterrows():
+                by_ticker.append({
+                    "ticker": row.get("Ticker", ""),
+                    "cost_basis": safe_float(row.get("Cost Basis", 0)),
+                    "current_value": safe_float(row.get("Current Value", 0)),
+                    "unrealized": safe_float(row.get("Unrealized P&L", 0))
+                })
+            response["unrealized_pl"] = {
+                "total": safe_float(unrealized_total),
+                "by_ticker": by_ticker
+            }
+        else:
+            response["unrealized_pl"] = {"total": 0, "by_ticker": []}
+
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/run_stress_test")
 def run_stress_test(req: BacktestRequest):
     try:
