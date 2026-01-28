@@ -5,4 +5,5 @@ plotly
 requests
 streamlit>=1.45.0
 yfinance
+websockets>=11.0
 matplotlib
