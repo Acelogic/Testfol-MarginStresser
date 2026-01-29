@@ -1562,33 +1562,463 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             else:
                 st.info("No recovered breach events to compare. Entry comparison requires completed (recovered) events.")
 
-            # Probability Histogram
-            st.subheader(f"Distribution of Time Under {window}MA")
-            
-            hist_fig = go.Figure()
-            
-            # Histogram
-            hist_fig.add_trace(go.Histogram(
-                x=filtered_events["Duration (Days)"], # Use filtered_events here
-                marker_color='#636EFA',
-                marker_line_color='black',
-                marker_line_width=1,
-                opacity=0.8,
-                nbinsx=50
-            ))
-            
-            hist_fig.update_layout(
-                template="plotly_dark",
-                height=400,
-                title=dict(text=f"Distribution of Time Under {window}MA", font=dict(size=14)),
-                xaxis_title="Duration (Days)",
-                yaxis_title="Frequency",
-                showlegend=False,
-                bargap=0.05,
-                hovermode="x unified"
+
+# -----------------------------------------------------------------------------
+# Munger 200 Week Moving Average Analysis
+# -----------------------------------------------------------------------------
+def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
+    """
+    Renders the Munger 200 Week Moving Average Analysis tab.
+    Charlie Munger advocated for long-term thinking - the 200WMA (~4 years)
+    filters out short-term noise and shows secular trends.
+    """
+    st.subheader(f"{portfolio_name} Munger {window}-Week Moving Average Analysis")
+
+    st.info("""
+    💡 **Munger's Wisdom:** *"The big money is not in the buying and selling, but in the waiting."*
+
+    The 200-Week Moving Average (~4 years) filters out short-term noise and reveals secular trends.
+    This indicator helps identify generational buying opportunities during major market dislocations.
+    """)
+
+    # Controls
+    c_ctrl1, c_ctrl2 = st.columns(2)
+    key_suffix = f"{unique_id}_wma_{window}" if unique_id else f"wma_{window}"
+
+    merge_tol = c_ctrl1.slider(
+        "Merge Events Tolerance (Weeks)",
+        min_value=0, max_value=12, value=2, step=1,
+        key=f"wma_merge_{key_suffix}",
+        help=f"**Merge Tolerance**: Ignores short recoveries. If the price recovers above {window}WMA for fewer than X weeks before dropping again, it is considered a single continuous 'Under' event."
+    )
+    min_weeks = c_ctrl2.slider(
+        "Signal Filter (Min Weeks)",
+        min_value=0, max_value=52, value=4, step=1,
+        key=f"wma_min_{key_suffix}",
+        help=f"**Signal Filter**: Excludes short-lived drops below the {window}WMA (noise). Events shorter than X weeks will be hidden from the analysis."
+    )
+
+    # Calculate Weekly MA
+    weekly_series, wma_series, events_df = calculations.analyze_wma(port_series, window=window, tolerance_weeks=merge_tol)
+
+    if weekly_series is None or wma_series is None or wma_series.dropna().empty:
+        st.warning(f"Insufficient data to calculate {window}WMA. Need at least {window} weeks (~{window/52:.1f} years) of data.")
+        return
+
+    filtered_events = pd.DataFrame()
+    if events_df.empty:
+        st.success(f"🎉 Price has never been below the {window}WMA in this period - Strong secular uptrend!")
+    else:
+        # Apply Min Weeks Filter
+        filtered_events = events_df[events_df["Duration (Weeks)"] >= min_weeks]
+
+    # Chart - Weekly data with WMA overlay
+    fig = go.Figure()
+
+    # Weekly Price (Blue)
+    fig.add_trace(go.Scatter(
+        x=weekly_series.index, y=weekly_series,
+        name="Weekly Close",
+        line=dict(color='#2E86C1', width=2),
+        hovertemplate="Price: $%{y:,.0f}<extra></extra>"
+    ))
+
+    # Price Below WMA (Gold Overlay)
+    price_below = weekly_series.copy()
+    price_below[weekly_series >= wma_series] = None
+
+    fig.add_trace(go.Scatter(
+        x=price_below.index, y=price_below,
+        name=f"Below {window}WMA",
+        line=dict(color='#FFD700', width=2),
+        hovertemplate="Price: $%{y:,.0f}<extra></extra>",
+        showlegend=False
+    ))
+
+    # WMA Line (Red)
+    fig.add_trace(go.Scatter(
+        x=wma_series.index, y=wma_series,
+        name=f"{window}WMA",
+        line=dict(color='#E74C3C', width=1.5),
+        hovertemplate=f"{window}WMA: $%{{y:,.0f}}<extra></extra>"
+    ))
+
+    # Add Peak markers
+    if not events_df.empty and "Peak Date" in events_df.columns:
+        filtered_peak_dates = set(filtered_events["Peak Date"].dropna()) if not filtered_events.empty else set()
+        peak_data = events_df[["Peak Date", "Bottom to Peak (%)"]].dropna(subset=["Peak Date"])
+        if not peak_data.empty:
+            for _, row in peak_data.iterrows():
+                d = row["Peak Date"]
+                rally = row["Bottom to Peak (%)"]
+                if d in weekly_series.index:
+                    is_filtered = d in filtered_peak_dates
+                    rally_val = rally if pd.notna(rally) else 0
+                    fig.add_trace(go.Scatter(
+                        x=[d], y=[weekly_series.loc[d]],
+                        mode='markers',
+                        name="Peak" if is_filtered else "Peak (Filtered)",
+                        legendgroup="peak" if is_filtered else "peak_filtered",
+                        showlegend=False,
+                        visible=True if is_filtered else 'legendonly',
+                        marker=dict(
+                            symbol='diamond', size=10 if is_filtered else 7,
+                            color='#00CC96' if is_filtered else 'rgba(100, 100, 100, 0.5)',
+                            line=dict(width=1, color='white' if is_filtered else 'grey')
+                        ),
+                        hovertemplate=f"Peak: $%{{y:,.0f}} (+{rally_val:.1f}%)<br>%{{x|%b %d, %Y}}<extra></extra>"
+                    ))
+
+    # Add Bottom markers
+    if not events_df.empty and "Bottom Date" in events_df.columns:
+        filtered_bottom_dates = set(filtered_events["Bottom Date"].dropna()) if not filtered_events.empty else set()
+        bottom_data = events_df[["Bottom Date", "Max Depth (%)"]].dropna(subset=["Bottom Date"])
+        if not bottom_data.empty:
+            for _, row in bottom_data.iterrows():
+                d = row["Bottom Date"]
+                depth = row["Max Depth (%)"]
+                if d in weekly_series.index:
+                    is_filtered = d in filtered_bottom_dates
+                    depth_val = depth if pd.notna(depth) else 0
+                    fig.add_trace(go.Scatter(
+                        x=[d], y=[weekly_series.loc[d]],
+                        mode='markers',
+                        name="Bottom" if is_filtered else "Bottom (Filtered)",
+                        legendgroup="bottom" if is_filtered else "bottom_filtered",
+                        showlegend=False,
+                        visible=True if is_filtered else 'legendonly',
+                        marker=dict(
+                            symbol='triangle-down', size=10 if is_filtered else 7,
+                            color='#EF553B' if is_filtered else 'rgba(100, 100, 100, 0.5)',
+                            line=dict(width=1, color='white' if is_filtered else 'grey')
+                        ),
+                        hovertemplate=f"Bottom: $%{{y:,.0f}} ({depth_val:.1f}%)<br>%{{x|%b %d, %Y}}<extra></extra>"
+                    ))
+
+    fig.update_layout(
+        title=f"Weekly Price vs {window}WMA (Munger Indicator)",
+        template="plotly_dark",
+        height=500,
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        xaxis_title="Date",
+        xaxis=dict(range=[weekly_series.index[0], weekly_series.index[-1]]),
+        yaxis_title="Price ($)",
+        yaxis_type="log",
+        hovermode="x unified"
+    )
+    st.plotly_chart(fig, use_container_width=True, key=f"wma_chart_{key_suffix}")
+
+    if not events_df.empty:
+        # Summary Metrics
+        total_weeks = len(weekly_series)
+        if not filtered_events.empty:
+            weeks_under = filtered_events["Duration (Weeks)"].sum()
+            pct_under = (weeks_under / total_weeks) * 100 if total_weeks > 0 else 0
+
+            longest_event_idx = filtered_events["Duration (Weeks)"].idxmax()
+            longest_event = filtered_events.loc[longest_event_idx]
+            l_dur = longest_event['Duration (Weeks)']
+            l_depth = longest_event['Max Depth (%)']
+
+            # Median stats
+            median_depth = filtered_events["Max Depth (%)"].median()
+
+            if "Recovery Weeks" in filtered_events.columns:
+                recovered_events = filtered_events[filtered_events["Recovery Weeks"].notna()]
+                median_recovery = recovered_events["Recovery Weeks"].median() if not recovered_events.empty else None
+            else:
+                median_recovery = None
+
+            if "Weeks Bottom to Peak" in filtered_events.columns:
+                rally_events = filtered_events[filtered_events["Weeks Bottom to Peak"].notna()]
+                median_rally_weeks = rally_events["Weeks Bottom to Peak"].median() if not rally_events.empty else None
+            else:
+                median_rally_weeks = None
+
+            if "Bottom to Peak (%)" in filtered_events.columns:
+                rally_pct_events = filtered_events[filtered_events["Bottom to Peak (%)"].notna()]
+                median_rally_pct = rally_pct_events["Bottom to Peak (%)"].median() if not rally_pct_events.empty else None
+            else:
+                median_rally_pct = None
+
+            if "Weeks to ATH" in filtered_events.columns:
+                ath_events = filtered_events[filtered_events["Weeks to ATH"].notna()]
+                median_weeks_to_ath = ath_events["Weeks to ATH"].median() if not ath_events.empty else None
+            else:
+                median_weeks_to_ath = None
+        else:
+            weeks_under = 0
+            pct_under = 0
+            l_dur = 0
+            l_depth = 0
+            median_recovery = None
+            median_rally_weeks = None
+            median_rally_pct = None
+            median_depth = None
+            median_weeks_to_ath = None
+
+        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+
+        # Current status
+        last_event = events_df.iloc[-1]
+        last_price = weekly_series.iloc[-1]
+        last_wma = wma_series.iloc[-1]
+
+        if last_event["Status"] == "Ongoing":
+            c1.metric("Status", f"🔴 Below {window}WMA", f"{last_event['Duration (Weeks)']} weeks")
+        elif last_price < last_wma:
+            c1.metric("Status", f"🔴 Below {window}WMA", "Just started")
+        else:
+            last_end = last_event["End Date"]
+            if pd.notna(last_end):
+                weeks_above = len(weekly_series[last_end:]) - 1
+                c1.metric("Status", f"🟢 Above {window}WMA", f"{weeks_above} weeks")
+            else:
+                c1.metric("Status", f"🟢 Above {window}WMA")
+
+        c2.metric(f"Time Under {window}WMA", f"{pct_under:.1f}%", f"{weeks_under} weeks total")
+        c3.metric("Longest Period Under", f"{l_dur:.0f} weeks", f"Depth: {l_depth:.1f}%")
+        if median_depth is not None:
+            c4.metric("Median Depth", f"{median_depth:.1f}%", "Typical drawdown")
+        if median_recovery is not None:
+            c5.metric("Median Recovery", f"{median_recovery:.0f} weeks", "Start→Breakeven")
+        if median_rally_weeks is not None:
+            c6.metric("Median Rally Weeks", f"{median_rally_weeks:.0f} weeks", "Bottom→Peak")
+        if median_rally_pct is not None:
+            c7.metric("Median Full Rally", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
+        if median_weeks_to_ath is not None:
+            c8.metric("Median ATH", f"{median_weeks_to_ath:.0f} weeks", "WMA Cross→New High")
+
+        # Events Table
+        st.subheader(f"Periods Under {window}WMA")
+
+        with st.expander("ℹ️ Understanding Munger 200WMA Metrics"):
+            st.markdown(f"""
+**Why 200 Weeks (~4 Years)?**
+
+Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The 200-Week Moving Average:
+- Filters out noise from business cycles and market corrections
+- Reveals true secular trends
+- Historically, drops below the 200WMA represent major bear markets or generational buying opportunities
+
+**Historical Context:**
+- S&P 500 has dropped below its 200WMA only a handful of times in the last 50 years
+- Major instances: 1974, 2002-2003, 2008-2009, 2020 (briefly), 2022
+- These often marked exceptional long-term entry points
+
+**Table Columns:**
+| Column | Meaning |
+|--------|---------|
+| **Start / End** | When price dropped below / recovered above the {window}WMA |
+| **Weeks Under WMA** | Duration in weeks |
+| **Max Depth** | Maximum drawdown from event start |
+| **Breakeven Gain** | Rally needed from bottom to recover start price |
+| **Recovery Weeks** | Weeks from start to breakeven |
+| **Full Rally %** | Gain from bottom to subsequent peak |
+| **Rally Weeks** | Weeks from bottom to peak |
+| **Weeks to ATH** | Weeks from WMA crossover to new all-time high |
+            """)
+
+        display_df = filtered_events.copy()
+        if not display_df.empty:
+            display_df["Start"] = display_df["Start Date"].dt.date
+            display_df["End"] = display_df["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+            if "Peak Date" in display_df.columns:
+                display_df["Peak Date"] = display_df["Peak Date"].apply(lambda x: x.date() if pd.notna(x) else "-")
+
+            # Recovery Pattern Classification
+            def classify_recovery(row):
+                status = row.get("Status", "")
+                if "Recovered" not in str(status):
+                    return status
+
+                weeks = row.get("Weeks Bottom to Peak")
+                pct = row.get("Bottom to Peak (%)")
+
+                if pd.isna(weeks) or pd.isna(pct):
+                    return status
+
+                median_weeks = filtered_events["Weeks Bottom to Peak"].median()
+                median_pct = filtered_events["Bottom to Peak (%)"].median()
+
+                short_weeks = weeks <= median_weeks
+                high_pct = pct >= median_pct
+
+                if short_weeks and high_pct:
+                    return "⚡ V-Shape"
+                elif not short_weeks and high_pct:
+                    return "📈 Grind"
+                elif not short_weeks and not high_pct:
+                    return "🐌 Choppy"
+                else:
+                    return "📉 Weak"
+
+            display_df["Pattern"] = display_df.apply(classify_recovery, axis=1)
+
+            cols_map = {
+                "Start": "Start",
+                "End": "End",
+                "Duration (Weeks)": "Weeks Under WMA",
+                "Duration (Years)": "Years",
+                "Max Depth (%)": "Max Depth",
+                "Bottom to Recovery (%)": "Breakeven Gain",
+                "Subsequent Peak (%)": "Post-WMA Rally",
+                "Post-WMA Rally Weeks": "Post-WMA Rally Wks",
+                "Bottom to Peak (%)": "Full Rally %",
+                "Weeks Bottom to Peak": "Rally Weeks",
+                "Recovery Weeks": "Recovery Weeks",
+                "Weeks to ATH": "Weeks to ATH",
+                "Status": "Status",
+                "Pattern": "Pattern",
+                "Entry WMA": "Entry WMA",
+                "Exit WMA": "Exit WMA",
+                "WMA Change (%)": "WMA Δ%",
+                "True Recovery Weeks": "True Recovery"
+            }
+
+            final_cols = [c for c in cols_map.keys() if c in display_df.columns or c in ["Start", "End"]]
+            display_df = display_df[final_cols].rename(columns=cols_map)
+            display_df = display_df.sort_values("Start", ascending=False)
+
+            display_df["Status"] = display_df["Status"].apply(
+                lambda x: f"🟡 {x}" if "Ongoing" in str(x) or "Current" in str(x) else x
             )
-            
-            st.plotly_chart(hist_fig, use_container_width=True, key=f"ma_hist_{key_suffix}")
+
+            # Toggle WMA context
+            show_wma_context = st.checkbox(
+                "Show WMA Context",
+                value=False,
+                help="Show Entry WMA, Exit WMA, WMA Δ%, and True Recovery columns.",
+                key=f"wma_context_{unique_id}_{window}"
+            )
+
+            if show_wma_context:
+                final_display_cols = [
+                    "Start", "End", "Weeks Under WMA", "Years", "Max Depth", "Breakeven Gain",
+                    "Recovery Weeks", "True Recovery",
+                    "Entry WMA", "Exit WMA", "WMA Δ%",
+                    "Full Rally %", "Rally Weeks", "Post-WMA Rally", "Post-WMA Rally Wks",
+                    "Weeks to ATH", "Status", "Pattern"
+                ]
+            else:
+                final_display_cols = [
+                    "Start", "End", "Weeks Under WMA", "Years", "Max Depth", "Breakeven Gain",
+                    "Recovery Weeks",
+                    "Full Rally %", "Rally Weeks", "Post-WMA Rally", "Post-WMA Rally Wks",
+                    "Weeks to ATH", "Status", "Pattern"
+                ]
+            final_display_cols = [c for c in final_display_cols if c in display_df.columns]
+            display_df = display_df[final_display_cols]
+
+            column_config = {
+                "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the WMA", format="YYYY-MM-DD"),
+                "End": st.column_config.DateColumn("End", help="Date when price recovered above the WMA", format="YYYY-MM-DD"),
+                "Weeks Under WMA": st.column_config.NumberColumn("Weeks Under WMA", help="Total weeks spent below the WMA", format="%.0f"),
+                "Years": st.column_config.NumberColumn("Years", help="Duration in years", format="%.1f"),
+                "Max Depth": st.column_config.NumberColumn("Max Depth", help="Price drawdown from event start to lowest point", format="%.1f%%"),
+                "Breakeven Gain": st.column_config.NumberColumn("Breakeven Gain", help="% gain needed from bottom to recover start price", format="%.1f%%"),
+                "Recovery Weeks": st.column_config.NumberColumn("Recovery Weeks", help="Weeks from event start to breakeven", format="%.0f"),
+                "True Recovery": st.column_config.NumberColumn("True Recovery", help="Weeks until price ≥ start AND > WMA", format="%.0f"),
+                "Entry WMA": st.column_config.NumberColumn("Entry WMA", help="WMA value when price dropped below", format="$%.2f"),
+                "Exit WMA": st.column_config.NumberColumn("Exit WMA", help="WMA value when price recovered", format="$%.2f"),
+                "WMA Δ%": st.column_config.NumberColumn("WMA Δ%", help="WMA change during event", format="%+.1f%%"),
+                "Full Rally %": st.column_config.NumberColumn("Full Rally %", help="Gain from bottom to peak", format="%.1f%%"),
+                "Rally Weeks": st.column_config.NumberColumn("Rally Weeks", help="Weeks from bottom to peak", format="%.0f"),
+                "Post-WMA Rally": st.column_config.NumberColumn("Post-WMA Rally", help="Gain from WMA crossover to peak", format="%.1f%%"),
+                "Post-WMA Rally Wks": st.column_config.NumberColumn("Post-WMA Rally Wks", help="Weeks from WMA crossover to peak", format="%.0f"),
+                "Weeks to ATH": st.column_config.NumberColumn("Weeks to ATH", help="Weeks from WMA crossover to new ATH", format="%.0f"),
+                "Status": st.column_config.TextColumn("Status", help="Recovery status"),
+                "Pattern": st.column_config.TextColumn("Pattern", help="Recovery shape classification"),
+            }
+
+            st.dataframe(
+                display_df,
+                column_config=column_config,
+                use_container_width=True,
+                hide_index=True
+            )
+
+            # Entry Strategy Comparison Table
+            st.subheader("Entry Strategy Comparison (vs SPYSIM)")
+
+            comparison_df = calculations.compare_wma_breach_events(
+                port_series,
+                window=window,
+                tolerance_weeks=merge_tol
+            )
+
+            if not comparison_df.empty:
+                total_events = len(comparison_df)
+                breach_alpha = comparison_df["Breach Entry Alpha (%)"].dropna()
+                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna()
+
+                breach_wins = (breach_alpha > 0).sum() if len(breach_alpha) > 0 else 0
+                breach_win_rate = (breach_wins / len(breach_alpha) * 100) if len(breach_alpha) > 0 else 0
+                breach_avg = breach_alpha.mean() if len(breach_alpha) > 0 else 0
+                breach_median = breach_alpha.median() if len(breach_alpha) > 0 else 0
+
+                maxdepth_wins = (maxdepth_alpha > 0).sum() if len(maxdepth_alpha) > 0 else 0
+                maxdepth_win_rate = (maxdepth_wins / len(maxdepth_alpha) * 100) if len(maxdepth_alpha) > 0 else 0
+                maxdepth_avg = maxdepth_alpha.mean() if len(maxdepth_alpha) > 0 else 0
+                maxdepth_median = maxdepth_alpha.median() if len(maxdepth_alpha) > 0 else 0
+
+                m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
+                m1.metric("Total Events", total_events)
+                m2.metric("Breach Win Rate", f"{breach_win_rate:.1f}%")
+                m3.metric("Breach Avg Alpha", f"{breach_avg:+.1f}%")
+                m4.metric("Breach Median Alpha", f"{breach_median:+.1f}%")
+                m5.metric("Max-Depth Win Rate", f"{maxdepth_win_rate:.1f}%")
+                m6.metric("Max-Depth Avg Alpha", f"{maxdepth_avg:+.1f}%")
+                m7.metric("Max-Depth Median Alpha", f"{maxdepth_median:+.1f}%")
+                m8.metric("Events Analyzed", f"{len(breach_alpha)}/{len(maxdepth_alpha)}")
+
+                st.markdown("---")
+
+                comp_display = comparison_df.copy()
+                comp_display["Start"] = comp_display["Start Date"].dt.date
+                comp_display["End"] = comp_display["End Date"].dt.date
+                comp_display["Duration"] = comp_display["Duration (Weeks)"]
+
+                display_cols = [
+                    "Start", "End", "Duration",
+                    "Breach Entry Return (%)", "Max-Depth Entry Return (%)",
+                    "SPYSIM Breach Return (%)", "SPYSIM Max-Depth Return (%)",
+                    "Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"
+                ]
+                comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
+                comp_display = comp_display.sort_values("Start", ascending=False)
+
+                def color_alpha(val):
+                    if pd.isna(val):
+                        return ''
+                    color = '#00CC96' if val >= 0 else '#EF553B'
+                    return f'color: {color}'
+
+                alpha_cols = ["Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"]
+                alpha_cols_present = [c for c in alpha_cols if c in comp_display.columns]
+                styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+
+                comp_column_config = {
+                    "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the WMA", format="YYYY-MM-DD"),
+                    "End": st.column_config.DateColumn("End", help="Date when price recovered above the WMA", format="YYYY-MM-DD"),
+                    "Duration": st.column_config.NumberColumn("Weeks", help="Total weeks of the breach event", format="%.0f"),
+                    "Breach Entry Return (%)": st.column_config.NumberColumn("Breach Return", help="Portfolio return: entry at WMA breach date, exit at recovery", format="%.1f%%"),
+                    "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Max-Depth Return", help="Portfolio return: entry at lowest point, exit at recovery", format="%.1f%%"),
+                    "SPYSIM Breach Return (%)": st.column_config.NumberColumn("SPY Breach", help="SPYSIM return for same breach window", format="%.1f%%"),
+                    "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Max-Depth", help="SPYSIM return for same max-depth window", format="%.1f%%"),
+                    "Breach Entry Alpha (%)": st.column_config.NumberColumn("Breach Alpha", help="Outperformance vs SPY at breach entry (positive = beat SPY)", format="%+.1f%%"),
+                    "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Max-Depth Alpha", help="Outperformance vs SPY at max-depth entry (positive = beat SPY)", format="%+.1f%%"),
+                }
+
+                st.dataframe(
+                    styled_df,
+                    column_config=comp_column_config,
+                    use_container_width=True,
+                    hide_index=True,
+                    key=f"wma_comparison_table_{key_suffix}"
+                )
+            else:
+                st.info("No recovered breach events to compare. Entry comparison requires completed (recovered) events.")
 
 
 # -----------------------------------------------------------------------------

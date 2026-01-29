@@ -608,7 +608,7 @@ When yFinance data starts later than your chart, the tax engine initializes your
         st.json(raw_response)
     
     with res_tab_chart:
-        chart_subtabs = st.tabs(["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📜 Cheat Sheet"])
+        chart_subtabs = st.tabs(["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📊 Munger200WMA", "📜 Cheat Sheet"])
         
         with chart_subtabs[0]:
             if chart_style == "Classic (Combined)":
@@ -792,11 +792,14 @@ When yFinance data starts later than your chart, the tax engine initializes your
 
         with chart_subtabs[1]:
             charts.render_ma_analysis_tab(port_series, portfolio_name, portfolio_name, window=200, show_stage_analysis=False)
-            
+
         with chart_subtabs[2]:
             charts.render_ma_analysis_tab(port_series, portfolio_name, portfolio_name, window=150, show_stage_analysis=True)
-            
+
         with chart_subtabs[3]:
+            charts.render_munger_wma_tab(port_series, portfolio_name, portfolio_name, window=200)
+
+        with chart_subtabs[4]:
              charts.render_cheat_sheet(
                  port_series, 
                  portfolio_name, 
