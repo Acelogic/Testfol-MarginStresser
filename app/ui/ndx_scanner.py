@@ -1,8 +1,8 @@
 """
 NDX-100 Moving Average Scanner
 
-Scans all current Nasdaq 100 components and identifies which are trading 
-below their 200-Day Moving Average.
+Scans all current Nasdaq 100 components and identifies which are trading
+below their 200-Day Moving Average or 200-Week Moving Average (Munger).
 """
 
 import streamlit as st
@@ -203,119 +203,254 @@ def fetch_ma_data(tickers: list, tolerance_days: int = 0):
     return pd.DataFrame(results)
 
 
+@st.cache_data(ttl=900, show_spinner=False)  # 15-minute cache
+def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
+    """
+    Fetch price data and calculate 200-week WMA for all tickers.
+    Returns DataFrame with: Ticker, Price, WMA_200, Distance_Pct, Status, Max Depth, Duration (weeks)
+    """
+    if not tickers:
+        return pd.DataFrame()
+
+    results = []
+
+    try:
+        # Get 5 years of data (need 200+ weeks for WMA + buffer)
+        data = yf.download(
+            tickers,
+            period="5y",
+            auto_adjust=True,
+            threads=True,
+            progress=False
+        )['Close']
+
+        # Handle single ticker case
+        if isinstance(data, pd.Series):
+            data = data.to_frame(tickers[0])
+
+        for ticker in tickers:
+            try:
+                if ticker not in data.columns:
+                    continue
+
+                series = data[ticker].dropna()
+
+                if len(series) < 200 * 5:  # Need ~200 weeks of daily data
+                    continue
+
+                # Use the weekly MA analysis
+                weekly_series, wma_series, events_df = calculations.analyze_wma(
+                    series, window=200, tolerance_weeks=tolerance_weeks
+                )
+
+                if wma_series is None or wma_series.empty:
+                    continue
+
+                current_price = weekly_series.iloc[-1]
+                wma_200 = wma_series.iloc[-1]
+
+                distance_pct = ((current_price - wma_200) / wma_200) * 100
+
+                status = "🟢 Above"
+                duration = 0
+                max_deviation = 0.0
+
+                # Determine Status from Events
+                if not events_df.empty:
+                    last_event = events_df.iloc[-1]
+
+                    if last_event["Status"] == "Ongoing":
+                        status = "🔴 Below"
+                        duration = last_event["Duration (Weeks)"]
+
+                        # Calculate Max Depth for this event
+                        start_date = last_event["Start Date"]
+                        event_prices = weekly_series[start_date:]
+
+                        if not event_prices.empty:
+                            start_price = event_prices.iloc[0]
+                            min_price = event_prices.min()
+                            max_deviation = ((min_price - start_price) / start_price) * 100
+                    else:
+                        # Last event recovered - currently Above
+                        last_end = last_event["End Date"]
+                        if pd.notna(last_end):
+                            # Count weeks since recovery
+                            duration = len(weekly_series[weekly_series.index > last_end])
+
+                            # Calculate Max Peak for this 'Above' period
+                            valid_range = weekly_series.index > last_end
+                            above_prices = weekly_series[valid_range]
+                            above_wma = wma_series[valid_range]
+
+                            if not above_prices.empty and not above_wma.empty:
+                                deviations = ((above_prices - above_wma) / above_wma) * 100
+                                max_deviation = deviations.max()
+                        else:
+                            duration = 0
+                else:
+                    # Never below WMA in this period
+                    duration = len(weekly_series)
+                    deviations = ((weekly_series - wma_series) / wma_series) * 100
+                    max_deviation = deviations.dropna().max() if not deviations.dropna().empty else 0.0
+
+                results.append({
+                    'Ticker': ticker,
+                    'Price': current_price,
+                    'WMA_200': wma_200,
+                    'Distance %': distance_pct,
+                    'Max Depth / Peak': max_deviation,
+                    'Status': status,
+                    'Duration': duration
+                })
+
+            except Exception:
+                continue
+
+    except Exception as e:
+        st.error(f"Failed to fetch price data: {e}")
+        return pd.DataFrame()
+
+    return pd.DataFrame(results)
+
+
 def render_ndx_scanner():
     """
     Main renderer for the NDX-100 Moving Average Scanner.
     """
     st.header("📊 NDX-100 Moving Average Scanner")
-    st.caption("Identify Nasdaq 100 components trading below their 200-Day Moving Average")
-    
+
+    # MA Type selector
+    ma_type = st.radio(
+        "Moving Average Type",
+        ["200 SMA (Daily)", "200 WMA (Weekly - Munger)"],
+        horizontal=True,
+        help="**200 SMA**: 200-day moving average (short-term trends)\n\n**200 WMA**: 200-week moving average (~4 years, secular trends)"
+    )
+
+    is_weekly = ma_type == "200 WMA (Weekly - Munger)"
+    ma_label = "200 WMA" if is_weekly else "200 SMA"
+    duration_label = "weeks" if is_weekly else "days"
+
+    if is_weekly:
+        st.caption("Identify Nasdaq 100 components trading below their 200-Week Moving Average (Munger Indicator)")
+    else:
+        st.caption("Identify Nasdaq 100 components trading below their 200-Day Moving Average")
+
     # Load components
     components_df, latest_date = get_current_ndx_components()
-    
+
     # Assign Rank by Weight (it's already sorted by Weight)
     if not components_df.empty:
         components_df['Rank'] = range(1, len(components_df) + 1)
-    
+
     if components_df.empty:
         st.warning("No NDX component data available. Run the NDX rebuild script first.")
         return
-    
+
     st.info(f"📅 **Data as of:** {latest_date.strftime('%Y-%m-%d')} | **Components:** {len(components_df)}")
-    
-    # Filter controls
+
+    # Filter controls - different defaults for weekly vs daily
     c1, c2 = st.columns([3, 1])
     with c1:
-        st.write("") # Spacer
+        st.write("")  # Spacer
     with c2:
-        use_filters = st.checkbox("Apply Noise Filter (14d)", value=True, help="Merges events with <14d recovery gaps and ignores drops <14d duration")
-    
-    # Params based on checkbox
-    tol_days = 14 if use_filters else 0
-    min_days_filter = 14 if use_filters else 0
+        if is_weekly:
+            use_filters = st.checkbox(
+                "Apply Noise Filter (2w)",
+                value=True,
+                help="Merges events with <2 week recovery gaps and ignores drops <4 weeks duration"
+            )
+            tol_param = 2 if use_filters else 0
+            min_filter = 4 if use_filters else 0
+        else:
+            use_filters = st.checkbox(
+                "Apply Noise Filter (14d)",
+                value=True,
+                help="Merges events with <14d recovery gaps and ignores drops <14d duration"
+            )
+            tol_param = 14 if use_filters else 0
+            min_filter = 14 if use_filters else 0
 
     # Get tickers list
     tickers = components_df['Ticker'].tolist()
-    
+
     # Fetch MA data with progress
-    with st.spinner(f"Fetching price data for {len(tickers)} tickers..."):
-        ma_data = fetch_ma_data(tickers, tolerance_days=tol_days)
-    
+    if is_weekly:
+        with st.spinner(f"Fetching weekly price data for {len(tickers)} tickers (this may take longer)..."):
+            ma_data = fetch_wma_data(tickers, tolerance_weeks=tol_param)
+        ma_col = 'WMA_200'
+    else:
+        with st.spinner(f"Fetching price data for {len(tickers)} tickers..."):
+            ma_data = fetch_ma_data(tickers, tolerance_days=tol_param)
+        ma_col = 'SMA_200'
+
     if ma_data.empty:
         st.error("Failed to fetch moving average data.")
         return
-    
+
     # Merge with component names
     result_df = ma_data.merge(
-        components_df[['Ticker', 'Name', 'Weight', 'Rank']], 
-        on='Ticker', 
+        components_df[['Ticker', 'Name', 'Weight', 'Rank']],
+        on='Ticker',
         how='left'
     )
-    
-    # Apply Min Days Filter (Signal Filter)
-    # If Status is Below, but Duration < 14, we filter it out (or reclassify?)
-    # Usually "Signal Filter" means "Don't confirm the signal until X days".
-    # So if Below and Duration < 14, treat as Above/Noise?
-    # Simply filtering out "Below" rows that are too short is safer for a "Scanner".
-    # If users look for "Below", they want CONFIRMED below.
-    # Let's flag them? Or effectively treat them as "Above" for the "Below" filter?
-    # Simple approach: If "Below" filter is selected, enforcing Duration >= 14.
-    pass
 
     # Reorder columns
-    result_df = result_df[['Rank', 'Ticker', 'Name', 'Weight', 'Price', 'SMA_200', 'Distance %', 'Max Depth / Peak', 'Duration', 'Status']]
-    
+    result_df = result_df[['Rank', 'Ticker', 'Name', 'Weight', 'Price', ma_col, 'Distance %', 'Max Depth / Peak', 'Duration', 'Status']]
+
+    # Rename MA column for display
+    result_df = result_df.rename(columns={ma_col: ma_label})
+
     # Filter controls
     col1, col2, col3 = st.columns([2, 2, 2])
-    
+
     with col1:
         filter_option = st.selectbox(
             "Filter",
-            ["All", "🔴 Below 200 SMA", "🟢 Above 200 SMA"],
+            ["All", f"🔴 Below {ma_label}", f"🟢 Above {ma_label}"],
             index=0
         )
-    
+
     with col2:
         sort_option = st.selectbox(
             "Sort By",
             ["Distance % (Ascending)", "Distance % (Descending)", "Max Depth / Peak (Ascending)", "Max Depth / Peak (Descending)", "Weight (Descending)", "Ticker (A-Z)"],
             index=0
         )
-    
+
     # Apply filter
     filtered_df = result_df.copy()
-    
-    if filter_option == "🔴 Below 200 SMA":
+
+    if "Below" in filter_option:
         filtered_df = filtered_df[filtered_df['Distance %'] < 0]
         if use_filters:
-            filtered_df = filtered_df[filtered_df['Duration'] >= min_days_filter]
-            
-    elif filter_option == "🟢 Above 200 SMA":
-        # If noise filter is on, we might want to Include "Below" stocks that are < 14 days?
-        # No, that's confusing.
+            filtered_df = filtered_df[filtered_df['Duration'] >= min_filter]
+
+    elif "Above" in filter_option:
         filtered_df = filtered_df[filtered_df['Distance %'] >= 0]
-    
+
     # Apply sort
     if sort_option == "Distance % (Ascending)":
         filtered_df = filtered_df.sort_values('Distance %', ascending=True)
     elif sort_option == "Distance % (Descending)":
         filtered_df = filtered_df.sort_values('Distance %', ascending=False)
     elif sort_option == "Max Depth / Peak (Ascending)":
-        filtered_df = filtered_df.sort_values('Max Depth / Peak', ascending=True) # Ascending: Most Negative (Deepest) first
+        filtered_df = filtered_df.sort_values('Max Depth / Peak', ascending=True)
     elif sort_option == "Max Depth / Peak (Descending)":
-         filtered_df = filtered_df.sort_values('Max Depth / Peak', ascending=False) # Descending: Most Positive (Highest Peak) first
+        filtered_df = filtered_df.sort_values('Max Depth / Peak', ascending=False)
     elif sort_option == "Weight (Descending)":
         filtered_df = filtered_df.sort_values('Weight', ascending=False)
     elif sort_option == "Ticker (A-Z)":
         filtered_df = filtered_df.sort_values('Ticker', ascending=True)
-    
+
     # Summary stats
     below_count = len(result_df[result_df['Distance %'] < 0])
     above_count = len(result_df[result_df['Distance %'] >= 0])
-    
+
     col_s1, col_s2, col_s3 = st.columns(3)
-    col_s1.metric("🔴 Below 200 SMA", below_count)
-    col_s2.metric("🟢 Above 200 SMA", above_count)
+    col_s1.metric(f"🔴 Below {ma_label}", below_count)
+    col_s2.metric(f"🟢 Above {ma_label}", above_count)
     col_s3.metric("Total Scanned", len(result_df))
     
     # --- Quick Analyze Action ---
@@ -383,21 +518,72 @@ def render_ndx_scanner():
             else:
                 st.error("Portfolio state not initialized.")
     
-    # Display table
-    st.dataframe(
-        filtered_df.style.format({
-            'Weight': '{:.2%}',
-            'Price': '${:,.2f}',
-            'SMA_200': '${:,.2f}',
-            'Distance %': '{:+.2f}%',
-            'Max Depth / Peak': '{:+.2f}%'
-        }).applymap(
-            lambda x: 'color: #ff4b4b' if '🔴' in str(x) else 'color: #21c354',
-            subset=['Status']
+    # Display table with column configs for tooltips
+    duration_unit = "weeks" if is_weekly else "days"
+    ma_full_name = "200-Week Moving Average" if is_weekly else "200-Day Moving Average"
+
+    column_config = {
+        "Rank": st.column_config.NumberColumn(
+            "Rank",
+            help="NDX-100 weight ranking (1 = highest weight)",
+            format="%d"
         ),
+        "Ticker": st.column_config.TextColumn(
+            "Ticker",
+            help="Stock ticker symbol"
+        ),
+        "Name": st.column_config.TextColumn(
+            "Name",
+            help="Company name"
+        ),
+        "Weight": st.column_config.NumberColumn(
+            "Weight",
+            help="Weight in the NDX-100 index",
+            format="%.2f%%"
+        ),
+        "Price": st.column_config.NumberColumn(
+            "Price",
+            help="Current stock price",
+            format="$%.2f"
+        ),
+        ma_label: st.column_config.NumberColumn(
+            ma_label,
+            help=f"{ma_full_name} value",
+            format="$%.2f"
+        ),
+        "Distance %": st.column_config.NumberColumn(
+            "Distance %",
+            help=f"Percentage distance from {ma_label}. Negative = below MA, Positive = above MA",
+            format="%+.2f%%"
+        ),
+        "Max Depth / Peak": st.column_config.NumberColumn(
+            "Max Depth / Peak",
+            help=f"For stocks BELOW {ma_label}: Maximum drawdown from when price crossed below MA. For stocks ABOVE: Maximum peak above MA since recovery.",
+            format="%+.2f%%"
+        ),
+        "Duration": st.column_config.NumberColumn(
+            "Duration",
+            help=f"For stocks BELOW {ma_label}: {duration_unit.capitalize()} since price dropped below MA. For stocks ABOVE: {duration_unit.capitalize()} since price recovered above MA.",
+            format="%d"
+        ),
+        "Status": st.column_config.TextColumn(
+            "Status",
+            help=f"Current position relative to {ma_label}"
+        )
+    }
+
+    # Apply styling for status colors
+    styled_df = filtered_df.style.applymap(
+        lambda x: 'color: #ff4b4b' if '🔴' in str(x) else 'color: #21c354',
+        subset=['Status']
+    )
+
+    st.dataframe(
+        styled_df,
+        column_config=column_config,
         use_container_width=True,
         hide_index=True,
         height=600
     )
-    
-    st.caption("💡 Data cached for 15 minutes. Refresh the page to update.")
+
+    st.caption(f"💡 Data cached for 15 minutes. Duration is in {duration_unit}. Refresh the page to update.")
