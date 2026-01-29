@@ -1197,37 +1197,41 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             median_depth = None
             median_days_to_ath = None
         
-        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
-        
-        # Check current status (Show first for quick glance)
+        # Row 1: Status and key metrics
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+
+        # Check current status
         last_event = events_df.iloc[-1]
         last_price = port_series.iloc[-1]
         last_dma = dma_series.iloc[-1]
-        
+
         if last_event["Status"] == "Ongoing":
-                c1.metric("Status", f"🔴 Below {window}MA", f"{last_event['Duration (Days)']} days")
+            r1c1.metric("Status", "🔴 Below", f"{last_event['Duration (Days)']}d under {window}MA")
         elif last_price < last_dma:
-                c1.metric("Status", f"🔴 Below {window}MA", "Just started")
+            r1c1.metric("Status", "🔴 Below", f"Just crossed {window}MA")
         else:
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 days_above = (port_series.index[-1] - last_end).days
-                c1.metric("Status", f"🟢 Above {window}MA", f"{days_above} days")
+                r1c1.metric("Status", "🟢 Above", f"{days_above}d over {window}MA")
             else:
-                c1.metric("Status", f"🟢 Above {window}MA")
-        
-        c2.metric(f"Time Under {window}MA", f"{pct_under:.1f}%", f"{days_under} days total")
-        c3.metric("Longest Period Under", f"{l_dur:.0f} days", f"Depth: {l_depth:.2f}%")
+                r1c1.metric("Status", "🟢 Above", f"{window}MA")
+
+        r1c2.metric("Time Under", f"{pct_under:.1f}%", f"{days_under}d total")
+        r1c3.metric("Longest Under", f"{l_dur:.0f}d", f"Depth: {l_depth:.1f}%")
         if median_depth is not None:
-            c4.metric("Median Depth", f"{median_depth:.2f}%", "Typical drawdown")
+            r1c4.metric("Med. Depth", f"{median_depth:.1f}%", "Typical DD")
+
+        # Row 2: Recovery metrics
+        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
         if median_recovery is not None:
-             c5.metric("Median Price Recovery", f"{median_recovery:.0f} days", "Start→Breakeven")
+            r2c1.metric("Med. Recovery", f"{median_recovery:.0f}d", "Start→Even")
         if median_rally_days is not None:
-             c6.metric("Median Rally Days", f"{median_rally_days:.0f} days", "Bottom→Peak")
+            r2c2.metric("Med. Rally", f"{median_rally_days:.0f}d", "Bottom→Peak")
         if median_rally_pct is not None:
-             c7.metric("Median Full Rally", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
+            r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
         if median_days_to_ath is not None:
-            c8.metric("Median ATH", f"{median_days_to_ath:.0f} days", "MA Cross→New High")
+            r2c4.metric("To ATH", f"{median_days_to_ath:.0f}d", "Cross→New High")
         
         # Stage Analysis Display
         if show_stage_analysis and stage_series is not None and not stage_series.empty:
@@ -1757,7 +1761,8 @@ def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
             median_depth = None
             median_weeks_to_ath = None
 
-        c1, c2, c3, c4, c5, c6, c7, c8 = st.columns(8)
+        # Row 1: Status and key metrics
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
 
         # Current status
         last_event = events_df.iloc[-1]
@@ -1765,29 +1770,32 @@ def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
         last_wma = wma_series.iloc[-1]
 
         if last_event["Status"] == "Ongoing":
-            c1.metric("Status", f"🔴 Below {window}WMA", f"{last_event['Duration (Weeks)']} weeks")
+            r1c1.metric("Status", "🔴 Below", f"{last_event['Duration (Weeks)']}w under {window}WMA")
         elif last_price < last_wma:
-            c1.metric("Status", f"🔴 Below {window}WMA", "Just started")
+            r1c1.metric("Status", "🔴 Below", f"Just crossed {window}WMA")
         else:
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 weeks_above = len(weekly_series[last_end:]) - 1
-                c1.metric("Status", f"🟢 Above {window}WMA", f"{weeks_above} weeks")
+                r1c1.metric("Status", "🟢 Above", f"{weeks_above}w over {window}WMA")
             else:
-                c1.metric("Status", f"🟢 Above {window}WMA")
+                r1c1.metric("Status", "🟢 Above", f"{window}WMA")
 
-        c2.metric(f"Time Under {window}WMA", f"{pct_under:.1f}%", f"{weeks_under} weeks total")
-        c3.metric("Longest Period Under", f"{l_dur:.0f} weeks", f"Depth: {l_depth:.1f}%")
+        r1c2.metric("Time Under", f"{pct_under:.1f}%", f"{weeks_under}w total")
+        r1c3.metric("Longest Under", f"{l_dur:.0f}w", f"Depth: {l_depth:.1f}%")
         if median_depth is not None:
-            c4.metric("Median Depth", f"{median_depth:.1f}%", "Typical drawdown")
+            r1c4.metric("Med. Depth", f"{median_depth:.1f}%", "Typical DD")
+
+        # Row 2: Recovery metrics
+        r2c1, r2c2, r2c3, r2c4 = st.columns(4)
         if median_recovery is not None:
-            c5.metric("Median Recovery", f"{median_recovery:.0f} weeks", "Start→Breakeven")
+            r2c1.metric("Med. Recovery", f"{median_recovery:.0f}w", "Start→Even")
         if median_rally_weeks is not None:
-            c6.metric("Median Rally Weeks", f"{median_rally_weeks:.0f} weeks", "Bottom→Peak")
+            r2c2.metric("Med. Rally", f"{median_rally_weeks:.0f}w", "Bottom→Peak")
         if median_rally_pct is not None:
-            c7.metric("Median Full Rally", f"{median_rally_pct:.1f}%", "Bottom→Peak Gain")
+            r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
         if median_weeks_to_ath is not None:
-            c8.metric("Median ATH", f"{median_weeks_to_ath:.0f} weeks", "WMA Cross→New High")
+            r2c4.metric("To ATH", f"{median_weeks_to_ath:.0f}w", "Cross→New High")
 
         # Events Table
         st.subheader(f"Periods Under {window}WMA")
