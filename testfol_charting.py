@@ -52,7 +52,10 @@ config = render_config()
 # Note: With multi-portfolio, we validate per portfolio inside the loop or pre-check.
 # We trust configuration.py to manage weight validation visually.
 
-if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True):
+# Check for auto-run flag (e.g., from scanner loading a stock)
+auto_run = st.session_state.pop("_auto_run_backtest", False)
+
+if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True) or auto_run:
     st.divider()
     with st.spinner("Running Simulations..."):
         try:
