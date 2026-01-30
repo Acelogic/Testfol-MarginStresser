@@ -11,8 +11,14 @@ import yfinance as yf
 import os
 import json
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from app.core import calculations
+from app.services import testfol_api as api
+
+# Rate limiting for Testfol API
+TESTFOL_RATE_LIMIT = 5  # requests per second
+TESTFOL_MAX_WORKERS = 3  # concurrent threads
 
 
 # Paths to data files
@@ -78,108 +84,112 @@ def get_current_ndx_components():
 
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15-minute cache
-def fetch_ma_data(tickers: list, tolerance_days: int = 0):
+def fetch_ma_data(tickers: list, tolerance_days: int = 0, min_days_filter: int = 0):
     """
-    Fetch price data and calculate 200-day SMA for all tickers.
-    Returns DataFrame with: Ticker, Price, SMA_200, Distance_Pct, Status, Max Depth, Duration
+    Fetch FULL historical price data and calculate 200-day SMA for all tickers.
+    Returns DataFrame with: Ticker, Price, SMA_200, Distance_Pct, Status, Max Depth, Duration, Depth Rank
     """
     if not tickers:
         return pd.DataFrame()
-    
+
     results = []
-    
-    # Batch download for efficiency
+
+    # Batch download - get FULL history for depth ranking
     try:
-        # Get 2 years of data (need 200+ trading days for SMA + buffer for finding crossover)
         data = yf.download(
-            tickers, 
-            period="2y", 
-            auto_adjust=True, 
-            threads=True, 
+            tickers,
+            period="max",  # Full history for accurate depth ranking
+            auto_adjust=True,
+            threads=True,
             progress=False
         )['Close']
-        
-        # Handle single ticker case (returns Series instead of DataFrame)
+
+        # Handle single ticker case
         if isinstance(data, pd.Series):
             data = data.to_frame(tickers[0])
-        
+
         for ticker in tickers:
             try:
                 if ticker not in data.columns:
                     continue
-                    
+
                 series = data[ticker].dropna()
-                
+
                 if len(series) < 200:
                     continue
-                
+
                 # Use shared analysis logic (handles Merge Tolerance)
                 dma_series, events_df = calculations.analyze_ma(series, window=200, tolerance_days=tolerance_days)
-                
+
                 if dma_series is None or dma_series.empty:
                     continue
 
                 current_price = series.iloc[-1]
                 sma_200 = dma_series.iloc[-1]
-                
+
                 distance_pct = ((current_price - sma_200) / sma_200) * 100
-                
+
                 status = "🟢 Above"
                 duration = 0
                 max_deviation = 0.0
-                
+                depth_rank = None  # Numeric for sorting
+                total_breaches = 0
+
                 # Determine Status from Events
                 if not events_df.empty:
+                    # Apply min_days_filter to get filtered events for ranking
+                    filtered_events = events_df[events_df["Duration (Days)"] >= min_days_filter] if min_days_filter > 0 else events_df
+
+                    # Get all historical max depths for ranking
+                    all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                    total_breaches = len(all_depths)
+
                     last_event = events_df.iloc[-1]
-                    
+
                     if last_event["Status"] == "Ongoing":
                         status = "🔴 Below"
-                        duration = last_event["Duration (Days)"] # Days Under
-                        
-                        # Calculate Max Depth (as Drawdown % from Start Price) for this event
-                        # This matches calculations.py logic logic
+                        duration = last_event["Duration (Days)"]
+
+                        # Calculate current max depth
                         start_date = last_event["Start Date"]
-                        
-                        # Get data for the event duration
-                        # We need Price series to calculate drawdown
                         event_prices = series[start_date:]
-                        
+
                         if not event_prices.empty:
-                            start_price = event_prices.iloc[0] # Price at crossover
-                            min_price = event_prices.min()     # Lowest price during event
-                            
-                            # Drawdown % = (Min - Start) / Start
-                            # Should be negative
+                            start_price = event_prices.iloc[0]
+                            min_price = event_prices.min()
                             max_deviation = ((min_price - start_price) / start_price) * 100
+
+                        # Calculate depth rank (how current depth ranks among all historical)
+                        if total_breaches > 0 and max_deviation < 0:
+                            # Sort depths from deepest (most negative) to shallowest
+                            sorted_depths = sorted(all_depths)  # Most negative first
+                            # Find rank (1 = deepest)
+                            rank = 1
+                            for d in sorted_depths:
+                                if max_deviation <= d:
+                                    break
+                                rank += 1
+                            depth_rank = rank  # Numeric for proper sorting
                     else:
-                        # Last event recovered. We are currently Above.
-                        # Duration = days since recovery?
+                        # Currently Above
                         last_end = last_event["End Date"]
                         if pd.notna(last_end):
                             duration = (series.index[-1] - last_end).days
-                            
-                            # Calculate Max Peak (as Deviation %) for this 'Above' period
-                            # Start checking from the day AFTER the recovery
-                            # (or strictly > last_end)
-                            # current_above_prices = series[last_end:].iloc[1:] # Skip the crossover day if it was the recovery day?
-                            # Using direct indexing is safer: data after last_end
-                            
+
                             valid_range = series.index > last_end
                             above_prices = series[valid_range]
                             above_sma = dma_series[valid_range]
-                            
+
                             if not above_prices.empty:
                                 deviations = ((above_prices - above_sma) / above_sma) * 100
-                                max_deviation = deviations.max() # Most positive deviation (Peak)
+                                max_deviation = deviations.max()
                         else:
-                            duration = 0 
+                            duration = 0
                 else:
-                    # Never below SMA in this period (Always Above)
-                     duration = len(series) # Acts as "Days Above"
-                     
-                     # Calculate Peak for the entire loaded period
-                     deviations = ((series - dma_series) / dma_series) * 100
-                     max_deviation = deviations.max()
+                    # Never below SMA
+                    duration = len(series)
+                    deviations = ((series - dma_series) / dma_series) * 100
+                    max_deviation = deviations.max()
 
                 results.append({
                     'Ticker': ticker,
@@ -187,27 +197,27 @@ def fetch_ma_data(tickers: list, tolerance_days: int = 0):
                     'SMA_200': sma_200,
                     'Distance %': distance_pct,
                     'Max Depth / Peak': max_deviation,
+                    'Depth Rank': depth_rank,
+                    'Total Breaches': total_breaches,
                     'Status': status,
                     'Duration': duration
                 })
-                
-            except Exception as e:
-                # Debug info only if failed
-                # st.error(f"Error {ticker}: {e}") 
+
+            except Exception:
                 continue
-                
+
     except Exception as e:
         st.error(f"Failed to fetch price data: {e}")
         return pd.DataFrame()
-    
+
     return pd.DataFrame(results)
 
 
 @st.cache_data(ttl=900, show_spinner=False)  # 15-minute cache
-def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
+def fetch_wma_data(tickers: list, tolerance_weeks: int = 0, min_weeks_filter: int = 0):
     """
-    Fetch price data and calculate 200-week WMA for all tickers.
-    Returns DataFrame with: Ticker, Price, WMA_200, Distance_Pct, Status, Max Depth, Duration (weeks)
+    Fetch FULL historical price data and calculate 200-week WMA for all tickers.
+    Returns DataFrame with: Ticker, Price, WMA_200, Distance_Pct, Status, Max Depth, Duration (weeks), Depth Rank
     """
     if not tickers:
         return pd.DataFrame()
@@ -215,10 +225,10 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
     results = []
 
     try:
-        # Get 5 years of data (need 200+ weeks for WMA + buffer)
+        # Get FULL history for depth ranking
         data = yf.download(
             tickers,
-            period="5y",
+            period="max",  # Full history for accurate depth ranking
             auto_adjust=True,
             threads=True,
             progress=False
@@ -254,9 +264,18 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
                 status = "🟢 Above"
                 duration = 0
                 max_deviation = 0.0
+                depth_rank = None  # Numeric for sorting
+                total_breaches = 0
 
                 # Determine Status from Events
                 if not events_df.empty:
+                    # Apply min_weeks_filter to get filtered events for ranking
+                    filtered_events = events_df[events_df["Duration (Weeks)"] >= min_weeks_filter] if min_weeks_filter > 0 else events_df
+
+                    # Get all historical max depths for ranking
+                    all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                    total_breaches = len(all_depths)
+
                     last_event = events_df.iloc[-1]
 
                     if last_event["Status"] == "Ongoing":
@@ -271,6 +290,18 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
                             start_price = event_prices.iloc[0]
                             min_price = event_prices.min()
                             max_deviation = ((min_price - start_price) / start_price) * 100
+
+                        # Calculate depth rank (how current depth ranks among all historical)
+                        if total_breaches > 0 and max_deviation < 0:
+                            # Sort depths from deepest (most negative) to shallowest
+                            sorted_depths = sorted(all_depths)  # Most negative first
+                            # Find rank (1 = deepest)
+                            rank = 1
+                            for d in sorted_depths:
+                                if max_deviation <= d:
+                                    break
+                                rank += 1
+                            depth_rank = rank  # Numeric for proper sorting
                     else:
                         # Last event recovered - currently Above
                         last_end = last_event["End Date"]
@@ -300,6 +331,8 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
                     'WMA_200': wma_200,
                     'Distance %': distance_pct,
                     'Max Depth / Peak': max_deviation,
+                    'Depth Rank': depth_rank,
+                    'Total Breaches': total_breaches,
                     'Status': status,
                     'Duration': duration
                 })
@@ -310,6 +343,278 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0):
     except Exception as e:
         st.error(f"Failed to fetch price data: {e}")
         return pd.DataFrame()
+
+    return pd.DataFrame(results)
+
+
+def _fetch_single_ticker_testfol(ticker: str, start_date: str, end_date: str, bearer_token: str = None) -> tuple:
+    """
+    Fetch a single ticker from Testfol API.
+    Returns (ticker, series) or (ticker, None) on failure.
+    """
+    try:
+        result = api.fetch_backtest(
+            start_date=start_date,
+            end_date=end_date,
+            start_val=10000,
+            cashflow=0,
+            cashfreq="Never",
+            rolling=False,
+            invest_div=True,
+            rebalance="Never",
+            allocation={ticker: 100},
+            bearer_token=bearer_token
+        )
+
+        if result and 'series' in result:
+            series = result['series']
+            if isinstance(series, pd.DataFrame) and ticker in series.columns:
+                return (ticker, series[ticker].dropna())
+            elif isinstance(series, pd.Series):
+                return (ticker, series.dropna())
+        return (ticker, None)
+    except Exception:
+        return (ticker, None)
+
+
+@st.cache_data(ttl=900, show_spinner=False)  # 15-minute cache
+def fetch_ma_data_testfol(tickers: list, tolerance_days: int = 0, min_days_filter: int = 0, bearer_token: str = None):
+    """
+    Fetch historical price data from Testfol API and calculate 200-day SMA.
+    Uses rate limiting and parallel requests.
+    """
+    if not tickers:
+        return pd.DataFrame()
+
+    results = []
+    ticker_series = {}
+
+    # Set date range for full history
+    start_date = "1884-01-01"
+    end_date = date.today().strftime("%Y-%m-%d")
+
+    # Rate-limited parallel fetching
+    completed = 0
+    total = len(tickers)
+    last_request_time = 0
+
+    with ThreadPoolExecutor(max_workers=TESTFOL_MAX_WORKERS) as executor:
+        futures = {}
+
+        for ticker in tickers:
+            # Rate limiting
+            elapsed = time.time() - last_request_time
+            min_interval = 1.0 / TESTFOL_RATE_LIMIT
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+
+            future = executor.submit(_fetch_single_ticker_testfol, ticker, start_date, end_date, bearer_token)
+            futures[future] = ticker
+            last_request_time = time.time()
+
+        for future in as_completed(futures):
+            ticker, series = future.result()
+            completed += 1
+            if series is not None and len(series) >= 200:
+                ticker_series[ticker] = series
+
+    # Process each ticker's data
+    for ticker, series in ticker_series.items():
+        try:
+            # Use shared analysis logic
+            dma_series, events_df = calculations.analyze_ma(series, window=200, tolerance_days=tolerance_days)
+
+            if dma_series is None or dma_series.empty:
+                continue
+
+            current_price = series.iloc[-1]
+            sma_200 = dma_series.iloc[-1]
+            distance_pct = ((current_price - sma_200) / sma_200) * 100
+
+            status = "🟢 Above"
+            duration = 0
+            max_deviation = 0.0
+            depth_rank = None
+            total_breaches = 0
+
+            if not events_df.empty:
+                filtered_events = events_df[events_df["Duration (Days)"] >= min_days_filter] if min_days_filter > 0 else events_df
+                all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                total_breaches = len(all_depths)
+
+                last_event = events_df.iloc[-1]
+
+                if last_event["Status"] == "Ongoing":
+                    status = "🔴 Below"
+                    duration = last_event["Duration (Days)"]
+
+                    start_date_event = last_event["Start Date"]
+                    event_prices = series[start_date_event:]
+
+                    if not event_prices.empty:
+                        start_price = event_prices.iloc[0]
+                        min_price = event_prices.min()
+                        max_deviation = ((min_price - start_price) / start_price) * 100
+
+                    if total_breaches > 0 and max_deviation < 0:
+                        sorted_depths = sorted(all_depths)
+                        rank = 1
+                        for d in sorted_depths:
+                            if max_deviation <= d:
+                                break
+                            rank += 1
+                        depth_rank = rank
+                else:
+                    last_end = last_event["End Date"]
+                    if pd.notna(last_end):
+                        duration = (series.index[-1] - last_end).days
+                        valid_range = series.index > last_end
+                        above_prices = series[valid_range]
+                        above_sma = dma_series[valid_range]
+
+                        if not above_prices.empty:
+                            deviations = ((above_prices - above_sma) / above_sma) * 100
+                            max_deviation = deviations.max()
+            else:
+                duration = len(series)
+                deviations = ((series - dma_series) / dma_series) * 100
+                max_deviation = deviations.max()
+
+            results.append({
+                'Ticker': ticker,
+                'Price': current_price,
+                'SMA_200': sma_200,
+                'Distance %': distance_pct,
+                'Max Depth / Peak': max_deviation,
+                'Depth Rank': depth_rank,
+                'Total Breaches': total_breaches,
+                'Status': status,
+                'Duration': duration
+            })
+
+        except Exception:
+            continue
+
+    return pd.DataFrame(results)
+
+
+@st.cache_data(ttl=900, show_spinner=False)  # 15-minute cache
+def fetch_wma_data_testfol(tickers: list, tolerance_weeks: int = 0, min_weeks_filter: int = 0, bearer_token: str = None):
+    """
+    Fetch historical price data from Testfol API and calculate 200-week WMA.
+    Uses rate limiting and parallel requests.
+    """
+    if not tickers:
+        return pd.DataFrame()
+
+    results = []
+    ticker_series = {}
+
+    # Set date range for full history
+    start_date = "1884-01-01"
+    end_date = date.today().strftime("%Y-%m-%d")
+
+    # Rate-limited parallel fetching
+    completed = 0
+    total = len(tickers)
+    last_request_time = 0
+
+    with ThreadPoolExecutor(max_workers=TESTFOL_MAX_WORKERS) as executor:
+        futures = {}
+
+        for ticker in tickers:
+            # Rate limiting
+            elapsed = time.time() - last_request_time
+            min_interval = 1.0 / TESTFOL_RATE_LIMIT
+            if elapsed < min_interval:
+                time.sleep(min_interval - elapsed)
+
+            future = executor.submit(_fetch_single_ticker_testfol, ticker, start_date, end_date, bearer_token)
+            futures[future] = ticker
+            last_request_time = time.time()
+
+        for future in as_completed(futures):
+            ticker, series = future.result()
+            completed += 1
+            if series is not None and len(series) >= 200:
+                ticker_series[ticker] = series
+
+    # Process each ticker's data
+    for ticker, series in ticker_series.items():
+        try:
+            # Use shared WMA analysis logic
+            weekly_series, wma_series, events_df = calculations.analyze_wma(series, window=200, tolerance_weeks=tolerance_weeks)
+
+            if wma_series is None or wma_series.empty:
+                continue
+
+            current_price = weekly_series.iloc[-1]
+            wma_200 = wma_series.iloc[-1]
+            distance_pct = ((current_price - wma_200) / wma_200) * 100
+
+            status = "🟢 Above"
+            duration = 0
+            max_deviation = 0.0
+            depth_rank = None
+            total_breaches = 0
+
+            if not events_df.empty:
+                filtered_events = events_df[events_df["Duration (Weeks)"] >= min_weeks_filter] if min_weeks_filter > 0 else events_df
+                all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                total_breaches = len(all_depths)
+
+                last_event = events_df.iloc[-1]
+
+                if last_event["Status"] == "Ongoing":
+                    status = "🔴 Below"
+                    duration = last_event["Duration (Weeks)"]
+
+                    start_date_event = last_event["Start Date"]
+                    event_prices = weekly_series[start_date_event:]
+
+                    if not event_prices.empty:
+                        start_price = event_prices.iloc[0]
+                        min_price = event_prices.min()
+                        max_deviation = ((min_price - start_price) / start_price) * 100
+
+                    if total_breaches > 0 and max_deviation < 0:
+                        sorted_depths = sorted(all_depths)
+                        rank = 1
+                        for d in sorted_depths:
+                            if max_deviation <= d:
+                                break
+                            rank += 1
+                        depth_rank = rank
+                else:
+                    last_end = last_event["End Date"]
+                    if pd.notna(last_end):
+                        duration = len(weekly_series[weekly_series.index > last_end])
+                        valid_range = weekly_series.index > last_end
+                        above_prices = weekly_series[valid_range]
+                        above_wma = wma_series[valid_range]
+
+                        if not above_prices.empty and not above_wma.empty:
+                            deviations = ((above_prices - above_wma) / above_wma) * 100
+                            max_deviation = deviations.max()
+            else:
+                duration = len(weekly_series)
+                deviations = ((weekly_series - wma_series) / wma_series) * 100
+                max_deviation = deviations.dropna().max() if not deviations.dropna().empty else 0.0
+
+            results.append({
+                'Ticker': ticker,
+                'Price': current_price,
+                'WMA_200': wma_200,
+                'Distance %': distance_pct,
+                'Max Depth / Peak': max_deviation,
+                'Depth Rank': depth_rank,
+                'Total Breaches': total_breaches,
+                'Status': status,
+                'Duration': duration
+            })
+
+        except Exception:
+            continue
 
     return pd.DataFrame(results)
 
@@ -350,11 +655,32 @@ def render_ndx_scanner():
 
     st.info(f"📅 **Data as of:** {latest_date.strftime('%Y-%m-%d')} | **Components:** {len(components_df)}")
 
+    # Check if bearer token is available (session state or env var)
+    has_bearer_token = bool(
+        st.session_state.get("_bearer_token") or
+        os.environ.get("TESTFOL_API_KEY")
+    )
+
     # Filter controls - different defaults for weekly vs daily
-    c1, c2 = st.columns([3, 1])
+    c1, c2, c3 = st.columns([2, 1, 1])
     with c1:
-        st.write("")  # Spacer
+        if has_bearer_token:
+            use_testfol = st.checkbox(
+                "Use Testfol Data",
+                value=False,
+                help="Use Testfol API instead of yfinance. Slower (~20-30s) but consistent with backtest data and deeper history."
+            )
+        else:
+            use_testfol = False
+            st.checkbox(
+                "Use Testfol Data",
+                value=False,
+                disabled=True,
+                help="⚠️ Requires Bearer Token in sidebar API Settings (or TESTFOL_API_KEY env var)"
+            )
     with c2:
+        st.write("")  # Spacer
+    with c3:
         if is_weekly:
             use_filters = st.checkbox(
                 "Apply Noise Filter (2w)",
@@ -375,19 +701,37 @@ def render_ndx_scanner():
     # Get tickers list
     tickers = components_df['Ticker'].tolist()
 
+    # Get bearer token for Testfol API
+    bearer_token = st.session_state.get("_bearer_token") or os.environ.get("TESTFOL_API_KEY")
+
     # Fetch MA data with progress
-    if is_weekly:
-        with st.spinner(f"Fetching weekly price data for {len(tickers)} tickers (this may take longer)..."):
-            ma_data = fetch_wma_data(tickers, tolerance_weeks=tol_param)
-        ma_col = 'WMA_200'
+    if use_testfol:
+        data_source = "Testfol API"
+        if is_weekly:
+            with st.spinner(f"Fetching weekly data from Testfol API for {len(tickers)} tickers (rate limited, ~20-30s)..."):
+                ma_data = fetch_wma_data_testfol(tickers, tolerance_weeks=tol_param, min_weeks_filter=min_filter, bearer_token=bearer_token)
+            ma_col = 'WMA_200'
+        else:
+            with st.spinner(f"Fetching daily data from Testfol API for {len(tickers)} tickers (rate limited, ~20-30s)..."):
+                ma_data = fetch_ma_data_testfol(tickers, tolerance_days=tol_param, min_days_filter=min_filter, bearer_token=bearer_token)
+            ma_col = 'SMA_200'
     else:
-        with st.spinner(f"Fetching price data for {len(tickers)} tickers..."):
-            ma_data = fetch_ma_data(tickers, tolerance_days=tol_param)
-        ma_col = 'SMA_200'
+        data_source = "yfinance"
+        if is_weekly:
+            with st.spinner(f"Fetching weekly price data for {len(tickers)} tickers (this may take longer)..."):
+                ma_data = fetch_wma_data(tickers, tolerance_weeks=tol_param, min_weeks_filter=min_filter)
+            ma_col = 'WMA_200'
+        else:
+            with st.spinner(f"Fetching price data for {len(tickers)} tickers..."):
+                ma_data = fetch_ma_data(tickers, tolerance_days=tol_param, min_days_filter=min_filter)
+            ma_col = 'SMA_200'
 
     if ma_data.empty:
         st.error("Failed to fetch moving average data.")
         return
+
+    # Show data source
+    st.caption(f"📊 Data source: **{data_source}** | Tickers loaded: {len(ma_data)}/{len(tickers)}")
 
     # Merge with component names
     result_df = ma_data.merge(
@@ -397,7 +741,7 @@ def render_ndx_scanner():
     )
 
     # Reorder columns
-    result_df = result_df[['Rank', 'Ticker', 'Name', 'Weight', 'Price', ma_col, 'Distance %', 'Max Depth / Peak', 'Duration', 'Status']]
+    result_df = result_df[['Rank', 'Ticker', 'Name', 'Weight', 'Price', ma_col, 'Distance %', 'Max Depth / Peak', 'Depth Rank', 'Total Breaches', 'Duration', 'Status']]
 
     # Rename MA column for display
     result_df = result_df.rename(columns={ma_col: ma_label})
@@ -415,7 +759,7 @@ def render_ndx_scanner():
     with col2:
         sort_option = st.selectbox(
             "Sort By",
-            ["Distance % (Ascending)", "Distance % (Descending)", "Max Depth / Peak (Ascending)", "Max Depth / Peak (Descending)", "Weight (Descending)", "Ticker (A-Z)"],
+            ["Distance % (Ascending)", "Distance % (Descending)", "Depth Rank (Deepest First)", "Depth Rank (Shallowest First)", "Max Depth / Peak (Ascending)", "Max Depth / Peak (Descending)", "Weight (Descending)", "Ticker (A-Z)"],
             index=0
         )
 
@@ -435,6 +779,10 @@ def render_ndx_scanner():
         filtered_df = filtered_df.sort_values('Distance %', ascending=True)
     elif sort_option == "Distance % (Descending)":
         filtered_df = filtered_df.sort_values('Distance %', ascending=False)
+    elif sort_option == "Depth Rank (Deepest First)":
+        filtered_df = filtered_df.sort_values('Depth Rank', ascending=True, na_position='last')
+    elif sort_option == "Depth Rank (Shallowest First)":
+        filtered_df = filtered_df.sort_values('Depth Rank', ascending=False, na_position='last')
     elif sort_option == "Max Depth / Peak (Ascending)":
         filtered_df = filtered_df.sort_values('Max Depth / Peak', ascending=True)
     elif sort_option == "Max Depth / Peak (Descending)":
@@ -469,52 +817,55 @@ def render_ndx_scanner():
     with qa_col2:
         # Align button with the selectbox input (compensate for label height)
         st.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
-        if st.button("Load as New Portfolio", type="primary", use_container_width=True, disabled=not available_tickers):
-            if "portfolios" in st.session_state and st.session_state.portfolios:
-                if len(st.session_state.portfolios) < 5:
-                    import uuid
-                    new_id = f"p_scan_{uuid.uuid4().hex[:8]}"
-                    new_name = f"Analysis: {selected_ticker_analyze}"
-                    
-                    new_port = {
-                        "id": new_id,
-                        "name": new_name,
-                        "alloc_df": pd.DataFrame([
-                            {"Ticker": selected_ticker_analyze, "Weight %": 100.0, "Maint %": 25.0} # Default Maint
-                        ]),
-                        "rebalance": {
-                            "mode": "Standard",
-                            "freq": "Yearly",
-                            "month": 1,
-                            "day": 1,
-                            "compare_std": False
-                        },
-                         "cashflow": {
-                            "start_val": 10000.0,
-                            "amount": 0.0, 
-                            "freq": "Monthly", 
-                            "invest_div": True,
-                            "pay_down_margin": False
-                        }
+        if st.button("Load Stock", type="primary", use_container_width=True, disabled=not available_tickers):
+            if "portfolios" in st.session_state:
+                import uuid
+
+                # Set wide date range - Testfol API will return whatever's available
+                from datetime import date
+                st.session_state._set_start_date = date(1884, 1, 1)
+                st.session_state._set_end_date = date.today()
+
+                # Flag to auto-run backtest on next page load
+                st.session_state._auto_run_backtest = True
+
+                new_id = f"p_scan_{uuid.uuid4().hex[:8]}"
+                new_name = f"Analysis: {selected_ticker_analyze}"
+
+                new_port = {
+                    "id": new_id,
+                    "name": new_name,
+                    "alloc_df": pd.DataFrame([
+                        {"Ticker": selected_ticker_analyze, "Weight %": 100.0, "Maint %": 25.0}
+                    ]),
+                    "rebalance": {
+                        "mode": "Standard",
+                        "freq": "Yearly",
+                        "month": 1,
+                        "day": 1,
+                        "compare_std": False
+                    },
+                    "cashflow": {
+                        "start_val": 10000.0,
+                        "amount": 0.0,
+                        "freq": "Monthly",
+                        "invest_div": True,
+                        "pay_down_margin": False
                     }
-                    
-                    st.session_state.portfolios.append(new_port)
-                    
-                    # Auto-select this new portfolio
-                    # We cannot modify 'portfolio_selector' directly after it's been rendered.
-                    # Instead, we update the index and clear the widget key to force a reset to default.
-                    st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
-                    
-                    if "portfolio_selector" in st.session_state:
-                        del st.session_state.portfolio_selector
-                    
-                    st.toast(f"✅ Added '{new_name}'! Switch to the Portfolio tab to view.", icon="🚀")
-                    
-                    # Rerun to refresh the app state
-                    time.sleep(0.5) # smooth transition
-                    st.rerun()
-                else:
-                    st.error("Maximum of 5 portfolios reached. Please delete one first.")
+                }
+
+                # Clear all portfolios and set only this one
+                st.session_state.portfolios = [new_port]
+                st.session_state.active_tab_idx = 0
+
+                if "portfolio_selector" in st.session_state:
+                    del st.session_state.portfolio_selector
+
+                st.toast(f"✅ Loaded '{selected_ticker_analyze}' with full history! Switch to Portfolio tab.", icon="🚀")
+
+                # Rerun to refresh the app state
+                time.sleep(0.3)
+                st.rerun()
             else:
                 st.error("Portfolio state not initialized.")
     
@@ -560,6 +911,16 @@ def render_ndx_scanner():
             "Max Depth / Peak",
             help=f"For stocks BELOW {ma_label}: Maximum drawdown from when price crossed below MA. For stocks ABOVE: Maximum peak above MA since recovery.",
             format="%+.2f%%"
+        ),
+        "Depth Rank": st.column_config.NumberColumn(
+            "Depth Rank",
+            help=f"Ranks current drawdown among ALL historical {ma_label} breaches. 1 = deepest ever. Empty = currently above MA.",
+            format="%d"
+        ),
+        "Total Breaches": st.column_config.NumberColumn(
+            "Total Breaches",
+            help=f"Total number of {ma_label} breach events in the stock's history (with filtering applied).",
+            format="%d"
         ),
         "Duration": st.column_config.NumberColumn(
             "Duration",

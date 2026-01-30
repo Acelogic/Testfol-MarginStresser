@@ -1174,9 +1174,12 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             else:
                 median_rally_pct = None
             
-            # Calculate median max depth
+            # Calculate median max depth and range
             median_depth = filtered_events["Max Depth (%)"].median()
-            
+            min_depth = filtered_events["Max Depth (%)"].min()  # Most negative = deepest
+            max_depth = filtered_events["Max Depth (%)"].max()  # Least negative = shallowest
+            total_breaches = len(filtered_events)
+
             # Calculate median Days to ATH (only for events that reached ATH)
             if "Days to ATH" in filtered_events.columns:
                 ath_events = filtered_events[filtered_events["Days to ATH"].notna()]
@@ -1195,44 +1198,126 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             median_rally_days = None
             median_rally_pct = None
             median_depth = None
+            min_depth = None
+            max_depth = None
+            total_breaches = 0
             median_days_to_ath = None
         
-        # Row 1: Status and key metrics
-        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-
-        # Check current status
-        last_event = events_df.iloc[-1]
+        # Check current status and calculate depth metrics
         last_price = port_series.iloc[-1]
         last_dma = dma_series.iloc[-1]
+        current_depth = None
+        current_depth_rank = None
+        is_below = False
+        status_text = ""
+        status_delta = ""
 
-        if last_event["Status"] == "Ongoing":
-            r1c1.metric("Status", "🔴 Below", f"{last_event['Duration (Days)']}d under {window}MA")
+        if events_df.empty:
+            if last_price >= last_dma:
+                status_text = "🟢 Above"
+                status_delta = f"Never below {window}MA"
+            else:
+                status_text = "🔴 Below"
+                status_delta = f"First breach of {window}MA"
+                is_below = True
+        elif events_df.iloc[-1]["Status"] == "Ongoing":
+            last_event = events_df.iloc[-1]
+            status_text = "🔴 Below"
+            status_delta = f"{last_event['Duration (Days)']}d under {window}MA"
+            is_below = True
+            # Calculate current depth
+            start_date = last_event["Start Date"]
+            event_prices = port_series[start_date:]
+            if not event_prices.empty:
+                start_price_val = event_prices.iloc[0]
+                min_price = event_prices.min()
+                current_depth = ((min_price - start_price_val) / start_price_val) * 100
+                # Calculate depth rank
+                if total_breaches > 0 and min_depth is not None:
+                    all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                    sorted_depths = sorted(all_depths)
+                    current_depth_rank = 1
+                    for d in sorted_depths:
+                        if current_depth <= d:
+                            break
+                        current_depth_rank += 1
         elif last_price < last_dma:
-            r1c1.metric("Status", "🔴 Below", f"Just crossed {window}MA")
+            status_text = "🔴 Below"
+            status_delta = f"Just crossed {window}MA"
+            is_below = True
         else:
+            last_event = events_df.iloc[-1]
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 days_above = (port_series.index[-1] - last_end).days
-                r1c1.metric("Status", "🟢 Above", f"{days_above}d over {window}MA")
+                status_text = "🟢 Above"
+                status_delta = f"{days_above}d over {window}MA"
             else:
-                r1c1.metric("Status", "🟢 Above", f"{window}MA")
+                status_text = "🟢 Above"
+                status_delta = f"{window}MA"
 
-        r1c2.metric("Time Under", f"{pct_under:.1f}%", f"{days_under}d total")
-        r1c3.metric("Longest Under", f"{l_dur:.0f}d", f"Depth: {l_depth:.1f}%")
-        if median_depth is not None:
-            r1c4.metric("Med. Depth", f"{median_depth:.1f}%", "Typical DD")
+        # Calculate recovery stats from similar depths (for below MA state)
+        recovery_rate_similar = None
+        num_similar = 0
+        num_recovered = 0
+        med_recovery_similar = None
+        max_recovery_similar = None
 
-        # Row 2: Recovery metrics
+        if is_below and current_depth is not None and total_breaches >= 1:
+            similar_or_deeper = filtered_events[filtered_events["Max Depth (%)"] <= current_depth]
+            num_similar = len(similar_or_deeper)
+            if num_similar > 0:
+                recovered = similar_or_deeper[similar_or_deeper["Status"] == "Recovered"]
+                num_recovered = len(recovered)
+                recovery_rate_similar = (num_recovered / num_similar) * 100
+                if num_recovered > 0 and "Recovery Days" in recovered.columns:
+                    recovery_days = recovered["Recovery Days"].dropna()
+                    if not recovery_days.empty:
+                        med_recovery_similar = recovery_days.median()
+                        max_recovery_similar = recovery_days.max()
+
+        # Row 1: Current State (4 cols)
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        r1c1.metric("Status", status_text, status_delta)
+
+        if current_depth is not None:
+            rank_text = f"Rank #{current_depth_rank}/{total_breaches}" if current_depth_rank else ""
+            r1c2.metric("Current Depth", f"{current_depth:.1f}%", rank_text)
+        elif median_depth is not None:
+            depth_range = f"Range: {min_depth:.0f}% to {max_depth:.0f}%" if min_depth is not None else ""
+            r1c2.metric("Med. Depth", f"{median_depth:.1f}%", depth_range)
+
+        r1c3.metric("Time Under", f"{pct_under:.1f}%", f"{days_under}d total")
+        r1c4.metric("Longest", f"{l_dur:.0f}d", f"Depth: {l_depth:.1f}%")
+
+        # Row 2: Recovery Outlook (4 cols)
         r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-        if median_recovery is not None:
-            r2c1.metric("Med. Recovery", f"{median_recovery:.0f}d", "Start→Even")
-        if median_rally_days is not None:
-            r2c2.metric("Med. Rally", f"{median_rally_days:.0f}d", "Bottom→Peak")
-        if median_rally_pct is not None:
-            r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
-        if median_days_to_ath is not None:
-            r2c4.metric("To ATH", f"{median_days_to_ath:.0f}d", "Cross→New High")
-        
+
+        if is_below and recovery_rate_similar is not None:
+            # Show recovery outlook for current situation
+            r2c1.metric("Recovery Rate", f"{recovery_rate_similar:.0f}%", f"{num_recovered}/{num_similar} similar")
+            if med_recovery_similar is not None:
+                r2c2.metric("Similar Recovery", f"{med_recovery_similar:.0f}d", f"Max: {max_recovery_similar:.0f}d")
+            elif median_recovery is not None:
+                r2c2.metric("Med. Recovery", f"{median_recovery:.0f}d", "Start→Even")
+            if median_rally_pct is not None and median_rally_days is not None:
+                r2c3.metric("Med. Rally", f"{median_rally_pct:.1f}%", f"{median_rally_days:.0f}d Bottom→Peak")
+            elif median_rally_pct is not None:
+                r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
+            if median_days_to_ath is not None:
+                r2c4.metric("To ATH", f"{median_days_to_ath:.0f}d", "Cross→New High")
+        else:
+            # Show general historical stats
+            if median_recovery is not None:
+                r2c1.metric("Med. Recovery", f"{median_recovery:.0f}d", "Start→Even")
+            if median_rally_pct is not None and median_rally_days is not None:
+                r2c2.metric("Med. Rally", f"{median_rally_pct:.1f}%", f"{median_rally_days:.0f}d Bottom→Peak")
+            elif median_rally_days is not None:
+                r2c2.metric("Med. Rally", f"{median_rally_days:.0f}d", "Bottom→Peak")
+            if median_days_to_ath is not None:
+                r2c3.metric("To ATH", f"{median_days_to_ath:.0f}d", "Cross→New High")
+            r2c4.metric("# Breaches", f"{total_breaches}", "Historical events")
+
         # Stage Analysis Display
         if show_stage_analysis and stage_series is not None and not stage_series.empty:
             current_stage = stage_series.iloc[-1]
@@ -1289,16 +1374,30 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         
         with st.expander("ℹ️ Understanding the Metrics"):
             st.markdown(f"""
-**Summary Metrics (Top Row):**
+**Row 1 - Current State:**
 | Metric | Meaning |
 |--------|---------|
-| **Status** | Current position: 🟢 Above or 🔴 Below the {window}MA |
-| **Time Under {window}MA** | Total % of the period where price was below the moving average |
-| **Longest Period Under** | The single longest continuous stretch below the MA, with its max depth |
-| **Median Depth** | Typical (median) drawdown below the MA |
-| **Median Price Recovery** | Typical (median) days from event start to recover the start price (breakeven) |
-| **Median Rally** | Typical (median) days from the lowest point to the subsequent peak |
-| **Median ATH** | Typical (median) number of days from MA crossover to a new all-time high |
+| **Status** | Current position: 🟢 Above or 🔴 Below the {window}MA, with duration |
+| **Current Depth** | *(When below MA)* Current drawdown from breach start, with rank among all historical breaches (1 = deepest) |
+| **Med. Depth** | *(When above MA)* Typical (median) drawdown, with historical range |
+| **Time Under** | Total % of the period spent below the MA, with total days |
+| **Longest** | The single longest breach, with its max depth |
+
+**Row 2 - Recovery Outlook** *(when below MA)*:
+| Metric | Meaning |
+|--------|---------|
+| **Recovery Rate** | % of historical breaches at similar depth that recovered, with count |
+| **Similar Recovery** | Median recovery time from breaches of similar or greater depth, with max |
+| **Med. Rally** | Typical rally gain from bottom to peak, with duration |
+| **To ATH** | Typical days from MA crossover to new all-time high |
+
+**Row 2 - Historical Stats** *(when above MA)*:
+| Metric | Meaning |
+|--------|---------|
+| **Med. Recovery** | Typical days from breach start to breakeven (price back to start) |
+| **Med. Rally** | Typical rally gain from bottom to peak, with duration |
+| **To ATH** | Typical days from MA crossover to new all-time high |
+| **# Breaches** | Total historical breach events |
 
 **Table Columns:**
 | Column | Meaning |
@@ -1471,7 +1570,31 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             )
 
             # Entry Strategy Comparison Table
-            st.subheader("Entry Strategy Comparison (vs SPYSIM)")
+            st.subheader(f"{portfolio_name} Entry Strategy Comparison (vs SPYSIM)")
+
+            with st.expander("ℹ️ Understanding the Metrics"):
+                st.markdown("""
+**Strategy:** Buy at the **maximum depth** (lowest point) during each MA breach, sell when price recovers above the MA. Compare returns to buying SPY at the same time.
+
+**Summary Metrics:**
+| Metric | Meaning |
+|--------|---------|
+| **Total Events** | Number of completed (recovered) breach events analyzed |
+| **Win Rate** | % of events where buying at max-depth beat buying SPY |
+| **Avg Alpha** | Average outperformance vs SPY across all events |
+| **Median Alpha** | Typical (median) outperformance vs SPY |
+
+**Table Columns:**
+| Column | Meaning |
+|--------|---------|
+| **Start / End** | When price dropped below / recovered above the MA |
+| **Days/Weeks** | Duration of the breach event |
+| **Max Depth** | Maximum drawdown from breach start price during this event |
+| **Depth Rank** | Depth rank among all breaches (1 = deepest in history) |
+| **Return** | Portfolio return from max-depth entry to recovery |
+| **SPY Return** | SPYSIM return for the same window (max-depth to recovery) |
+| **Alpha** | Outperformance vs SPY (Return - SPY Return). Green = beat SPY, Red = underperformed |
+                """)
 
             comparison_df = calculations.compare_breach_events(
                 port_series,
@@ -1479,92 +1602,108 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                 tolerance_days=merge_tol
             )
 
-            # Summary Statistics Row
-            if not comparison_df.empty:
-                total_events = len(comparison_df)
+            # Also get ongoing event if exists (from the full events_df)
+            _, all_events_df = calculations.analyze_ma(port_series, window=window, tolerance_days=merge_tol)
+            ongoing_event = None
+            if not all_events_df.empty:
+                last_event = all_events_df.iloc[-1]
+                if last_event["Status"] == "Ongoing":
+                    ongoing_event = last_event
 
-                # Extract alpha columns with NA handling
-                breach_alpha = comparison_df["Breach Entry Alpha (%)"].dropna()
-                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna()
+            # Summary Statistics Row (only from recovered events)
+            if not comparison_df.empty or ongoing_event is not None:
+                total_recovered = len(comparison_df) if not comparison_df.empty else 0
+
+                # Extract alpha column with NA handling
+                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna() if not comparison_df.empty else pd.Series(dtype=float)
 
                 # Calculate statistics
-                breach_wins = (breach_alpha > 0).sum() if len(breach_alpha) > 0 else 0
-                breach_win_rate = (breach_wins / len(breach_alpha) * 100) if len(breach_alpha) > 0 else 0
-                breach_avg = breach_alpha.mean() if len(breach_alpha) > 0 else 0
-                breach_median = breach_alpha.median() if len(breach_alpha) > 0 else 0
-
                 maxdepth_wins = (maxdepth_alpha > 0).sum() if len(maxdepth_alpha) > 0 else 0
                 maxdepth_win_rate = (maxdepth_wins / len(maxdepth_alpha) * 100) if len(maxdepth_alpha) > 0 else 0
                 maxdepth_avg = maxdepth_alpha.mean() if len(maxdepth_alpha) > 0 else 0
                 maxdepth_median = maxdepth_alpha.median() if len(maxdepth_alpha) > 0 else 0
 
-                # Display 8-column metrics row
-                m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
-                m1.metric("Total Events", total_events)
-                m2.metric("Breach Win Rate", f"{breach_win_rate:.1f}%")
-                m3.metric("Breach Avg Alpha", f"{breach_avg:+.1f}%")
-                m4.metric("Breach Median Alpha", f"{breach_median:+.1f}%")
-                m5.metric("Max-Depth Win Rate", f"{maxdepth_win_rate:.1f}%")
-                m6.metric("Max-Depth Avg Alpha", f"{maxdepth_avg:+.1f}%")
-                m7.metric("Max-Depth Median Alpha", f"{maxdepth_median:+.1f}%")
-                m8.metric("Events Analyzed", f"{len(breach_alpha)}/{len(maxdepth_alpha)}")
+                # Display metrics row
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Total Events", total_recovered + (1 if ongoing_event is not None else 0))
+                m2.metric("Win Rate", f"{maxdepth_win_rate:.1f}%", help="% of recovered events where max-depth entry beat SPY")
+                m3.metric("Avg Alpha", f"{maxdepth_avg:+.1f}%", help="Average outperformance vs SPY (recovered events)")
+                m4.metric("Median Alpha", f"{maxdepth_median:+.1f}%", help="Median outperformance vs SPY (recovered events)")
+                m5.metric("Events Analyzed", f"{len(maxdepth_alpha)}/{total_recovered}" + (" +1 ongoing" if ongoing_event is not None else ""))
 
                 st.markdown("---")
 
                 # Prepare display DataFrame
-                comp_display = comparison_df.copy()
+                comp_display = comparison_df.copy() if not comparison_df.empty else pd.DataFrame()
 
-                # Convert date columns to .date for cleaner display
-                comp_display["Start"] = comp_display["Start Date"].dt.date
-                comp_display["End"] = comp_display["End Date"].dt.date
-                comp_display["Duration"] = comp_display["Duration (Days)"]
+                # Add ongoing event to display if exists
+                if ongoing_event is not None:
+                    ongoing_row = {
+                        "Start Date": ongoing_event["Start Date"],
+                        "End Date": pd.NaT,
+                        "Duration (Days)": ongoing_event["Duration (Days)"],
+                        "Max Depth (%)": ongoing_event["Max Depth (%)"],
+                        "Max-Depth Entry Return (%)": None,
+                        "SPYSIM Max-Depth Return (%)": None,
+                        "Max-Depth Entry Alpha (%)": None,
+                        "Status": "🟠 Ongoing"
+                    }
+                    ongoing_df = pd.DataFrame([ongoing_row])
+                    comp_display = pd.concat([ongoing_df, comp_display], ignore_index=True)
 
-                # Select and order columns for display
-                display_cols = [
-                    "Start", "End", "Duration",
-                    "Breach Entry Return (%)", "Max-Depth Entry Return (%)",
-                    "SPYSIM Breach Return (%)", "SPYSIM Max-Depth Return (%)",
-                    "Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"
-                ]
-                comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
+                if not comp_display.empty:
+                    # Convert date columns to .date for cleaner display
+                    comp_display["Start"] = comp_display["Start Date"].dt.date
+                    comp_display["End"] = comp_display["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+                    comp_display["Duration"] = comp_display["Duration (Days)"]
 
-                # Sort by Start descending (most recent first)
-                comp_display = comp_display.sort_values("Start", ascending=False)
+                    # Calculate Depth Rank across ALL events including ongoing (1 = deepest)
+                    if "Max Depth (%)" in comp_display.columns:
+                        comp_display["Depth Rank"] = comp_display["Max Depth (%)"].rank(method='min').astype(int)
 
-                # Color styling function for alpha columns
-                def color_alpha(val):
-                    if pd.isna(val):
-                        return ''
-                    color = '#00CC96' if val >= 0 else '#EF553B'
-                    return f'color: {color}'
+                    # Select and order columns for display (max-depth entry only)
+                    display_cols = [
+                        "Start", "End", "Duration", "Max Depth (%)", "Depth Rank",
+                        "Max-Depth Entry Return (%)", "SPYSIM Max-Depth Return (%)",
+                        "Max-Depth Entry Alpha (%)"
+                    ]
+                    comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
 
-                # Apply styling to alpha columns
-                alpha_cols = ["Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"]
-                alpha_cols_present = [c for c in alpha_cols if c in comp_display.columns]
-                styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+                    # Sort by Start descending (most recent first)
+                    comp_display = comp_display.sort_values("Start", ascending=False)
 
-                # Column config with tooltips
-                comp_column_config = {
-                    "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the MA", format="YYYY-MM-DD"),
-                    "End": st.column_config.DateColumn("End", help="Date when price recovered above the MA", format="YYYY-MM-DD"),
-                    "Duration": st.column_config.NumberColumn("Duration", help="Total calendar days of the breach event", format="%.0f"),
-                    "Breach Entry Return (%)": st.column_config.NumberColumn("Breach Return", help="Portfolio return: entry at breach date, exit at recovery", format="%.1f%%"),
-                    "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Max-Depth Return", help="Portfolio return: entry at lowest point, exit at recovery", format="%.1f%%"),
-                    "SPYSIM Breach Return (%)": st.column_config.NumberColumn("SPY Breach", help="SPYSIM return for same breach window", format="%.1f%%"),
-                    "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Max-Depth", help="SPYSIM return for same max-depth window", format="%.1f%%"),
-                    "Breach Entry Alpha (%)": st.column_config.NumberColumn("Breach Alpha", help="Outperformance vs SPY at breach entry (positive = beat SPY)", format="%+.1f%%"),
-                    "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Max-Depth Alpha", help="Outperformance vs SPY at max-depth entry (positive = beat SPY)", format="%+.1f%%"),
-                }
+                    # Color styling function for alpha columns
+                    def color_alpha(val):
+                        if pd.isna(val):
+                            return ''
+                        color = '#00CC96' if val >= 0 else '#EF553B'
+                        return f'color: {color}'
 
-                st.dataframe(
-                    styled_df,
-                    column_config=comp_column_config,
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"comparison_table_{key_suffix}"
-                )
+                    # Apply styling to alpha column
+                    alpha_cols_present = [c for c in ["Max-Depth Entry Alpha (%)"] if c in comp_display.columns]
+                    styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+
+                    # Column config with tooltips
+                    comp_column_config = {
+                        "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the MA", format="YYYY-MM-DD"),
+                        "End": st.column_config.TextColumn("End", help="Date when price recovered above the MA (or 'Ongoing')"),
+                        "Duration": st.column_config.NumberColumn("Days", help="Total calendar days of the breach event", format="%.0f"),
+                        "Max Depth (%)": st.column_config.NumberColumn("Max Depth", help="Maximum drawdown from breach start price during this event", format="%.1f%%"),
+                        "Depth Rank": st.column_config.NumberColumn("Depth Rank", help="Depth rank among all breaches (1 = deepest)", format="%d"),
+                        "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Return", help="Portfolio return: entry at lowest point during breach, exit at recovery", format="%.1f%%"),
+                        "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Return", help="SPYSIM return for same max-depth to recovery window", format="%.1f%%"),
+                        "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Alpha", help="Outperformance vs SPY (positive = beat SPY)", format="%+.1f%%"),
+                    }
+
+                    st.dataframe(
+                        styled_df,
+                        column_config=comp_column_config,
+                        use_container_width=True,
+                        hide_index=True,
+                        key=f"comparison_table_{key_suffix}"
+                    )
             else:
-                st.info("No recovered breach events to compare. Entry comparison requires completed (recovered) events.")
+                st.info("No breach events to display.")
 
 
 # -----------------------------------------------------------------------------
@@ -1724,8 +1863,11 @@ def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
             l_dur = longest_event['Duration (Weeks)']
             l_depth = longest_event['Max Depth (%)']
 
-            # Median stats
+            # Median stats and range
             median_depth = filtered_events["Max Depth (%)"].median()
+            min_depth = filtered_events["Max Depth (%)"].min()
+            max_depth = filtered_events["Max Depth (%)"].max()
+            total_breaches = len(filtered_events)
 
             if "Recovery Weeks" in filtered_events.columns:
                 recovered_events = filtered_events[filtered_events["Recovery Weeks"].notna()]
@@ -1759,43 +1901,125 @@ def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
             median_rally_weeks = None
             median_rally_pct = None
             median_depth = None
+            min_depth = None
+            max_depth = None
+            total_breaches = 0
             median_weeks_to_ath = None
 
-        # Row 1: Status and key metrics
-        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
-
-        # Current status
-        last_event = events_df.iloc[-1]
+        # Check current status and calculate depth metrics
         last_price = weekly_series.iloc[-1]
         last_wma = wma_series.iloc[-1]
+        current_depth = None
+        current_depth_rank = None
+        is_below = False
+        status_text = ""
+        status_delta = ""
 
-        if last_event["Status"] == "Ongoing":
-            r1c1.metric("Status", "🔴 Below", f"{last_event['Duration (Weeks)']}w under {window}WMA")
+        if events_df.empty:
+            if last_price >= last_wma:
+                status_text = "🟢 Above"
+                status_delta = f"Never below {window}WMA"
+            else:
+                status_text = "🔴 Below"
+                status_delta = f"First breach of {window}WMA"
+                is_below = True
+        elif events_df.iloc[-1]["Status"] == "Ongoing":
+            last_event = events_df.iloc[-1]
+            status_text = "🔴 Below"
+            status_delta = f"{last_event['Duration (Weeks)']}w under {window}WMA"
+            is_below = True
+            # Calculate current depth
+            start_date = last_event["Start Date"]
+            event_prices = weekly_series[start_date:]
+            if not event_prices.empty:
+                start_price_val = event_prices.iloc[0]
+                min_price = event_prices.min()
+                current_depth = ((min_price - start_price_val) / start_price_val) * 100
+                # Calculate depth rank
+                if total_breaches > 0 and min_depth is not None:
+                    all_depths = filtered_events["Max Depth (%)"].dropna().tolist()
+                    sorted_depths = sorted(all_depths)
+                    current_depth_rank = 1
+                    for d in sorted_depths:
+                        if current_depth <= d:
+                            break
+                        current_depth_rank += 1
         elif last_price < last_wma:
-            r1c1.metric("Status", "🔴 Below", f"Just crossed {window}WMA")
+            status_text = "🔴 Below"
+            status_delta = f"Just crossed {window}WMA"
+            is_below = True
         else:
+            last_event = events_df.iloc[-1]
             last_end = last_event["End Date"]
             if pd.notna(last_end):
                 weeks_above = len(weekly_series[last_end:]) - 1
-                r1c1.metric("Status", "🟢 Above", f"{weeks_above}w over {window}WMA")
+                status_text = "🟢 Above"
+                status_delta = f"{weeks_above}w over {window}WMA"
             else:
-                r1c1.metric("Status", "🟢 Above", f"{window}WMA")
+                status_text = "🟢 Above"
+                status_delta = f"{window}WMA"
 
-        r1c2.metric("Time Under", f"{pct_under:.1f}%", f"{weeks_under}w total")
-        r1c3.metric("Longest Under", f"{l_dur:.0f}w", f"Depth: {l_depth:.1f}%")
-        if median_depth is not None:
-            r1c4.metric("Med. Depth", f"{median_depth:.1f}%", "Typical DD")
+        # Calculate recovery stats from similar depths (for below WMA state)
+        recovery_rate_similar = None
+        num_similar = 0
+        num_recovered = 0
+        med_recovery_similar = None
+        max_recovery_similar = None
 
-        # Row 2: Recovery metrics
+        if is_below and current_depth is not None and total_breaches >= 1:
+            similar_or_deeper = filtered_events[filtered_events["Max Depth (%)"] <= current_depth]
+            num_similar = len(similar_or_deeper)
+            if num_similar > 0:
+                recovered = similar_or_deeper[similar_or_deeper["Status"] == "Recovered"]
+                num_recovered = len(recovered)
+                recovery_rate_similar = (num_recovered / num_similar) * 100
+                if num_recovered > 0 and "Recovery Weeks" in recovered.columns:
+                    recovery_weeks_data = recovered["Recovery Weeks"].dropna()
+                    if not recovery_weeks_data.empty:
+                        med_recovery_similar = recovery_weeks_data.median()
+                        max_recovery_similar = recovery_weeks_data.max()
+
+        # Row 1: Current State (4 cols)
+        r1c1, r1c2, r1c3, r1c4 = st.columns(4)
+        r1c1.metric("Status", status_text, status_delta)
+
+        if current_depth is not None:
+            rank_text = f"Rank #{current_depth_rank}/{total_breaches}" if current_depth_rank else ""
+            r1c2.metric("Current Depth", f"{current_depth:.1f}%", rank_text)
+        elif median_depth is not None:
+            depth_range = f"Range: {min_depth:.0f}% to {max_depth:.0f}%" if min_depth is not None else ""
+            r1c2.metric("Med. Depth", f"{median_depth:.1f}%", depth_range)
+
+        r1c3.metric("Time Under", f"{pct_under:.1f}%", f"{weeks_under}w total")
+        r1c4.metric("Longest", f"{l_dur:.0f}w", f"Depth: {l_depth:.1f}%")
+
+        # Row 2: Recovery Outlook (4 cols)
         r2c1, r2c2, r2c3, r2c4 = st.columns(4)
-        if median_recovery is not None:
-            r2c1.metric("Med. Recovery", f"{median_recovery:.0f}w", "Start→Even")
-        if median_rally_weeks is not None:
-            r2c2.metric("Med. Rally", f"{median_rally_weeks:.0f}w", "Bottom→Peak")
-        if median_rally_pct is not None:
-            r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
-        if median_weeks_to_ath is not None:
-            r2c4.metric("To ATH", f"{median_weeks_to_ath:.0f}w", "Cross→New High")
+
+        if is_below and recovery_rate_similar is not None:
+            # Show recovery outlook for current situation
+            r2c1.metric("Recovery Rate", f"{recovery_rate_similar:.0f}%", f"{num_recovered}/{num_similar} similar")
+            if med_recovery_similar is not None:
+                r2c2.metric("Similar Recovery", f"{med_recovery_similar:.0f}w", f"Max: {max_recovery_similar:.0f}w")
+            elif median_recovery is not None:
+                r2c2.metric("Med. Recovery", f"{median_recovery:.0f}w", "Start→Even")
+            if median_rally_pct is not None and median_rally_weeks is not None:
+                r2c3.metric("Med. Rally", f"{median_rally_pct:.1f}%", f"{median_rally_weeks:.0f}w Bottom→Peak")
+            elif median_rally_pct is not None:
+                r2c3.metric("Rally Gain", f"{median_rally_pct:.1f}%", "Bottom→Peak")
+            if median_weeks_to_ath is not None:
+                r2c4.metric("To ATH", f"{median_weeks_to_ath:.0f}w", "Cross→New High")
+        else:
+            # Show general historical stats
+            if median_recovery is not None:
+                r2c1.metric("Med. Recovery", f"{median_recovery:.0f}w", "Start→Even")
+            if median_rally_pct is not None and median_rally_weeks is not None:
+                r2c2.metric("Med. Rally", f"{median_rally_pct:.1f}%", f"{median_rally_weeks:.0f}w Bottom→Peak")
+            elif median_rally_weeks is not None:
+                r2c2.metric("Med. Rally", f"{median_rally_weeks:.0f}w", "Bottom→Peak")
+            if median_weeks_to_ath is not None:
+                r2c3.metric("To ATH", f"{median_weeks_to_ath:.0f}w", "Cross→New High")
+            r2c4.metric("# Breaches", f"{total_breaches}", "Historical events")
 
         # Events Table
         st.subheader(f"Periods Under {window}WMA")
@@ -1813,6 +2037,23 @@ Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The
 - S&P 500 has dropped below its 200WMA only a handful of times in the last 50 years
 - Major instances: 1974, 2002-2003, 2008-2009, 2020 (briefly), 2022
 - These often marked exceptional long-term entry points
+
+**Row 1 - Current State:**
+| Metric | Meaning |
+|--------|---------|
+| **Status** | Current position: 🟢 Above or 🔴 Below the {window}WMA, with duration |
+| **Current Depth** | *(When below)* Current drawdown with rank (1 = deepest in history) |
+| **Med. Depth** | *(When above)* Typical drawdown with historical range |
+| **Time Under** | % of period spent below WMA, with total weeks |
+| **Longest** | Longest breach duration with its max depth |
+
+**Row 2 - Recovery Outlook** *(when below WMA)*:
+| Metric | Meaning |
+|--------|---------|
+| **Recovery Rate** | % of similar-depth breaches that recovered |
+| **Similar Recovery** | Median recovery time from similar depths, with max |
+| **Med. Rally** | Typical rally gain (bottom to peak) |
+| **To ATH** | Typical weeks to new all-time high |
 
 **Table Columns:**
 | Column | Meaning |
@@ -1947,7 +2188,31 @@ Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The
             )
 
             # Entry Strategy Comparison Table
-            st.subheader("Entry Strategy Comparison (vs SPYSIM)")
+            st.subheader(f"{portfolio_name} Entry Strategy Comparison (vs SPYSIM)")
+
+            with st.expander("ℹ️ Understanding the Metrics"):
+                st.markdown("""
+**Strategy:** Buy at the **maximum depth** (lowest point) during each WMA breach, sell when price recovers above the WMA. Compare returns to buying SPY at the same time.
+
+**Summary Metrics:**
+| Metric | Meaning |
+|--------|---------|
+| **Total Events** | Number of completed (recovered) breach events analyzed |
+| **Win Rate** | % of events where buying at max-depth beat buying SPY |
+| **Avg Alpha** | Average outperformance vs SPY across all events |
+| **Median Alpha** | Typical (median) outperformance vs SPY |
+
+**Table Columns:**
+| Column | Meaning |
+|--------|---------|
+| **Start / End** | When price dropped below / recovered above the WMA |
+| **Weeks** | Duration of the breach event in weeks |
+| **Max Depth** | Maximum drawdown from breach start price during this event |
+| **Depth Rank** | Depth rank among all breaches (1 = deepest in history) |
+| **Return** | Portfolio return from max-depth entry to recovery |
+| **SPY Return** | SPYSIM return for the same window (max-depth to recovery) |
+| **Alpha** | Outperformance vs SPY (Return - SPY Return). Green = beat SPY, Red = underperformed |
+                """)
 
             comparison_df = calculations.compare_wma_breach_events(
                 port_series,
@@ -1955,78 +2220,102 @@ Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The
                 tolerance_weeks=merge_tol
             )
 
-            if not comparison_df.empty:
-                total_events = len(comparison_df)
-                breach_alpha = comparison_df["Breach Entry Alpha (%)"].dropna()
-                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna()
+            # Also get ongoing event if exists (from the full events_df)
+            _, _, all_events_df = calculations.analyze_wma(port_series, window=window, tolerance_weeks=merge_tol)
+            ongoing_event = None
+            if not all_events_df.empty:
+                last_event = all_events_df.iloc[-1]
+                if last_event["Status"] == "Ongoing":
+                    ongoing_event = last_event
 
-                breach_wins = (breach_alpha > 0).sum() if len(breach_alpha) > 0 else 0
-                breach_win_rate = (breach_wins / len(breach_alpha) * 100) if len(breach_alpha) > 0 else 0
-                breach_avg = breach_alpha.mean() if len(breach_alpha) > 0 else 0
-                breach_median = breach_alpha.median() if len(breach_alpha) > 0 else 0
+            # Summary Statistics Row (only from recovered events)
+            if not comparison_df.empty or ongoing_event is not None:
+                total_recovered = len(comparison_df) if not comparison_df.empty else 0
 
+                # Extract alpha column with NA handling
+                maxdepth_alpha = comparison_df["Max-Depth Entry Alpha (%)"].dropna() if not comparison_df.empty else pd.Series(dtype=float)
+
+                # Calculate statistics
                 maxdepth_wins = (maxdepth_alpha > 0).sum() if len(maxdepth_alpha) > 0 else 0
                 maxdepth_win_rate = (maxdepth_wins / len(maxdepth_alpha) * 100) if len(maxdepth_alpha) > 0 else 0
                 maxdepth_avg = maxdepth_alpha.mean() if len(maxdepth_alpha) > 0 else 0
                 maxdepth_median = maxdepth_alpha.median() if len(maxdepth_alpha) > 0 else 0
 
-                m1, m2, m3, m4, m5, m6, m7, m8 = st.columns(8)
-                m1.metric("Total Events", total_events)
-                m2.metric("Breach Win Rate", f"{breach_win_rate:.1f}%")
-                m3.metric("Breach Avg Alpha", f"{breach_avg:+.1f}%")
-                m4.metric("Breach Median Alpha", f"{breach_median:+.1f}%")
-                m5.metric("Max-Depth Win Rate", f"{maxdepth_win_rate:.1f}%")
-                m6.metric("Max-Depth Avg Alpha", f"{maxdepth_avg:+.1f}%")
-                m7.metric("Max-Depth Median Alpha", f"{maxdepth_median:+.1f}%")
-                m8.metric("Events Analyzed", f"{len(breach_alpha)}/{len(maxdepth_alpha)}")
+                # Display metrics row
+                m1, m2, m3, m4, m5 = st.columns(5)
+                m1.metric("Total Events", total_recovered + (1 if ongoing_event is not None else 0))
+                m2.metric("Win Rate", f"{maxdepth_win_rate:.1f}%", help="% of recovered events where max-depth entry beat SPY")
+                m3.metric("Avg Alpha", f"{maxdepth_avg:+.1f}%", help="Average outperformance vs SPY (recovered events)")
+                m4.metric("Median Alpha", f"{maxdepth_median:+.1f}%", help="Median outperformance vs SPY (recovered events)")
+                m5.metric("Events Analyzed", f"{len(maxdepth_alpha)}/{total_recovered}" + (" +1 ongoing" if ongoing_event is not None else ""))
 
                 st.markdown("---")
 
-                comp_display = comparison_df.copy()
-                comp_display["Start"] = comp_display["Start Date"].dt.date
-                comp_display["End"] = comp_display["End Date"].dt.date
-                comp_display["Duration"] = comp_display["Duration (Weeks)"]
+                # Prepare display DataFrame
+                comp_display = comparison_df.copy() if not comparison_df.empty else pd.DataFrame()
 
-                display_cols = [
-                    "Start", "End", "Duration",
-                    "Breach Entry Return (%)", "Max-Depth Entry Return (%)",
-                    "SPYSIM Breach Return (%)", "SPYSIM Max-Depth Return (%)",
-                    "Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"
-                ]
-                comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
-                comp_display = comp_display.sort_values("Start", ascending=False)
+                # Add ongoing event to display if exists
+                if ongoing_event is not None:
+                    ongoing_row = {
+                        "Start Date": ongoing_event["Start Date"],
+                        "End Date": pd.NaT,
+                        "Duration (Weeks)": ongoing_event["Duration (Weeks)"],
+                        "Max Depth (%)": ongoing_event["Max Depth (%)"],
+                        "Max-Depth Entry Return (%)": None,
+                        "SPYSIM Max-Depth Return (%)": None,
+                        "Max-Depth Entry Alpha (%)": None,
+                        "Status": "🟠 Ongoing"
+                    }
+                    ongoing_df = pd.DataFrame([ongoing_row])
+                    comp_display = pd.concat([ongoing_df, comp_display], ignore_index=True)
 
-                def color_alpha(val):
-                    if pd.isna(val):
-                        return ''
-                    color = '#00CC96' if val >= 0 else '#EF553B'
-                    return f'color: {color}'
+                if not comp_display.empty:
+                    # Convert date columns to .date for cleaner display
+                    comp_display["Start"] = comp_display["Start Date"].dt.date
+                    comp_display["End"] = comp_display["End Date"].apply(lambda x: x.date() if pd.notna(x) else "Ongoing")
+                    comp_display["Duration"] = comp_display["Duration (Weeks)"]
 
-                alpha_cols = ["Breach Entry Alpha (%)", "Max-Depth Entry Alpha (%)"]
-                alpha_cols_present = [c for c in alpha_cols if c in comp_display.columns]
-                styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+                    # Calculate Depth Rank across ALL events including ongoing (1 = deepest)
+                    if "Max Depth (%)" in comp_display.columns:
+                        comp_display["Depth Rank"] = comp_display["Max Depth (%)"].rank(method='min').astype(int)
 
-                comp_column_config = {
-                    "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the WMA", format="YYYY-MM-DD"),
-                    "End": st.column_config.DateColumn("End", help="Date when price recovered above the WMA", format="YYYY-MM-DD"),
-                    "Duration": st.column_config.NumberColumn("Weeks", help="Total weeks of the breach event", format="%.0f"),
-                    "Breach Entry Return (%)": st.column_config.NumberColumn("Breach Return", help="Portfolio return: entry at WMA breach date, exit at recovery", format="%.1f%%"),
-                    "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Max-Depth Return", help="Portfolio return: entry at lowest point, exit at recovery", format="%.1f%%"),
-                    "SPYSIM Breach Return (%)": st.column_config.NumberColumn("SPY Breach", help="SPYSIM return for same breach window", format="%.1f%%"),
-                    "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Max-Depth", help="SPYSIM return for same max-depth window", format="%.1f%%"),
-                    "Breach Entry Alpha (%)": st.column_config.NumberColumn("Breach Alpha", help="Outperformance vs SPY at breach entry (positive = beat SPY)", format="%+.1f%%"),
-                    "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Max-Depth Alpha", help="Outperformance vs SPY at max-depth entry (positive = beat SPY)", format="%+.1f%%"),
-                }
+                    display_cols = [
+                        "Start", "End", "Duration", "Max Depth (%)", "Depth Rank",
+                        "Max-Depth Entry Return (%)", "SPYSIM Max-Depth Return (%)",
+                        "Max-Depth Entry Alpha (%)"
+                    ]
+                    comp_display = comp_display[[c for c in display_cols if c in comp_display.columns]]
+                    comp_display = comp_display.sort_values("Start", ascending=False)
 
-                st.dataframe(
-                    styled_df,
-                    column_config=comp_column_config,
-                    use_container_width=True,
-                    hide_index=True,
-                    key=f"wma_comparison_table_{key_suffix}"
-                )
+                    def color_alpha(val):
+                        if pd.isna(val):
+                            return ''
+                        color = '#00CC96' if val >= 0 else '#EF553B'
+                        return f'color: {color}'
+
+                    alpha_cols_present = [c for c in ["Max-Depth Entry Alpha (%)"] if c in comp_display.columns]
+                    styled_df = comp_display.style.map(color_alpha, subset=alpha_cols_present)
+
+                    comp_column_config = {
+                        "Start": st.column_config.DateColumn("Start", help="Date when price dropped below the WMA", format="YYYY-MM-DD"),
+                        "End": st.column_config.TextColumn("End", help="Date when price recovered above the WMA (or 'Ongoing')"),
+                        "Duration": st.column_config.NumberColumn("Weeks", help="Total weeks of the breach event", format="%.0f"),
+                        "Max Depth (%)": st.column_config.NumberColumn("Max Depth", help="Maximum drawdown from breach start price during this event", format="%.1f%%"),
+                        "Depth Rank": st.column_config.NumberColumn("Depth Rank", help="Depth rank among all breaches (1 = deepest)", format="%d"),
+                        "Max-Depth Entry Return (%)": st.column_config.NumberColumn("Return", help="Portfolio return: entry at lowest point during breach, exit at recovery", format="%.1f%%"),
+                        "SPYSIM Max-Depth Return (%)": st.column_config.NumberColumn("SPY Return", help="SPYSIM return for same max-depth to recovery window", format="%.1f%%"),
+                        "Max-Depth Entry Alpha (%)": st.column_config.NumberColumn("Alpha", help="Outperformance vs SPY (positive = beat SPY)", format="%+.1f%%"),
+                    }
+
+                    st.dataframe(
+                        styled_df,
+                        column_config=comp_column_config,
+                        use_container_width=True,
+                        hide_index=True,
+                        key=f"wma_comparison_table_{key_suffix}"
+                    )
             else:
-                st.info("No recovered breach events to compare. Entry comparison requires completed (recovered) events.")
+                st.info("No breach events to display.")
 
 
 # -----------------------------------------------------------------------------
