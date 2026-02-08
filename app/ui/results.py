@@ -252,7 +252,7 @@ def render(results, config, portfolio_name="", clip_start_date=None):
     if bench_series is not None:
             # Resample/Align benchmark to match portfolio index or timeframe
             # Usually aligning to tax_adj_port_series
-            bench_aligned = bench_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
+            bench_aligned = bench_series.reindex(tax_adj_port_series.index).ffill().fillna(0)
             # Resample for charts handled below
             bench_resampled = utils.resample_data(bench_aligned, timeframe, method="last")
     
@@ -260,7 +260,7 @@ def render(results, config, portfolio_name="", clip_start_date=None):
     comp_series = results.get("comparison_series")
     comp_resampled = None
     if comp_series is not None:
-             comp_aligned = comp_series.reindex(tax_adj_port_series.index, method="ffill").fillna(0)
+             comp_aligned = comp_series.reindex(tax_adj_port_series.index).ffill().fillna(0)
              comp_resampled = utils.resample_data(comp_aligned, timeframe, method="last")
              if comp_series.name is None:
                  comp_resampled.name = "Standard (Yearly)"
@@ -308,13 +308,13 @@ def render(results, config, portfolio_name="", clip_start_date=None):
     # Comparison Logic
     if bench_series is not None:
          try:
-             aligned_pf = tax_adj_port_series.reindex(bench_series.index, method='ffill')
+             aligned_pf = tax_adj_port_series.reindex(bench_series.index).ffill()
              diff_val = aligned_pf.iloc[-1] - bench_series.iloc[-1]
              diff_pct = (diff_val / bench_series.iloc[-1]) * 100
              st.info(f"**Comparison Active**: {portfolio_name} vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
-         except:
+         except (IndexError, KeyError, ZeroDivisionError, TypeError):
              pass
-    
+
     total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
     
     # Use Stats reported by Testfol API (TWR)
@@ -458,7 +458,7 @@ def render(results, config, portfolio_name="", clip_start_date=None):
                     p_end = port_series.asof(end_dt)
                     if pd.notna(p_start) and pd.notna(p_end) and p_start > 0:
                         api_cagr = (p_end / p_start) ** (1/years) - 1
-                except:
+                except (IndexError, KeyError, ZeroDivisionError, TypeError):
                     api_cagr = stats.get("cagr", 0.0)
                     if api_cagr > 1.0: api_cagr /= 100.0
 

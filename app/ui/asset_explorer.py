@@ -1,10 +1,15 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-from app.services import testfol_api as api
-from app.common import utils
+import logging
 from concurrent.futures import ThreadPoolExecutor
+
+import numpy as np
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+from app.common import utils
+from app.services import testfol_api as api
+
+logger = logging.getLogger(__name__)
 
 # Define Asset Class Universe (Proxies)
 # Using Testfol Simulated Tickers for maximum history
@@ -67,7 +72,7 @@ def fetch_worker(tickers):
             )
             results[ticker] = series
         except Exception as e:
-            print(f"Error fetching {ticker}: {e}")
+            logger.warning(f"Error fetching {ticker}: {e}")
             results[ticker] = pd.Series(dtype=float)
             
     return results
@@ -301,7 +306,7 @@ def render_asset_explorer():
                    ranked_data[period_label] = [(n, v) for n, v in sorted_geo.items()]
             
     except Exception as e:
-        print(f"Error calc period: {e}")
+        logger.warning(f"Error calc period: {e}")
         ranked_data[period_label] = []
 
         

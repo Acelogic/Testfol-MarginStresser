@@ -101,7 +101,8 @@ def fetch_ma_data(tickers: list, tolerance_days: int = 0, min_days_filter: int =
             period="max",  # Full history for accurate depth ranking
             auto_adjust=True,
             threads=True,
-            progress=False
+            progress=False,
+            timeout=30,
         )['Close']
 
         # Handle single ticker case
@@ -231,7 +232,8 @@ def fetch_wma_data(tickers: list, tolerance_weeks: int = 0, min_weeks_filter: in
             period="max",  # Full history for accurate depth ranking
             auto_adjust=True,
             threads=True,
-            progress=False
+            progress=False,
+            timeout=30,
         )['Close']
 
         # Handle single ticker case

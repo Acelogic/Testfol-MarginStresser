@@ -1,11 +1,14 @@
-import requests
-import pandas as pd
-import numpy as np
-import hashlib
 import json
+import logging
 import os
-import pickle
-import time
+
+import numpy as np
+import pandas as pd
+import requests
+
+from app.common.cache import cache_key, cache_get, cache_set
+
+logger = logging.getLogger(__name__)
 
 API_URL = "https://testfol.io/api/backtest"
 
@@ -24,56 +27,23 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     """
     Fetches backtest data from testfol.io API with universal disk caching.
     """
-    # 1. Generate Cache Key
-    # We serialize the arguments to create a unique fingerprint
+    # 1. Build cache key (excludes bearer_token/kwargs for deterministic hashing)
     cache_payload = {
-        "start_date": str(start_date),
-        "end_date": str(end_date),
-        "start_val": start_val,
-        "cashflow": cashflow,
-        "cashfreq": cashfreq,
-        "rolling": rolling,
-        "invest_div": invest_div,
-        "rebalance": rebalance,
-        "allocation": allocation,
-        # return_raw/include_raw affect output format, so they must be part of key
-        "return_raw": return_raw,
-        "include_raw": include_raw,
-        "rebalance_offset": rebalance_offset,
-        "cashflow_offset": cashflow_offset
+        "start_date": str(start_date), "end_date": str(end_date),
+        "start_val": start_val, "cashflow": cashflow, "cashfreq": cashfreq,
+        "rolling": rolling, "invest_div": invest_div, "rebalance": rebalance,
+        "allocation": allocation, "return_raw": return_raw,
+        "include_raw": include_raw, "rebalance_offset": rebalance_offset,
+        "cashflow_offset": cashflow_offset,
     }
-    
-    # Sort keys for deterministic JSON
-    payload_str = json.dumps(cache_payload, sort_keys=True, default=str)
-    req_hash = hashlib.md5(payload_str.encode("utf-8")).hexdigest()
-    
-    CACHE_DIR = "data/api_cache"
-    os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(CACHE_DIR, f"{req_hash}.pkl")
-    
-    # 2. Try Cache Load
-    if os.path.exists(cache_path):
-        try:
-            with open(cache_path, "rb") as f:
-                # print(f"DEBUG: Cache HIT {req_hash}")
-                return pickle.load(f)
-        except (EOFError, pickle.UnpicklingError, IndexError, ImportError, ValueError) as e:
-            print(f"⚠️ Cache Corruption Detected ({e}). Deleting corrupted file: {cache_path}")
-            try:
-                os.remove(cache_path)
-            except OSError:
-                pass
-            # Fall through to API fetch
-        except Exception as e:
-            print(f"Cache read failed (Unknown Error): {e}")
-            # Fall through to API fetch
-            pass
+    req_hash = cache_key(json.dumps(cache_payload, sort_keys=True, default=str))
+
+    # 2. Try cache load (ttl=0 → no expiry for deterministic API responses)
+    cached = cache_get(req_hash, ttl=0)
+    if cached is not None:
+        return cached
             
     # 3. API Request (Cache Miss)
-    # print(f"DEBUG: Cache MISS {req_hash} - Fetching from API")
-    
-    API_URL = "https://testfol.io/api/backtest"
-    
     # Format dates as YYYY-MM-DD (API requirement)
     start_str = pd.Timestamp(start_date).strftime('%Y-%m-%d')
     end_str = pd.Timestamp(end_date).strftime('%Y-%m-%d')
@@ -112,12 +82,13 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
             
         headers["Authorization"] = f"Bearer {token}"
         
+    r = None
     try:
         # Configure Retry Strategy with Exponential Backoff
         # 429: Rate Limit, 5xx: Server Errors
         from requests.adapters import HTTPAdapter
         from urllib3.util.retry import Retry
-        
+
         retry_strategy = Retry(
             total=5,  # 5 retries
             backoff_factor=2,  # 2s, 4s, 8s, 16s, 32s
@@ -128,16 +99,16 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
         session = requests.Session()
         session.mount("https://", adapter)
         session.mount("http://", adapter)
-        
+
         r = session.post(API_URL, json=payload, headers=headers, timeout=45)
         r.raise_for_status()
-        
+
     except requests.exceptions.RetryError:
          raise requests.exceptions.HTTPError(f"Max retries exceeded for {API_URL}")
     except requests.exceptions.HTTPError as e:
         # Include response text in error message for debugging
-        error_msg = f"HTTP Error: {e}\nResponse: {r.text if 'r' in locals() else 'No Response'}"
-        raise requests.exceptions.HTTPError(error_msg, response=r if 'r' in locals() else None)
+        error_msg = f"HTTP Error: {e}\nResponse: {r.text if r is not None else 'No Response'}"
+        raise requests.exceptions.HTTPError(error_msg, response=r if r is not None else None)
     except Exception as e:
         raise e
 
@@ -149,26 +120,33 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
             size_bytes /= 1024.0
         return f"{size_bytes:.2f} TB"
 
-    print(f"DEBUG: API Success {req_hash} (Msg Size: {_format_size(len(r.content))})")
+    logger.debug(f"API Success {req_hash} (Msg Size: {_format_size(len(r.content))})")
     resp = r.json()
     
     if return_raw:
         result = resp
-        # Save validation
-        with open(cache_path, "wb") as f:
-            pickle.dump(result, f)
+        cache_set(req_hash, result)
         return result
     
     stats = resp.get("stats", {})
     if isinstance(stats, list):
         stats = stats[0] if stats else {}
     
-    # Validation: Ensure charts exist
+    # Validation: Ensure charts exist and are well-formed
     if "charts" not in resp or "history" not in resp["charts"]:
-        # Don't cache bad/empty responses?
          raise ValueError("Invalid API response: missing chart history")
 
-    ts, vals = resp["charts"]["history"]
+    history = resp["charts"]["history"]
+    if not isinstance(history, (list, tuple)) or len(history) != 2:
+        raise ValueError(f"Invalid API response: history must be a 2-element list, got {type(history).__name__}")
+
+    ts, vals = history
+    if not isinstance(ts, list) or not isinstance(vals, list):
+        raise ValueError("Invalid API response: history timestamps/values must be lists")
+    if len(ts) != len(vals):
+        raise ValueError(f"Invalid API response: timestamps ({len(ts)}) and values ({len(vals)}) length mismatch")
+    if not ts:
+        raise ValueError("Invalid API response: empty history data")
     dates = pd.to_datetime(ts, unit="s")
     
     extra_data = {
@@ -184,11 +162,7 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     result = (pd.Series(vals, index=dates, name="Portfolio"), stats, extra_data)
     
     # 4. Save to Cache
-    try:
-        with open(cache_path, "wb") as f:
-            pickle.dump(result, f)
-    except Exception as e:
-        print(f"Cache write failed: {e}")
+    cache_set(req_hash, result)
     
     return result
 
@@ -241,7 +215,7 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
             spread = model.get("spread_pct", 1.0)
             
             if base_series is not None:
-                aligned_base = base_series.reindex(port.index, method='ffill').fillna(0.0)
+                aligned_base = base_series.reindex(port.index).ffill().fillna(0.0)
                 daily_rates_pct = aligned_base + spread
                 daily_rates_pct = daily_rates_pct.clip(lower=0.0) 
                 
@@ -259,7 +233,7 @@ def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, t
             base_series = model.get("base_series", None)
             
             if base_series is not None:
-                aligned_base = base_series.reindex(port.index, method='ffill').fillna(0.0)
+                aligned_base = base_series.reindex(port.index).ffill().fillna(0.0)
             else:
                 aligned_base = pd.Series(5.0, index=port.index)
             
