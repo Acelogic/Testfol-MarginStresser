@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -13,7 +15,7 @@ class PricesRequest(BaseModel):
 
 
 @router.post("/prices")
-def get_prices(req: PricesRequest):
+def get_prices(req: PricesRequest) -> dict:
     """Fetch component price data for given tickers."""
     try:
         df = fetch_component_data(req.tickers, req.start_date, req.end_date)
@@ -25,7 +27,7 @@ def get_prices(req: PricesRequest):
 
 
 @router.get("/fed-funds")
-def get_fed_funds():
+def get_fed_funds() -> dict:
     """Fetch historical Fed Funds rate."""
     try:
         series = get_fed_funds_rate()

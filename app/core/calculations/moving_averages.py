@@ -1,0 +1,766 @@
+from __future__ import annotations
+
+import pandas as pd
+import numpy as np
+from app.services.testfol_api import fetch_backtest
+
+
+def analyze_ma(
+    series: pd.Series,
+    window: int = 200,
+    tolerance_days: int = 0,
+) -> tuple[pd.Series | None, pd.DataFrame]:
+    """
+    Analyzes the series against its Moving Average (e.g., 200-day, 150-day).
+    Args:
+        series: Price series
+        window: Moving Average window (default 200)
+        tolerance_days: Maximum days above MA to consider as same event (noise filter)
+    Returns:
+        ma_series: The MA series.
+        events_df: DataFrame of periods where price < MA.
+    """
+    if series.empty:
+        return None, pd.DataFrame()
+
+    dma_series = series.rolling(window=window).mean()
+
+    # Identify where Price < DMA
+    is_under = series < dma_series
+
+    # Identify switch points
+    state = is_under.astype(int)
+    change = state.diff().fillna(0)
+
+    starts = series.index[change == 1]
+    ends = series.index[change == -1]
+
+    raw_events = []
+
+    # 1. Collect Raw Events
+    for s_date in starts:
+        valid_ends = ends[ends > s_date]
+
+        if len(valid_ends) > 0:
+            e_date = valid_ends[0]
+            raw_events.append({"Start": s_date, "End": e_date, "Status": "Recovered"})
+        else:
+            raw_events.append({"Start": s_date, "End": pd.NaT, "Status": "Ongoing"})
+
+    if not raw_events:
+        return dma_series, pd.DataFrame()
+
+    # 2. Merge Events Logic
+    merged_events = []
+    if raw_events:
+        current_event = raw_events[0]
+
+        for next_event in raw_events[1:]:
+            # Check gap
+            # Gap is time between Prev End and Next Start
+            if pd.notna(current_event["End"]):
+                gap = (next_event["Start"] - current_event["End"]).days
+
+                if gap <= tolerance_days:
+                    # Merge!
+                    # Extend current event end to next event end
+                    current_event["End"] = next_event["End"]
+                    current_event["Status"] = next_event["Status"] # Inherit ongoing status if applicable
+                else:
+                    # No merge, push current and start new
+                    merged_events.append(current_event)
+                    current_event = next_event
+            else:
+                # Current event is ongoing, cannot merge a "next" event (shouldn't happen logically if sorted)
+                merged_events.append(current_event)
+                current_event = next_event
+
+        merged_events.append(current_event)
+
+    # 3. Calculate Stats for Merged Events
+    final_output = []
+    for i, evt in enumerate(merged_events):
+        s_date = evt["Start"]
+        e_date = evt["End"]
+
+        peak_pct = None
+        peak_date = pd.NaT
+        days_bottom_to_peak = None
+        bottom_to_peak_pct = None
+
+        # Determine calc_end for depth/bottom calculation
+        if pd.isna(e_date):
+            # Ongoing
+            now = series.index[-1]
+            duration = (now - s_date).days
+            calc_end = series.index[-1]
+            status = "Ongoing"
+        else:
+            duration = (e_date - s_date).days
+            calc_end = e_date
+            status = "Recovered"
+
+        # Analyze Period (calculate Bottom/Depth first)
+        sub_series = series[s_date:calc_end]
+        sub_dma = dma_series[s_date:calc_end]
+
+        # Get MA values at entry and exit for context
+        entry_ma = dma_series.loc[s_date] if s_date in dma_series.index else None
+        exit_ma = dma_series.loc[calc_end] if calc_end in dma_series.index else None
+        ma_change_pct = None
+        if entry_ma is not None and exit_ma is not None and entry_ma > 0:
+            ma_change_pct = ((exit_ma - entry_ma) / entry_ma) * 100
+
+        bottom_date = pd.NaT
+        if not sub_series.empty:
+            # bottom_date is the date of the absolute lowest price
+            bottom_date = sub_series.idxmin()
+            bottom_price = sub_series.loc[bottom_date]
+            start_price = sub_series.iloc[0]
+            # max_depth is now the price drawdown from start of event
+            max_depth = ((bottom_price - start_price) / start_price) * 100
+        else:
+            max_depth = 0.0
+
+        # Calculate Recovery Days (Time to recover to start price)
+
+        recovery_days = None
+        recovery_date = pd.NaT
+        bottom_to_recovery_pct = None
+        start_price = series.loc[s_date]
+
+        # Calculate Bottom to Recovery % (actual rally from bottom to starting price / breakeven)
+        # This is the inverse of the drawdown - a 30% drop requires a 42.9% rally to recover
+        if pd.notna(bottom_date) and not sub_series.empty:
+            bp = sub_series.loc[bottom_date]
+            if bp > 0:
+                bottom_to_recovery_pct = ((start_price / bp) - 1) * 100
+
+        # Look for recovery after the BOTTOM date
+        # We search from bottom_date onwards to avoid early pre-drop chop triggers
+        if pd.notna(bottom_date) and bottom_date >= s_date:
+             search_start = bottom_date
+        else:
+             search_start = s_date
+
+        future_prices = series[search_start:]
+
+        # If search_start is same as s_date, we might still grab day 1 e.g. if bottom is day 0
+        # But if bottom is day 0, then max_depth is 0 or -small, so immediate recovery is correct.
+        # If Bottom is later, we won't see the early chop.
+
+        if len(future_prices) > 0:
+            # Find first date where Price >= Start Price
+            recovered_mask = future_prices >= start_price
+
+            if recovered_mask.any():
+                recovery_date = recovered_mask.idxmax() # First True
+                recovery_days = (recovery_date - s_date).days  # Event Start -> Breakeven
+
+        # Calculate True Recovery Days (days until BOTH price >= start price AND price > MA)
+        # This is when you're actually fully recovered - in profit AND in uptrend
+        true_recovery_days = None
+        true_recovery_date = pd.NaT
+        if pd.notna(bottom_date):
+            future_series = series[bottom_date:]
+            future_ma = dma_series[bottom_date:]
+            if not future_series.empty and not future_ma.empty:
+                # Align the series
+                common_idx = future_series.index.intersection(future_ma.index)
+                if len(common_idx) > 0:
+                    aligned_prices = future_series.loc[common_idx]
+                    aligned_ma = future_ma.loc[common_idx]
+                    # Find where BOTH conditions are met
+                    true_recovery_mask = (aligned_prices >= start_price) & (aligned_prices > aligned_ma)
+                    if true_recovery_mask.any():
+                        true_recovery_date = true_recovery_mask.idxmax()
+                        true_recovery_days = (true_recovery_date - s_date).days
+
+        # Calculate Subsequent Peak (Only if Recovered)
+        days_to_ath = None
+        if status == "Recovered":
+            # Period: From Recovery (e_date) to Next Drop (next_evt.Start) or Now
+            if i + 1 < len(merged_events):
+                next_start = merged_events[i+1]["Start"]
+            else:
+                next_start = series.index[-1]
+
+            recovery_slice = series[e_date:next_start]
+
+            if not recovery_slice.empty:
+                recovery_price = series.loc[e_date]
+                max_price = recovery_slice.max()
+                peak_date = recovery_slice.idxmax()
+                peak_pct = ((max_price / recovery_price) - 1) * 100
+
+                # Calculate Bottom to Peak % (from actual low to peak)
+                if pd.notna(bottom_date):
+                    bottom_price = series.loc[bottom_date]
+                    bottom_to_peak_pct = ((max_price / bottom_price) - 1) * 100
+                else:
+                    bottom_to_peak_pct = None
+
+                # Calculate Days to ATH from MA crossover
+                # Find the ATH before this drawdown started
+                pre_drawdown = series[:s_date]
+                if not pre_drawdown.empty:
+                    previous_ath = pre_drawdown.max()
+                    # Find first date after recovery where price exceeds previous ATH
+                    post_recovery = series[e_date:]
+                    ath_reached = post_recovery[post_recovery >= previous_ath]
+                    if not ath_reached.empty:
+                        ath_date = ath_reached.index[0]
+                        days_to_ath = (ath_date - e_date).days
+
+                # Check for Active/Current Status
+                # If this is the last event and it is recovered, it means the recovery is ongoing (Current)
+                if i == len(merged_events) - 1:
+                    status = "Recovered (Current)"
+
+                # Calculate Days from Bottom to Peak
+                if pd.notna(bottom_date) and pd.notna(peak_date):
+                    days_bottom_to_peak = (peak_date - bottom_date).days
+            else:
+                peak_pct = 0.0
+                bottom_to_peak_pct = None
+        else:
+            # Ongoing event - calculate current stats from bottom to now
+            if pd.notna(bottom_date):
+                bottom_price = series.loc[bottom_date]
+                current_price = series.iloc[-1]
+                # Current gain from bottom (not a peak, but current)
+                bottom_to_peak_pct = ((current_price / bottom_price) - 1) * 100
+                # Days from bottom to now
+                days_bottom_to_peak = (series.index[-1] - bottom_date).days
+                # No Post-MA Rally since still under MA
+                peak_pct = None
+
+                # For ongoing events, show current progress
+                # Price Recovery Days = days since start (still counting)
+                recovery_days = (series.index[-1] - s_date).days
+
+        final_output.append({
+            "Start Date": s_date,
+            "End Date": e_date,
+            "Duration (Days)": duration,
+            "Duration (Weeks)": duration / 7,
+            "Duration (Months)": duration / 30.44,
+            "Max Depth (%)": max_depth,
+            "Bottom Date": bottom_date,
+            "Bottom to Recovery (%)": bottom_to_recovery_pct,
+            "Subsequent Peak (%)": peak_pct,
+            "Bottom to Peak (%)": bottom_to_peak_pct,
+            "Peak Date": peak_date,
+            "Days Bottom to Peak": days_bottom_to_peak,
+            "Days to ATH": days_to_ath,
+            "Recovery Date": recovery_date,
+            "Recovery Days": recovery_days,
+            "Post-MA Rally Days": (peak_date - e_date).days if pd.notna(peak_date) and pd.notna(e_date) else None,
+            "Status": status,
+            # MA Context fields for accuracy
+            "Entry MA": entry_ma,
+            "Exit MA": exit_ma,
+            "MA Change (%)": ma_change_pct,
+            "True Recovery Days": true_recovery_days,
+            "True Recovery Date": true_recovery_date
+        })
+
+    return dma_series, pd.DataFrame(final_output)
+
+def analyze_wma(
+    series: pd.Series,
+    window: int = 200,
+    tolerance_weeks: int = 0,
+) -> tuple[pd.Series | None, pd.Series | None, pd.DataFrame]:
+    """
+    Analyzes the series against its Weekly Moving Average (e.g., 200-week).
+    Resamples daily data to weekly and calculates the MA on weekly closes.
+
+    Args:
+        series: Daily price series
+        window: Moving Average window in weeks (default 200)
+        tolerance_weeks: Maximum weeks above WMA to consider as same event (noise filter)
+    Returns:
+        weekly_series: The resampled weekly price series.
+        wma_series: The Weekly MA series.
+        events_df: DataFrame of periods where price < WMA (durations in weeks).
+    """
+    if series.empty:
+        return None, None, pd.DataFrame()
+
+    # Resample daily to weekly (Friday close / end of week)
+    weekly_series = series.resample('W-FRI').last().dropna()
+
+    if len(weekly_series) < window:
+        return weekly_series, None, pd.DataFrame()
+
+    wma_series = weekly_series.rolling(window=window).mean()
+
+    # Identify where Price < WMA
+    is_under = weekly_series < wma_series
+
+    # Identify switch points
+    state = is_under.astype(int)
+    change = state.diff().fillna(0)
+
+    starts = weekly_series.index[change == 1]
+    ends = weekly_series.index[change == -1]
+
+    raw_events = []
+
+    # 1. Collect Raw Events
+    for s_date in starts:
+        valid_ends = ends[ends > s_date]
+
+        if len(valid_ends) > 0:
+            e_date = valid_ends[0]
+            raw_events.append({"Start": s_date, "End": e_date, "Status": "Recovered"})
+        else:
+            raw_events.append({"Start": s_date, "End": pd.NaT, "Status": "Ongoing"})
+
+    if not raw_events:
+        return weekly_series, wma_series, pd.DataFrame()
+
+    # 2. Merge Events Logic (tolerance in weeks)
+    merged_events = []
+    if raw_events:
+        current_event = raw_events[0]
+
+        for next_event in raw_events[1:]:
+            if pd.notna(current_event["End"]):
+                # Gap is in weeks (since data is weekly)
+                gap_weeks = len(weekly_series[current_event["End"]:next_event["Start"]]) - 1
+
+                if gap_weeks <= tolerance_weeks:
+                    # Merge!
+                    current_event["End"] = next_event["End"]
+                    current_event["Status"] = next_event["Status"]
+                else:
+                    merged_events.append(current_event)
+                    current_event = next_event
+            else:
+                merged_events.append(current_event)
+                current_event = next_event
+
+        merged_events.append(current_event)
+
+    # 3. Calculate Stats for Merged Events
+    final_output = []
+    for i, evt in enumerate(merged_events):
+        s_date = evt["Start"]
+        e_date = evt["End"]
+
+        peak_pct = None
+        peak_date = pd.NaT
+        days_bottom_to_peak = None
+        bottom_to_peak_pct = None
+
+        # Determine calc_end for depth/bottom calculation
+        if pd.isna(e_date):
+            now = weekly_series.index[-1]
+            # Duration in weeks
+            duration_weeks = len(weekly_series[s_date:now])
+            calc_end = weekly_series.index[-1]
+            status = "Ongoing"
+        else:
+            duration_weeks = len(weekly_series[s_date:e_date])
+            calc_end = e_date
+            status = "Recovered"
+
+        # Analyze Period (calculate Bottom/Depth first)
+        sub_series = weekly_series[s_date:calc_end]
+        sub_wma = wma_series[s_date:calc_end]
+
+        # Get WMA values at entry and exit for context
+        entry_wma = wma_series.loc[s_date] if s_date in wma_series.index else None
+        exit_wma = wma_series.loc[calc_end] if calc_end in wma_series.index else None
+        wma_change_pct = None
+        if entry_wma is not None and exit_wma is not None and entry_wma > 0:
+            wma_change_pct = ((exit_wma - entry_wma) / entry_wma) * 100
+
+        bottom_date = pd.NaT
+        if not sub_series.empty:
+            bottom_date = sub_series.idxmin()
+            bottom_price = sub_series.loc[bottom_date]
+            start_price = sub_series.iloc[0]
+            max_depth = ((bottom_price - start_price) / start_price) * 100
+        else:
+            max_depth = 0.0
+
+        # Calculate Recovery Weeks (Time to recover to start price)
+        recovery_weeks = None
+        recovery_date = pd.NaT
+        bottom_to_recovery_pct = None
+        start_price = weekly_series.loc[s_date]
+
+        # Calculate Bottom to Recovery %
+        if pd.notna(bottom_date) and not sub_series.empty:
+            bp = sub_series.loc[bottom_date]
+            if bp > 0:
+                bottom_to_recovery_pct = ((start_price / bp) - 1) * 100
+
+        # Look for recovery after the BOTTOM date
+        if pd.notna(bottom_date) and bottom_date >= s_date:
+             search_start = bottom_date
+        else:
+             search_start = s_date
+
+        future_prices = weekly_series[search_start:]
+
+        if len(future_prices) > 0:
+            recovered_mask = future_prices >= start_price
+
+            if recovered_mask.any():
+                recovery_date = recovered_mask.idxmax()
+                recovery_weeks = len(weekly_series[s_date:recovery_date])
+
+        # Calculate True Recovery Weeks (weeks until BOTH price >= start AND price > WMA)
+        true_recovery_weeks = None
+        true_recovery_date = pd.NaT
+        if pd.notna(bottom_date):
+            future_series = weekly_series[bottom_date:]
+            future_wma = wma_series[bottom_date:]
+            if not future_series.empty and not future_wma.empty:
+                common_idx = future_series.index.intersection(future_wma.index)
+                if len(common_idx) > 0:
+                    aligned_prices = future_series.loc[common_idx]
+                    aligned_wma = future_wma.loc[common_idx]
+                    true_recovery_mask = (aligned_prices >= start_price) & (aligned_prices > aligned_wma)
+                    if true_recovery_mask.any():
+                        true_recovery_date = true_recovery_mask.idxmax()
+                        true_recovery_weeks = len(weekly_series[s_date:true_recovery_date])
+
+        # Calculate Subsequent Peak (Only if Recovered)
+        weeks_to_ath = None
+        weeks_bottom_to_peak = None
+        if status == "Recovered":
+            if i + 1 < len(merged_events):
+                next_start = merged_events[i+1]["Start"]
+            else:
+                next_start = weekly_series.index[-1]
+
+            recovery_slice = weekly_series[e_date:next_start]
+
+            if not recovery_slice.empty:
+                recovery_price = weekly_series.loc[e_date]
+                max_price = recovery_slice.max()
+                peak_date = recovery_slice.idxmax()
+                peak_pct = ((max_price / recovery_price) - 1) * 100
+
+                # Calculate Bottom to Peak %
+                if pd.notna(bottom_date):
+                    bottom_price = weekly_series.loc[bottom_date]
+                    bottom_to_peak_pct = ((max_price / bottom_price) - 1) * 100
+                else:
+                    bottom_to_peak_pct = None
+
+                # Calculate Weeks to ATH from WMA crossover
+                pre_drawdown = weekly_series[:s_date]
+                if not pre_drawdown.empty:
+                    previous_ath = pre_drawdown.max()
+                    post_recovery = weekly_series[e_date:]
+                    ath_reached = post_recovery[post_recovery >= previous_ath]
+                    if not ath_reached.empty:
+                        ath_date = ath_reached.index[0]
+                        weeks_to_ath = len(weekly_series[e_date:ath_date])
+
+                if i == len(merged_events) - 1:
+                    status = "Recovered (Current)"
+
+                # Calculate Weeks from Bottom to Peak
+                if pd.notna(bottom_date) and pd.notna(peak_date):
+                    weeks_bottom_to_peak = len(weekly_series[bottom_date:peak_date])
+            else:
+                peak_pct = 0.0
+                bottom_to_peak_pct = None
+        else:
+            # Ongoing event
+            if pd.notna(bottom_date):
+                bottom_price = weekly_series.loc[bottom_date]
+                current_price = weekly_series.iloc[-1]
+                bottom_to_peak_pct = ((current_price / bottom_price) - 1) * 100
+                weeks_bottom_to_peak = len(weekly_series[bottom_date:])
+                peak_pct = None
+                recovery_weeks = len(weekly_series[s_date:])
+
+        # Convert weeks to approximate days for display compatibility
+        duration_days = duration_weeks * 7
+
+        final_output.append({
+            "Start Date": s_date,
+            "End Date": e_date,
+            "Duration (Weeks)": duration_weeks,
+            "Duration (Days)": duration_days,
+            "Duration (Months)": duration_weeks / 4.33,
+            "Duration (Years)": duration_weeks / 52,
+            "Max Depth (%)": max_depth,
+            "Bottom Date": bottom_date,
+            "Bottom to Recovery (%)": bottom_to_recovery_pct,
+            "Subsequent Peak (%)": peak_pct,
+            "Bottom to Peak (%)": bottom_to_peak_pct,
+            "Peak Date": peak_date,
+            "Weeks Bottom to Peak": weeks_bottom_to_peak,
+            "Weeks to ATH": weeks_to_ath,
+            "Recovery Date": recovery_date,
+            "Recovery Weeks": recovery_weeks,
+            "Post-WMA Rally Weeks": len(weekly_series[e_date:peak_date]) if pd.notna(peak_date) and pd.notna(e_date) else None,
+            "Status": status,
+            "Entry WMA": entry_wma,
+            "Exit WMA": exit_wma,
+            "WMA Change (%)": wma_change_pct,
+            "True Recovery Weeks": true_recovery_weeks,
+            "True Recovery Date": true_recovery_date
+        })
+
+    return weekly_series, wma_series, pd.DataFrame(final_output)
+
+def compare_wma_breach_events(
+    portfolio_series: pd.Series,
+    window: int = 200,
+    tolerance_weeks: int = 2,
+) -> pd.DataFrame:
+    """
+    Compare breach event returns for a portfolio against 200WMA.
+    Similar to compare_breach_events but optimized for weekly data.
+    """
+    weekly_series, wma_series, events_df = analyze_wma(portfolio_series, window, tolerance_weeks)
+
+    if events_df.empty:
+        return events_df
+
+    recovered_events = events_df[events_df['Status'].str.contains('Recovered', na=False)].copy()
+
+    if recovered_events.empty:
+        return recovered_events
+
+    # Fetch SPYSIM benchmark data using the same API as compare_breach_events
+    spysim_series, _, _ = fetch_backtest(
+        start_date=portfolio_series.index[0],
+        end_date=portfolio_series.index[-1],
+        start_val=10000,
+        cashflow=0,
+        cashfreq="Monthly",
+        rolling=1,
+        invest_div=True,
+        rebalance="None",
+        allocation={"SPYSIM": 100}
+    )
+
+    # Resample SPYSIM to weekly (same as portfolio)
+    spy_weekly = spysim_series.resample('W-FRI').last().dropna()
+
+    breach_returns = []
+    maxdepth_returns = []
+    spysim_breach_returns = []
+    spysim_maxdepth_returns = []
+    breach_alphas = []
+    maxdepth_alphas = []
+
+    for idx, row in recovered_events.iterrows():
+        start_date = row['Start Date']
+        end_date = row['End Date']
+        bottom_date = row['Bottom Date']
+
+        # Skip if any required date is NaT
+        if pd.isna(start_date) or pd.isna(end_date) or pd.isna(bottom_date):
+            breach_returns.append(None)
+            maxdepth_returns.append(None)
+            spysim_breach_returns.append(None)
+            spysim_maxdepth_returns.append(None)
+            breach_alphas.append(None)
+            maxdepth_alphas.append(None)
+            continue
+
+        # Portfolio returns (dates are guaranteed to be in weekly_series from analyze_wma)
+        start_price = weekly_series.loc[start_date]
+        end_price = weekly_series.loc[end_date]
+        breach_return = ((end_price / start_price) - 1) * 100
+
+        bottom_price = weekly_series.loc[bottom_date]
+        if bottom_date == end_date:
+            maxdepth_return = 0.0
+        else:
+            maxdepth_return = ((end_price / bottom_price) - 1) * 100
+
+        # SPYSIM returns using Series.align() for proper date alignment
+        # Breach window (Start Date to End Date)
+        portfolio_breach_window = weekly_series.loc[start_date:end_date]
+        spysim_breach_window = spy_weekly.loc[start_date:end_date]
+        aligned_port_breach, aligned_spy_breach = portfolio_breach_window.align(spysim_breach_window, join='inner')
+
+        if len(aligned_spy_breach) >= 2:
+            spysim_breach_return = ((aligned_spy_breach.iloc[-1] / aligned_spy_breach.iloc[0]) - 1) * 100
+        else:
+            spysim_breach_return = None
+
+        # Max-Depth window (Bottom Date to End Date)
+        portfolio_maxdepth_window = weekly_series.loc[bottom_date:end_date]
+        spysim_maxdepth_window = spy_weekly.loc[bottom_date:end_date]
+        aligned_port_maxdepth, aligned_spy_maxdepth = portfolio_maxdepth_window.align(spysim_maxdepth_window, join='inner')
+
+        if len(aligned_spy_maxdepth) >= 2:
+            spysim_maxdepth_return = ((aligned_spy_maxdepth.iloc[-1] / aligned_spy_maxdepth.iloc[0]) - 1) * 100
+        else:
+            spysim_maxdepth_return = None
+
+        # Calculate alpha
+        if spysim_breach_return is not None:
+            breach_alpha = breach_return - spysim_breach_return
+        else:
+            breach_alpha = None
+
+        if spysim_maxdepth_return is not None:
+            maxdepth_alpha = maxdepth_return - spysim_maxdepth_return
+        else:
+            maxdepth_alpha = None
+
+        breach_returns.append(breach_return)
+        maxdepth_returns.append(maxdepth_return)
+        spysim_breach_returns.append(spysim_breach_return)
+        spysim_maxdepth_returns.append(spysim_maxdepth_return)
+        breach_alphas.append(breach_alpha)
+        maxdepth_alphas.append(maxdepth_alpha)
+
+    recovered_events["Breach Entry Return (%)"] = breach_returns
+    recovered_events["Max-Depth Entry Return (%)"] = maxdepth_returns
+    recovered_events["SPYSIM Breach Return (%)"] = spysim_breach_returns
+    recovered_events["SPYSIM Max-Depth Return (%)"] = spysim_maxdepth_returns
+    recovered_events["Breach Entry Alpha (%)"] = breach_alphas
+    recovered_events["Max-Depth Entry Alpha (%)"] = maxdepth_alphas
+
+    return recovered_events
+
+def compare_breach_events(
+    portfolio_series: pd.Series,
+    window: int = 200,
+    tolerance_days: int = 14,
+) -> pd.DataFrame:
+    """
+    Compare breach event returns for a portfolio.
+
+    Detects all 200DMA breach events and calculates:
+    - Breach-to-recovery returns (entry at breach date)
+    - Max-depth-to-recovery returns (entry at lowest point)
+    - SPYSIM benchmark returns for identical date windows
+    - Alpha (portfolio return minus SPYSIM return)
+
+    Args:
+        portfolio_series: Price series for portfolio (pandas Series with DatetimeIndex)
+        window: MA window (default 200)
+        tolerance_days: Whipsaw filter - merge breaches within N days (default 14)
+
+    Returns:
+        pd.DataFrame with columns from analyze_ma() events_df plus return/alpha columns.
+    """
+    # 1. Call analyze_ma to get breach events
+    ma_series, events_df = analyze_ma(portfolio_series, window, tolerance_days)
+
+    # 2. Filter to only recovered events (skip ongoing breaches)
+    if events_df.empty:
+        return events_df
+
+    recovered_events = events_df[events_df['Status'].str.contains('Recovered', na=False)].copy()
+
+    if recovered_events.empty:
+        return recovered_events
+
+    # 3. Fetch SPYSIM benchmark data matching portfolio date range
+    spysim_series, _, _ = fetch_backtest(
+        start_date=portfolio_series.index[0],
+        end_date=portfolio_series.index[-1],
+        start_val=10000,  # Arbitrary base - only ratios matter
+        cashflow=0,
+        cashfreq="Monthly",
+        rolling=1,
+        invest_div=True,
+        rebalance="None",
+        allocation={"SPYSIM": 100}
+    )
+
+    # 4. Calculate returns for each recovered event
+    breach_returns = []
+    maxdepth_returns = []
+    spysim_breach_returns = []
+    spysim_maxdepth_returns = []
+    breach_alphas = []
+    maxdepth_alphas = []
+
+    for idx, row in recovered_events.iterrows():
+        start_date = row['Start Date']
+        end_date = row['End Date']
+        bottom_date = row['Bottom Date']
+
+        # Skip if any required date is NaT
+        if pd.isna(start_date) or pd.isna(end_date) or pd.isna(bottom_date):
+            breach_returns.append(None)
+            maxdepth_returns.append(None)
+            spysim_breach_returns.append(None)
+            spysim_maxdepth_returns.append(None)
+            breach_alphas.append(None)
+            maxdepth_alphas.append(None)
+            continue
+
+        # Breach Entry Return: entry at Start Date, exit at End Date
+        start_price = portfolio_series.loc[start_date]
+        end_price = portfolio_series.loc[end_date]
+        breach_return = ((end_price / start_price) - 1) * 100
+
+        # Max-Depth Entry Return: entry at Bottom Date, exit at End Date
+        bottom_price = portfolio_series.loc[bottom_date]
+
+        # Handle edge case where Bottom Date == End Date
+        if bottom_date == end_date:
+            maxdepth_return = 0.0
+        else:
+            maxdepth_return = ((end_price / bottom_price) - 1) * 100
+
+        # Calculate SPYSIM returns for same date windows
+        # Use Series.align() for proper date alignment (handles weekends/holidays)
+
+        # Breach window (Start Date to End Date)
+        portfolio_breach_window = portfolio_series.loc[start_date:end_date]
+        spysim_breach_window = spysim_series.loc[start_date:end_date]
+        aligned_port_breach, aligned_spy_breach = portfolio_breach_window.align(spysim_breach_window, join='inner')
+
+        if len(aligned_spy_breach) >= 2:
+            spysim_breach_return = ((aligned_spy_breach.iloc[-1] / aligned_spy_breach.iloc[0]) - 1) * 100
+        else:
+            spysim_breach_return = None
+
+        # Max-Depth window (Bottom Date to End Date)
+        portfolio_maxdepth_window = portfolio_series.loc[bottom_date:end_date]
+        spysim_maxdepth_window = spysim_series.loc[bottom_date:end_date]
+        aligned_port_maxdepth, aligned_spy_maxdepth = portfolio_maxdepth_window.align(spysim_maxdepth_window, join='inner')
+
+        if len(aligned_spy_maxdepth) >= 2:
+            spysim_maxdepth_return = ((aligned_spy_maxdepth.iloc[-1] / aligned_spy_maxdepth.iloc[0]) - 1) * 100
+        else:
+            spysim_maxdepth_return = None
+
+        # Calculate alpha (portfolio return - benchmark return)
+        if spysim_breach_return is not None:
+            breach_alpha = breach_return - spysim_breach_return
+        else:
+            breach_alpha = None
+
+        if spysim_maxdepth_return is not None:
+            maxdepth_alpha = maxdepth_return - spysim_maxdepth_return
+        else:
+            maxdepth_alpha = None
+
+        breach_returns.append(breach_return)
+        maxdepth_returns.append(maxdepth_return)
+        spysim_breach_returns.append(spysim_breach_return)
+        spysim_maxdepth_returns.append(spysim_maxdepth_return)
+        breach_alphas.append(breach_alpha)
+        maxdepth_alphas.append(maxdepth_alpha)
+
+    # 5. Add return columns to dataframe
+    recovered_events['Breach Entry Return (%)'] = breach_returns
+    recovered_events['Max-Depth Entry Return (%)'] = maxdepth_returns
+    recovered_events['SPYSIM Breach Return (%)'] = spysim_breach_returns
+    recovered_events['SPYSIM Max-Depth Return (%)'] = spysim_maxdepth_returns
+    recovered_events['Breach Entry Alpha (%)'] = breach_alphas
+    recovered_events['Max-Depth Entry Alpha (%)'] = maxdepth_alphas
+
+    return recovered_events

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import os
@@ -12,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://testfol.io/api/backtest"
 
-def table_to_dicts(df: pd.DataFrame):
+def table_to_dicts(df: pd.DataFrame) -> tuple[dict[str, float], dict[str, float]]:
     """
     Converts the allocation dataframe to dictionaries for allocation and maintenance.
     """
@@ -21,9 +23,22 @@ def table_to_dicts(df: pd.DataFrame):
     maint = {r["Ticker"].split("?")[0].strip(): float(r["Maint %"]) for _,r in df.iterrows()}
     return alloc, maint
 
-def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
-                   invest_div, rebalance, allocation, return_raw=False, include_raw=False,
-                   rebalance_offset=0, cashflow_offset=0, **kwargs):
+def fetch_backtest(
+    start_date,
+    end_date,
+    start_val: float,
+    cashflow: float,
+    cashfreq: str,
+    rolling: int,
+    invest_div: bool,
+    rebalance: str,
+    allocation: dict[str, float],
+    return_raw: bool = False,
+    include_raw: bool = False,
+    rebalance_offset: int = 0,
+    cashflow_offset: int = 0,
+    **kwargs,
+) -> tuple[pd.Series, dict, dict] | dict:
     """
     Fetches backtest data from testfol.io API with universal disk caching.
     """
@@ -166,7 +181,15 @@ def fetch_backtest(start_date, end_date, start_val, cashflow, cashfreq, rolling,
     
     return result
 
-def simulate_margin(port, starting_loan, rate_annual, draw_monthly, maint_pct, tax_series=None, repayment_series=None):
+def simulate_margin(
+    port: pd.Series,
+    starting_loan: float,
+    rate_annual: float | dict,
+    draw_monthly: float,
+    maint_pct: float,
+    tax_series: pd.Series | None = None,
+    repayment_series: pd.Series | None = None,
+) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """
     Simulates margin loan and calculates equity/usage metrics.
     """
