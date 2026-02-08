@@ -38,7 +38,7 @@ def load_presets():
         try:
             with open(path, "r") as f:
                 return json.load(f)
-        except:
+        except (json.JSONDecodeError, OSError, ValueError):
             return []
     return []
 

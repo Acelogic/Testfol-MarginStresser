@@ -527,5 +527,31 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "HedgedPortion Only",
+        "allocation": [
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 37.5,
+                "Maint %": 25.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 50.0,
+                "Maint %": 15.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3",
+                "Weight %": 12.5,
+                "Maint %": 75.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]

@@ -120,7 +120,7 @@ def process_rebalancing_data(rebal_events, port_series, allocation):
             # Find portfolio value at rebalance date
             try:
                 port_val = port_series.asof(date)
-            except:
+            except (KeyError, IndexError, TypeError):
                 continue
                 
             if pd.isna(port_val):
