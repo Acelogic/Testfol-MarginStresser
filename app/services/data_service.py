@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 import os
 import subprocess
@@ -13,7 +15,7 @@ from app.services import testfol_api as api
 logger = logging.getLogger(__name__)
 
 
-def fetch_component_data(tickers, start_date, end_date):
+def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFrame:
     """
     Fetches historical data for each ticker individually via Testfol API (or local).
     Handles composite tickers like NDXMEGASIM by splicing local CSVs with live data.
@@ -174,7 +176,7 @@ def fetch_component_data(tickers, start_date, end_date):
 
 import time
 
-def get_fed_funds_rate():
+def get_fed_funds_rate() -> pd.Series | None:
     """
     Fetches historical Fed Funds Rate (daily) from FRED or local cache.
     Returns: pd.Series with DatetimeIndex and rate as float (e.g. 5.25 for 5.25%)

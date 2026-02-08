@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+import logging
+
+import pandas as pd
 from fastapi import APIRouter, HTTPException
 
 from api.schemas import (
@@ -7,10 +12,12 @@ from api.schemas import (
 from app.core.backtest_orchestrator import run_single_backtest, run_multi_backtest
 from app.common.cache import cache_key, cache_get, cache_set
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
 
-def _pydantic_cache_key(req) -> str:
+def _pydantic_cache_key(req: BacktestRequest | MultiBacktestRequest) -> str:
     """Generate cache key from a Pydantic request model (excludes bearer_token)."""
     return cache_key(req.model_dump_json(exclude={"bearer_token"}))
 
@@ -19,7 +26,7 @@ def _pydantic_cache_key(req) -> str:
 # Serialization Helpers
 # ---------------------------------------------------------------------------
 
-def _serialize_series(s):
+def _serialize_series(s: pd.Series | None) -> str | None:
     """Serialize a pandas Series to JSON string (split orient)."""
     if s is None or (hasattr(s, "empty") and s.empty):
         return None
@@ -29,7 +36,7 @@ def _serialize_series(s):
     return s.to_json(orient="split", date_format="iso")
 
 
-def _serialize_df(df):
+def _serialize_df(df: pd.DataFrame | None) -> str | None:
     """Serialize a pandas DataFrame to JSON string (split orient)."""
     if df is None or (hasattr(df, "empty") and df.empty):
         return None
@@ -104,7 +111,7 @@ def run_multi_backtest_endpoint(req: MultiBacktestRequest):
     key = _pydantic_cache_key(req)
     cached = cache_get(key, prefix="multi")
     if cached is not None:
-        print(f"DEBUG: Cache HIT for multi backtest {key[:8]}")
+        logger.debug("Cache HIT for multi backtest %s", key[:8])
         return cached
 
     try:
@@ -159,9 +166,8 @@ def run_multi_backtest_endpoint(req: MultiBacktestRequest):
             common_start=common_start.isoformat() if common_start else None,
         )
         cache_set(key, response, prefix="multi")
-        print(f"DEBUG: Cached multi backtest {key[:8]}")
+        logger.debug("Cached multi backtest %s", key[:8])
         return response
     except Exception as e:
-        import traceback
-        traceback.print_exc()
+        logger.exception("Multi backtest failed")
         raise HTTPException(status_code=500, detail=str(e))

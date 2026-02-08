@@ -1,11 +1,21 @@
+from __future__ import annotations
 
 import pandas as pd
 import numpy as np
 
-def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, monthly_cashflow=0.0,
-                    filter_start_date=None, filter_end_date=None,
-                    custom_mean_annual=None, custom_vol_annual=None,
-                    block_size=1):
+
+def run_monte_carlo(
+    returns_series: pd.Series,
+    n_sims: int = 1000,
+    n_years: int = 10,
+    initial_val: float = 10000,
+    monthly_cashflow: float = 0.0,
+    filter_start_date: str | None = None,
+    filter_end_date: str | None = None,
+    custom_mean_annual: float | None = None,
+    custom_vol_annual: float | None = None,
+    block_size: int = 1,
+) -> dict:
     """
     Runs a Monte Carlo simulation with advanced regime options:
     - Historical Period Filtering
@@ -214,7 +224,12 @@ def run_monte_carlo(returns_series, n_sims=1000, n_years=10, initial_val=10000, 
         }
     }
 
-def run_seasonal_monte_carlo(returns_series, n_sims=1000, initial_val=10000.0, monthly_cashflow=0.0):
+def run_seasonal_monte_carlo(
+    returns_series: pd.Series,
+    n_sims: int = 1000,
+    initial_val: float = 10000.0,
+    monthly_cashflow: float = 0.0,
+) -> pd.DataFrame:
     """
     Runs a Seasonal Monte Carlo simulation for a single "Typical Year".
     

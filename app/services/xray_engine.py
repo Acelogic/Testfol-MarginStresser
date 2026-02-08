@@ -2,6 +2,7 @@
 X-Ray Engine
 Expands ETF holdings recursively and aggregates them with direct stock holdings.
 """
+from __future__ import annotations
 
 import pandas as pd
 import logging
@@ -83,7 +84,7 @@ STATIC_LEVERAGE = {
     "UST": 2.0,
 }
 
-def parse_leverage(ticker):
+def parse_leverage(ticker: str) -> float:
     """Extract leverage factor from Testfol ticker string (e.g. ?L=2) or known static map."""
     clean_ticker = ticker.split('?')[0].split('@')[0].upper()
     if clean_ticker in STATIC_LEVERAGE:
@@ -105,12 +106,12 @@ def parse_leverage(ticker):
     return 1.0
 
 
-def compute_xray(portfolio_dict, depth=0, max_depth=2):
+def compute_xray(portfolio_dict: dict[str, float], depth: int = 0, max_depth: int = 2) -> pd.DataFrame:
     """
     portfolio_dict: {ticker: weight, ...} e.g., {"QQQ": 0.5, "AAPL": 0.5}
     depth: current recursion depth
     max_depth: limit recursion to avoid infinite loops or excessive API calls
-    
+
     Returns: DataFrame with [Ticker, Name, Weight, Source]
     """
     if depth > max_depth:
