@@ -219,7 +219,7 @@ def render():
                 with c_r1:
                     freq_opts = ["Yearly", "Quarterly", "Monthly"]
                     try: f_idx = freq_opts.index(p["rebalance"]["freq"])
-                    except: f_idx = 0
+                    except (ValueError, KeyError): f_idx = 0
                     p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
                 
                 with c_r2:
