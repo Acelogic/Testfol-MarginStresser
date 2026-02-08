@@ -1,5 +1,9 @@
-import pandas as pd
+import logging
 import os
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 # Global cache for tax tables
 _TAX_TABLES = {}
@@ -57,7 +61,7 @@ def load_tax_tables(csv_path):
                         rate = float(str(rate_str).replace("%", "")) / 100.0
                         bracket = float(str(bracket_str).replace("$", "").replace(",", ""))
                         return (bracket, rate)
-                    except:
+                    except (ValueError, TypeError):
                         return None
 
                 # Single
@@ -85,7 +89,7 @@ def load_tax_tables(csv_path):
                 _TAX_TABLES[year][status].sort(key=lambda x: x[0])
                 
     except Exception as e:
-        print(f"Error loading tax tables: {e}")
+        logger.error(f"Error loading tax tables: {e}")
 
 def calculate_historical_tax(year, taxable_income, filing_status="Single", csv_path=DEFAULT_TAX_CSV_PATH):
     """
@@ -173,7 +177,7 @@ def load_capital_gains_rates(excel_path):
                 continue
                 
     except Exception as e:
-        print(f"Error loading capital gains rates: {e}")
+        logger.error(f"Error loading capital gains rates: {e}")
 
 def get_capital_gains_inclusion_rate(year):
     """

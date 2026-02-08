@@ -1,10 +1,13 @@
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import io
 import contextlib
+import io
 from dataclasses import dataclass
 from datetime import date, timedelta
+
+import numpy as np
+import pandas as pd
+import yfinance as yf
+
+from app.common.constants import Freq
 
 @dataclass
 class TaxLot:
@@ -205,7 +208,7 @@ def fetch_prices(tickers, start_date, end_date, invest_dividends=True):
     print("-" * 20, file=f)
     
     with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-        data = yf.download(list(unique_bases), start=start_date, end=end_date, progress=True)
+        data = yf.download(list(unique_bases), start=start_date, end=end_date, progress=True, timeout=30)
     
     output = f.getvalue()
     
@@ -450,7 +453,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         try:
             current_val = api_port_series.asof(sim_start_date)
             logs.append(f"Handover from API: Initializing portfolio at ${current_val:,.2f} on {sim_start_date.date()}")
-        except:
+        except (KeyError, IndexError, TypeError):
             current_val = start_val
             logs.append(f"Handover Failed: Defaulting to start_val ${start_val:,.2f}")
             
@@ -506,6 +509,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     curr_twr = 1.0
     prev_post_flow_val = current_val # Tracks value after flows, for next day's return calc
 
+    last_rebal_month = (0, 0)
+    last_rebal_quarter = (0, 0)
+    last_rebal_year = -1
+
     for i in range(1, len(dates)):
         date = dates[i]
         prev_date = dates[i-1]
@@ -535,13 +542,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
-            if cashflow_freq == "Yearly":
+            if cashflow_freq == Freq.YEARLY:
                 if i < len(dates) - 1 and dates[i+1].year != date.year:
                     should_inject = True
-            elif cashflow_freq == "Quarterly":
+            elif cashflow_freq == Freq.QUARTERLY:
                 if i < len(dates) - 1 and dates[i+1].quarter != date.quarter:
                     should_inject = True
-            elif cashflow_freq == "Monthly":
+            elif cashflow_freq == Freq.MONTHLY:
                 if i < len(dates) - 1 and dates[i+1].month != date.month:
                     should_inject = True
                     
@@ -597,27 +604,27 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 3. Check for Rebalance
         should_rebal = False
         
-        if rebalance_freq == "Yearly":
+        if rebalance_freq == Freq.YEARLY:
             if i < len(dates) - 1:
                 next_date = dates[i+1]
                 if next_date.year != date.year:
                     should_rebal = True
-                    
-        elif rebalance_freq == "Quarterly":
+
+        elif rebalance_freq == Freq.QUARTERLY:
             # Rebalance at end of Mar, Jun, Sep, Dec
             # Check if next date is in a new quarter
             if i < len(dates) - 1:
                 next_date = dates[i+1]
                 if next_date.quarter != date.quarter:
                     should_rebal = True
-                    
-        elif rebalance_freq == "Monthly":
+
+        elif rebalance_freq == Freq.MONTHLY:
             # Rebalance at end of every month
             if i < len(dates) - 1:
                 next_date = dates[i+1]
                 if next_date.month != date.month:
                     should_rebal = True
-                    
+
         elif rebalance_freq == "Custom":
             # Custom rebalancing based on custom_freq (Yearly/Quarterly/Monthly)
             
@@ -637,8 +644,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 # Rebalance if we reached target day OR it's month end and we haven't reached target yet
                 if date.day >= effective_day or (is_month_end and effective_day > date.day):
                     month_key = (date.year, date.month)
-                    if 'last_rebal_month' not in locals():
-                        last_rebal_month = (0, 0)
                     if last_rebal_month != month_key:
                         should_rebal = True
                         last_rebal_month = month_key
@@ -650,8 +655,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 if date.month in quarter_months:
                     if date.day >= effective_day or (is_month_end and effective_day > date.day):
                         quarter_key = (date.year, date.month)
-                        if 'last_rebal_quarter' not in locals():
-                            last_rebal_quarter = (0, 0)
                         if last_rebal_quarter != quarter_key:
                             should_rebal = True
                             last_rebal_quarter = quarter_key
@@ -661,8 +664,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             else:  # Yearly (default)
                 if date.month == rebalance_month:
                      if date.day >= effective_day or (is_month_end and effective_day > date.day):
-                        if 'last_rebal_year' not in locals():
-                            last_rebal_year = -1
                         if last_rebal_year != date.year:
                             should_rebal = True
                             last_rebal_year = date.year

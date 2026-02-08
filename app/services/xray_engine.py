@@ -18,7 +18,7 @@ except ImportError:
     sys.path.append(os.path.join(os.path.dirname(__file__), "../../data/etf_xray/src"))
     import etf_holdings_fetcher
 
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
+logger = logging.getLogger(__name__)
 
 # Load Ticker to Name mapping from SEC data for better aggregation
 TICKER_TO_NAME = {}
@@ -53,9 +53,9 @@ try:
                 if clean_title and clean_title not in NAME_TO_TICKER:
                     NAME_TO_TICKER[clean_title] = ticker
                     
-        logging.info(f"Loaded {len(TICKER_TO_NAME)} tickers and {len(NAME_TO_TICKER)} name mappings for X-Ray.")
+        logger.info(f"Loaded {len(TICKER_TO_NAME)} tickers and {len(NAME_TO_TICKER)} name mappings for X-Ray.")
 except Exception as e:
-    logging.warning(f"Could not load ticker mappings: {e}")
+    logger.warning(f"Could not load ticker mappings: {e}")
 
 # Map for merging share classes or equivalent tickers
 TICKER_ALIASES = {
@@ -91,7 +91,8 @@ def parse_leverage(ticker):
     if '?L=' in ticker:
         try:
             return float(ticker.split('?L=')[1].split('&')[0])
-        except: pass
+        except (ValueError, IndexError):
+            pass
     if '-' in ticker:
         # Check for 3X, 2X, etc suffixes
         parts = ticker.split('-')
@@ -99,7 +100,8 @@ def parse_leverage(ticker):
         if last.endswith('X'):
             try:
                 return float(last[:-1])
-            except: pass
+            except (ValueError, IndexError):
+                pass
     return 1.0
 
 
@@ -124,7 +126,7 @@ def compute_xray(portfolio_dict, depth=0, max_depth=2):
         if port_weight <= 0:
             return []
             
-        logging.info(f"Processing {ticker} at depth {depth}...")
+        logger.info(f"Processing {ticker} at depth {depth}...")
         
         # Parse Leverage
         leverage = parse_leverage(ticker)
@@ -246,7 +248,7 @@ def compute_xray(portfolio_dict, depth=0, max_depth=2):
     
     # Log aggregation summary
     total_weight = summary['Weight'].sum()
-    logging.info(f"X-Ray: {len(summary)} unique holdings, total weight: {total_weight:.2%}")
+    logger.info(f"X-Ray: {len(summary)} unique holdings, total weight: {total_weight:.2%}")
     
     return summary
 
