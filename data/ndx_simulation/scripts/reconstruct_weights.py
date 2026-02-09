@@ -131,7 +131,7 @@ def get_rebalance_dates(start_year=2000, end_year=2025):
             
             if len(fridays) >= 3:
                 date_3rd_fri = fridays[2]
-                dates.append(pd.Timestamp(date_3rd_fri))
+                dates.append(pd.Timestamp(date_3rd_fri) + pd.offsets.BDay(1))
         current_year += 1
         
     # Filter to not exceed now + 90 days too much
@@ -412,7 +412,10 @@ def reconstruct():
                 # If Max <= 15% and Top5 <= 40%, we correspond to the 'Use Initial Weights' logic of stage 1/2
                 # Strictly speaking, we should check if we violated anything.
                 # But since we force caps, iterating should converge.
-                if w_series.max() <= 0.1501 and w_series.sort_values(ascending=False).iloc[:5].sum() <= 0.4001:
+                w_sorted = w_series.sort_values(ascending=False)
+                if (w_sorted.iloc[0] <= 0.1501
+                        and w_sorted.iloc[:5].sum() <= 0.4001
+                        and (w_sorted.iloc[5:] <= 0.0441).all()):
                     break
         
         return pd.DataFrame({'Ticker': w_series.index, 'CappedWeight': w_series.values})

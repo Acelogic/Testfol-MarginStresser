@@ -83,7 +83,9 @@ def backtest():
     # Store constituents count
     constituents_history = []
     current_constituents = set()
-    
+    prev_top5 = None  # Track last known good top-5 for composition quality gate
+    prev_final_weights = None  # Track last good portfolio for carry-forward
+
     print("Simulating NDX Mega strategy...")
     
     for i in range(len(dates) - 1):
@@ -97,10 +99,51 @@ def backtest():
         # Sort by Weight Descending (on FULL universe)
         q_weights = q_weights.sort_values(by='Weight', ascending=False)
         q_weights['CumWeight'] = q_weights['Weight'].cumsum()
-        
+
+        # Data quality gate: flag quarters where top-5 changed too drastically
+        # compared to last known good quarter (catches stale/distorted filing data).
+        current_top5 = set(q_weights.head(5)['Ticker'].tolist())
+
+        if prev_top5 is not None:
+            overlap = len(current_top5 & prev_top5)
+            if overlap < 2:
+                if prev_final_weights is not None:
+                    print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5 with prev) — carrying forward")
+                    curr_w = prev_final_weights.copy()
+                    valid_tickers = [t for t in curr_w.index if t in data.columns]
+                    curr_w = curr_w[valid_tickers]
+                    if curr_w.sum() > 0:
+                        curr_w = curr_w / curr_w.sum()
+                    constituents_history.append({
+                        "Date": start_dt, "Count": len(curr_w),
+                        "Top": curr_w.idxmax() if not curr_w.empty else "N/A",
+                        "Type": "CarryFwd",
+                        "Tickers": "|".join(curr_w.index),
+                        "Weights": "|".join([f"{w:.6f}" for w in curr_w])
+                    })
+                    try:
+                        price_slice = data.loc[start_dt:end_dt, curr_w.index].ffill()
+                        if not price_slice.empty:
+                            p_start = price_slice.iloc[0]
+                            valid_mask = (p_start > 0) & (p_start.notna())
+                            valid_tkrs = valid_mask.index[valid_mask].tolist()
+                            fw = curr_w[valid_tkrs]
+                            if fw.sum() > 0:
+                                fw = fw / fw.sum()
+                            shares = (fw * current_value) / p_start[valid_tkrs]
+                            daily_vals = price_slice[valid_tkrs].dot(shares)
+                            mega_values.loc[daily_vals.index] = daily_vals
+                            current_value = daily_vals.iloc[-1]
+                    except Exception as e:
+                        print(f"  Error in carry-forward period: {e}")
+                    continue
+                else:
+                    print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5) — no previous portfolio, skipping")
+                    continue
+
         # Identify Annual Reconstitution (December) vs Quarterly Rebalance
         is_annual_recon = (start_dt.month == 12)
-        
+
         selected_tickers = []
         
         if is_annual_recon or not current_constituents:
@@ -109,7 +152,7 @@ def backtest():
             # Using MEGA1 constants
             curr_sum = 0.0
             for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum + w <= config.MEGA1_TARGET_THRESHOLD: # Strict threshold
+                if curr_sum < config.MEGA1_TARGET_THRESHOLD: # Include stock that crosses threshold ("at least 47%")
                     if mapped:
                         selected_tickers.append(ticks)
                     # We count the weight towards the threshold regardless of mapping
@@ -211,7 +254,9 @@ def backtest():
         # Note: We re-normalize to 100% of the HELD portfolio here.
         final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA1_SINGLE_STOCK_CAP)
 
-
+        # Save as previous good portfolio for carry-forward
+        prev_final_weights = final_weights.copy()
+        prev_top5 = current_top5
 
         # Stats
         constituents_history.append({

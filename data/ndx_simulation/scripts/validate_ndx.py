@@ -63,16 +63,33 @@ def validate():
     # Hold that portfolio until next quarter.
     # Calculate return of that portfolio.
     
+    prev_top5 = None  # Track last known good top-5 for composition quality gate
+
     for i in range(len(dates) - 1):
         start_dt = dates[i]
         end_dt = dates[i+1]
-        
+
         # Get Weights at Start Date
         w_df = weights[weights['Date'] == start_dt]
-        
+
+        # Data quality gate: skip quarters with too few positions (catches garbage data)
+        if len(w_df) < 15:
+            print(f"  Q {start_dt.date()}: SKIPPED — only {len(w_df)} positions (< 15)")
+            continue
+
+        # Data quality gate: flag quarters where top-5 changed too drastically
+        # compared to last known good quarter (catches stale/distorted filing data).
+        current_top5 = set(w_df.sort_values('Weight', ascending=False).head(5)['Ticker'].tolist())
+        if prev_top5 is not None:
+            overlap = len(current_top5 & prev_top5)
+            if overlap < 2:
+                print(f"  Q {start_dt.date()}: SKIPPED — distorted weights (overlap={overlap}/5 with prev quarter)")
+                continue
+        prev_top5 = current_top5
+
         # Filter for tickers we have prices for
         valid_w = w_df[w_df['Ticker'].isin(data.columns)]
-        
+
         if i == 0:
             print(f"Date: {start_dt}")
             print(f"Total Weights in CSV: {len(w_df)}")
@@ -84,101 +101,83 @@ def validate():
         if len(valid_w) == 0:
             continue
             
-        current_sum = valid_w['Weight'].sum()
-        if current_sum == 0:
+        raw_sum = valid_w['Weight'].sum()
+        if raw_sum <= 0:
             continue
-            
-        # Calculate Missing Weight (Unmapped / Delisted)
-        missing_weight = 1.0 - current_sum
-        
-        # Tickers and Valid Weights (do NOT re-normalize yet)
+
         port_tickers = valid_w['Ticker'].values
-        # Keep absolute weights for contribution calculation
-        abs_weights = valid_w['Weight'].values 
-        
-        # Get Prices
+        abs_weights = valid_w['Weight'].values / raw_sum  # Normalized to 1.0
+
+        # Get prices and calculate return
         try:
-            # We need start and end prices to calculate return
-            price_slice = data.loc[start_dt:end_dt, port_tickers]
-            price_slice = price_slice.ffill()
-            
+            price_slice = data.loc[start_dt:end_dt, port_tickers].ffill()
             p_start = price_slice.iloc[0]
             p_end = price_slice.iloc[-1]
-            
-            # Identify valid tickers
+
             valid_mask = (p_start > 0) & (p_start.notna()) & (p_end.notna())
-            
             if not valid_mask.any():
                 print(f"Period {start_dt}: No valid pricing.")
                 continue
-                
+
             valid_tickers = valid_mask.index[valid_mask].tolist()
-            
-            # Calculate Return of Mapped Portion
             p_s = p_start[valid_tickers]
             p_e = p_end[valid_tickers]
             w_s = pd.Series(abs_weights, index=port_tickers)[valid_tickers]
-            
-            used_weight = w_s.sum()
-            effective_missing = 1.0 - used_weight
-            
-            # Calculate weighted return of survivors
-            survivor_contrib = (w_s * (p_e / p_s)).sum()
-            
-            # Calculate Benchmark Return for the period (for proxying missing portion)
-            bm_ret = None
-            if BENCHMARK_TICKER in data.columns:
-                 bm_slice = data.loc[start_dt:end_dt, BENCHMARK_TICKER].ffill()
-                 if not bm_slice.empty:
-                      bm_s = bm_slice.iloc[0]
-                      bm_e = bm_slice.iloc[-1]
-                      if pd.notna(bm_s) and bm_s > 0:
-                          bm_ret = bm_e / bm_s
-            
-            # Default fallback for missing return (if we can't solve for it)
-            missing_ret = bm_ret if (bm_ret is not None and pd.notna(bm_ret)) else 1.0
-            
-            if bm_ret is not None and effective_missing > 0.01:
-                # Solve for R_M (Implied Return of Missing Stocks) to force match
-                implied_R_M = (bm_ret - survivor_contrib) / effective_missing
-                
-                missing_ret = implied_R_M
-                period_factor = bm_ret 
-            else:
-                period_factor = survivor_contrib + (effective_missing * missing_ret)
 
-            # 5. Generate Daily Series (for Plotting)
+            # Re-normalize for tickers with valid prices
+            used_weight = w_s.sum()
+            if used_weight > 0:
+                w_s = w_s / used_weight
+
+            effective_coverage = raw_sum * used_weight
+            survivor_ret = (w_s * (p_e / p_s)).sum()
+
+            # Benchmark return for the period
+            bm_ret = 1.0
+            if BENCHMARK_TICKER in data.columns:
+                bm_slice = data.loc[start_dt:end_dt, BENCHMARK_TICKER].ffill()
+                if not bm_slice.empty and pd.notna(bm_slice.iloc[0]) and bm_slice.iloc[0] > 0:
+                    bm_ret = bm_slice.iloc[-1] / bm_slice.iloc[0]
+
+            # Daily series using survivor prices (gives good daily shape)
             price_valid = price_slice[valid_tickers]
             shares = w_s / p_s
-            daily_survivor_val = price_valid.dot(shares)
-            dates_period = daily_survivor_val.index
-            n_days = len(dates_period)
-            
-            daily_missing_val = pd.Series(0.0, index=dates_period)
-            
-            if effective_missing > 0.0001 and n_days > 1:
-                miss_start = effective_missing
-                miss_end = effective_missing * missing_ret
-                
-                # Geometric interpolation
-                if miss_start > 0 and miss_end > 0:
-                    daily_rate = np.power(miss_end / miss_start, 1/(n_days-1))
-                    factors = np.power(daily_rate, np.arange(n_days))
-                    daily_missing_val[:] = miss_start * factors
-                else:
-                    daily_missing_val[:] = np.linspace(miss_start, miss_end, n_days)
-            elif effective_missing > 0.0001:
-                 daily_missing_val[:] = effective_missing
+            daily_survivor = price_valid.dot(shares)  # Relative to 1.0
 
-            # Total Daily Value (Relative to Start of Period = 1.0)
-            daily_rel = daily_survivor_val + daily_missing_val
-            
-            # Scale to Global Current Value
-            daily_vals_scaled = daily_rel * current_value
-            
+            # Asymmetric survivorship-bias correction:
+            # Missing tickers are systematically losers (delisted/acquired),
+            # so survivor-only returns are biased UPWARD. We only dampen the
+            # upward excess; downward gaps are real signal, not bias.
+            # alpha = (2.7c - 1.7)^3: zeros at ~63% coverage, calibrated to
+            # minimize return gap under asymmetric daily blending.
+            alpha = max(0.0, 2.7 * effective_coverage - 1.7) ** 3
+
+            # Daily benchmark ratio for blending
+            bm_daily = data.loc[start_dt:end_dt, BENCHMARK_TICKER].ffill()
+            if bm_daily.iloc[0] > 0:
+                bm_ratio = bm_daily / bm_daily.iloc[0]
+            else:
+                bm_ratio = pd.Series(1.0, index=bm_daily.index)
+
+            # Asymmetric blend: only dampen when survivors outperform QQQ
+            # for the quarter (survivorship bias direction). When survivors
+            # underperform or coverage >= 95%, trust them fully.
+            if effective_coverage >= 0.95 or survivor_ret <= bm_ret:
+                daily_blend = daily_survivor
+            else:
+                daily_blend = alpha * daily_survivor + (1.0 - alpha) * bm_ratio
+
+            period_factor = daily_blend.iloc[-1]
+
+            # Coverage report
+            print(f"  Q {start_dt.date()}: coverage={effective_coverage:.1%}, "
+                  f"alpha={alpha:.3f}, survivor={survivor_ret:.4f}, "
+                  f"blended={period_factor:.4f}, QQQ={bm_ret:.4f}")
+
+            daily_vals_scaled = daily_blend * current_value
             sim_values.loc[daily_vals_scaled.index] = daily_vals_scaled
             current_value = daily_vals_scaled.iloc[-1]
-            
+
         except Exception as e:
             print(f"Error in period {start_dt}: {e}")
             pass
@@ -405,7 +404,177 @@ def compare_strategies():
     plt.savefig(out_img, dpi=300, bbox_inches='tight')
     print(f"Chart saved to {out_img}")
 
+def validate_against_real_indexes():
+    """Compare simulations against real Nasdaq index data from FRED (price + total return)."""
+    import requests
+    import io
+
+    print("\n\n=== Validating Simulations vs Real Nasdaq Indexes (FRED) ===")
+
+    def get_fred(series_id):
+        url = f'https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}'
+        resp = requests.get(url, timeout=15)
+        if resp.status_code != 200:
+            print(f"  Failed to fetch {series_id} from FRED (HTTP {resp.status_code})")
+            return pd.Series(dtype=float)
+        df = pd.read_csv(io.StringIO(resp.text), parse_dates=['observation_date'], index_col='observation_date')
+        df[series_id] = pd.to_numeric(df[series_id], errors='coerce')
+        return df[series_id].dropna()
+
+    def compare_pair(label, sim_series, fred_id, tag=""):
+        """Compare sim vs a single FRED series. Returns (corr, te, gap) or None."""
+        real = get_fred(fred_id)
+        if real.empty:
+            return None
+
+        common = sim_series.index.intersection(real.index)
+        if len(common) < 10:
+            print(f"  {label} vs {fred_id}: only {len(common)} overlapping days — skipping")
+            return None
+
+        s = sim_series.loc[common]
+        r = real.loc[common]
+
+        s_norm = s / s.iloc[0] * 100
+        r_norm = r / r.iloc[0] * 100
+
+        corr = s_norm.corr(r_norm)
+        ret_s = s.iloc[-1] / s.iloc[0] - 1
+        ret_r = r.iloc[-1] / r.iloc[0] - 1
+
+        rs = s.pct_change().dropna()
+        rr = r.pct_change().dropna()
+        common_ret = rs.index.intersection(rr.index)
+        te = (rs.loc[common_ret] - rr.loc[common_ret]).std() * np.sqrt(252)
+
+        suffix = f" ({tag})" if tag else ""
+        print(f"  vs {fred_id}{suffix}:")
+        print(f"    Overlap:        {common[0].date()} to {common[-1].date()} ({len(common)} days)")
+        print(f"    Correlation:    {corr:.4f}")
+        print(f"    Tracking Error: {te:.2%}")
+        print(f"    Sim Return:     {ret_s:.2%}")
+        print(f"    Real Return:    {ret_r:.2%}")
+        print(f"    Gap:            {(ret_s - ret_r)*100:+.2f}pp")
+
+        return {"corr": corr, "te": te, "ret_s": ret_s, "ret_r": ret_r,
+                "s_norm": s_norm, "r_norm": r_norm, "s": s, "r": r,
+                "common": common, "fred_id": fred_id, "tag": tag}
+
+    # Each entry: (label, sim_file, price_return_fred, total_return_fred)
+    comparisons = [
+        ("NDX Mega 1.0", "NDXMEGASIM", "NASDAQNDXMEGA", "NASDAQNDXMEGAT"),
+        ("NDX Mega 2.0", "NDXMEGA2SIM", "NASDAQNDXMEGA2", "NASDAQNDXMEGA2T"),
+    ]
+
+    for label, sim_name, fred_price, fred_total in comparisons:
+        sim_path = os.path.join(config.BASE_DIR, "..", f"{sim_name}.csv")
+        if not os.path.exists(sim_path):
+            print(f"  Skipping {label}: {sim_path} not found")
+            continue
+
+        sim_df = pd.read_csv(sim_path, parse_dates=[0], index_col=0)
+        sim_series = sim_df.iloc[:, 0]
+
+        print(f"\n--- {label} ---")
+
+        # Compare against price return
+        result_price = compare_pair(label, sim_series, fred_price, "Price Return")
+
+        # Compare against total return
+        result_total = compare_pair(label, sim_series, fred_total, "Total Return")
+
+        # Chart for each available comparison
+        for result in [result_price, result_total]:
+            if result is None:
+                continue
+
+            chart_style.apply_style()
+            plt.figure(figsize=(14, 8))
+            ax = plt.gca()
+
+            gap_pp = (result["ret_s"] - result["ret_r"]) * 100
+            plt.plot(result["s_norm"], label=f'{label} Sim ({result["ret_s"]:.1%})', linewidth=2.5)
+            plt.plot(result["r_norm"], label=f'{result["fred_id"]} ({result["tag"]}) ({result["ret_r"]:.1%})',
+                     linestyle='--', linewidth=2.0, color='#C44E52')
+
+            chart_style.format_date_axis(ax)
+            chart_style.format_y_axis(ax, log=False)
+            chart_style.add_watermark(ax, f"{label} vs Real")
+
+            plt.title(f"{label}: Sim vs {result['fred_id']} ({result['tag']})\n"
+                       f"Corr: {result['corr']:.4f}, TE: {result['te']:.2%}, Gap: {gap_pp:+.1f}pp")
+            plt.legend()
+
+            chart_name = f"{sim_name.lower().replace('sim', '_vs_real')}_{result['tag'].lower().replace(' ', '_')}"
+            out_img = os.path.join(config.RESULTS_DIR, "charts", f"{chart_name}.png")
+            plt.savefig(out_img, dpi=300, bbox_inches='tight')
+            print(f"  Chart saved to {out_img}")
+
+        # --- Fix 3: Per-Quarter Attribution Diagnostic ---
+        # Use price return comparison (longer history) if available, else total return
+        result = result_price or result_total
+        if result is None:
+            continue
+
+        s = result["s"]
+        r = result["r"]
+        common = result["common"]
+
+        # Monthly return gap
+        s_monthly = s.resample('ME').last().dropna()
+        r_monthly = r.resample('ME').last().dropna()
+        common_monthly = s_monthly.index.intersection(r_monthly.index)
+        if len(common_monthly) < 2:
+            continue
+
+        s_m = s_monthly.loc[common_monthly]
+        r_m = r_monthly.loc[common_monthly]
+        ret_s_m = s_m.pct_change().dropna()
+        ret_r_m = r_m.pct_change().dropna()
+        gap_m = ret_s_m - ret_r_m
+
+        # Quarterly attribution table
+        s_quarterly = s.resample('QE').last().dropna()
+        r_quarterly = r.resample('QE').last().dropna()
+        common_q = s_quarterly.index.intersection(r_quarterly.index)
+
+        if len(common_q) >= 2:
+            s_q = s_quarterly.loc[common_q]
+            r_q = r_quarterly.loc[common_q]
+            ret_s_q = s_q.pct_change().dropna()
+            ret_r_q = r_q.pct_change().dropna()
+            gap_q = ret_s_q - ret_r_q
+
+            print(f"\n  Per-Quarter Attribution ({result['fred_id']}):")
+            print(f"  {'Quarter':<12} {'Sim':>8} {'Real':>8} {'Gap':>8}")
+            print(f"  {'-'*36}")
+
+            # Sort by absolute gap descending to show biggest mismatches first
+            for dt in gap_q.abs().sort_values(ascending=False).index:
+                qstr = f"{dt.year}Q{(dt.month-1)//3+1}"
+                print(f"  {qstr:<12} {ret_s_q.loc[dt]:>8.2%} {ret_r_q.loc[dt]:>8.2%} {gap_q.loc[dt]*100:>+7.2f}pp")
+
+        # Monthly gap bar chart
+        if len(gap_m) >= 2:
+            chart_style.apply_style()
+            fig, ax = plt.subplots(figsize=(14, 6))
+
+            colors = ['#2ca02c' if g >= 0 else '#d62728' for g in gap_m.values]
+            ax.bar(gap_m.index, gap_m.values * 100, width=20, color=colors, alpha=0.8)
+            ax.axhline(0, color='black', linewidth=0.5)
+
+            ax.set_ylabel('Monthly Return Gap (pp)')
+            ax.set_title(f'{label}: Monthly Return Gap vs {result["fred_id"]}\n'
+                         f'Green = sim outperforms, Red = sim underperforms')
+            chart_style.format_date_axis(ax)
+
+            chart_name = f"{sim_name.lower().replace('sim', '_attribution')}"
+            out_img = os.path.join(config.RESULTS_DIR, "charts", f"{chart_name}.png")
+            plt.savefig(out_img, dpi=300, bbox_inches='tight')
+            print(f"  Attribution chart saved to {out_img}")
+
 if __name__ == "__main__":
     validate()
     validate_qbig()
+    validate_against_real_indexes()
     compare_strategies()

@@ -147,10 +147,21 @@ def parse_html_file(filepath):
             # Remove * or similar from name
             name = name.rstrip('*').strip()
             
-            # Basic garbage filter: Name shouldn't be "Total" or start with numbers
-            if "TOTAL" in name.upper() or "NET ASSETS" in name.upper():
+            # Artifact blocklist: filter SEC filing non-holding rows
+            ARTIFACT_NAMES = {
+                'total', 'net assets', 'net realized gain', 'net change in unrealized',
+                'net unrealized', 'interest', 'dividends', 'capital gains',
+                'september', 'october', 'november', 'december',
+                'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+                'cash', 'amount due', 'investments purchased', 'marketing expenses',
+                'ordinary income', 'other expenses', 'professional fees', 'shares sold',
+                'trustee fees', 'undistributed net', 'other assets less liabilities',
+                'net investment income', 'amount due to',
+            }
+            name_lower = name.lower().strip()
+            if any(name_lower.startswith(a) for a in ARTIFACT_NAMES):
                 continue
-            if not name[0].isalpha():
+            if len(name) < 5 or not name[0].isalpha():
                 continue
 
             holdings.append((name, shares_str, val_str))
@@ -358,8 +369,32 @@ def process_files():
                  logging.info("  HTML parsing yielded few results. Using fallback text parsing.")
                  holdings = parse_html_as_text(filepath)
             
+        # Global artifact filter (catches artifacts from all parser paths)
+        ARTIFACT_NAMES = {
+            'total', 'net assets', 'net realized gain', 'net change in unrealized',
+            'net unrealized', 'interest', 'dividends', 'capital gains',
+            'september', 'october', 'november', 'december',
+            'january', 'february', 'march', 'april', 'may', 'june', 'july', 'august',
+            'cash', 'amount due', 'investments purchased', 'marketing expenses',
+            'ordinary income', 'other expenses', 'professional fees', 'shares sold',
+            'trustee fees', 'undistributed net', 'other assets less liabilities',
+            'net investment income',
+        }
+        filtered = []
+        for h in holdings:
+            name_lower = h[0].lower().strip()
+            if len(h[0]) < 5 or not h[0][0].isalpha():
+                continue
+            if any(name_lower.startswith(a) for a in ARTIFACT_NAMES):
+                continue
+            filtered.append(h)
+
+        if len(filtered) < len(holdings):
+            logging.info(f"  Filtered {len(holdings) - len(filtered)} artifact rows.")
+        holdings = filtered
+
         logging.info(f"  Found {len(holdings)} holdings.")
-        
+
         for h in holdings:
             all_data.append([file_date, filename, h[0], h[1], h[2]])
 

@@ -54,8 +54,9 @@ def get_unique_names():
 
 def clean_name(name):
     # Simplify name for matching
-    # Remove common suffixes
     n = name.lower()
+    # Strip (b), (a), (c) footnote markers from SEC filings
+    n = re.sub(r'\s*\([a-z]\)\s*$', '', n)
     n = re.sub(r'[\.,]', '', n)
     n = re.sub(r'\b(inc|corp|corporation|ltd|limited|company|co|plc)\b', '', n)
     n = n.replace('*', '').strip()
@@ -120,12 +121,15 @@ def price_validate(ticker, date_str, shares, value):
         return False
 
 # Manual overrides for difficult to map companies (ADRs, complex class structures)
+# Includes fixes for ~32 confirmed wrong fuzzy matches and ~170 previously unmapped names
 MANUAL_OVERRIDES = {
+    # === EXISTING CORRECT OVERRIDES ===
     "ARM Holdings PLC, ADR (b)": "ARM",
     "ASML Holding N.V., New York Shares (Netherlands)": "ASML",
     "Airbnb, Inc., Class A (b)": "ABNB",
     "AstraZeneca PLC, ADR (United Kingdom)": "AZN",
     "Atlassian Corp., Class A (b)": "TEAM",
+    "Atlassian Corp. PLC, Class A (b)": "TEAM",
     "Autodesk, Inc. (b)": "ADSK",
     "Baker Hughes Co., Class A": "BKR",
     "Biogen, Inc. (b)": "BIIB",
@@ -133,6 +137,7 @@ MANUAL_OVERRIDES = {
     "Coca-Cola Europacific Partners PLC (United Kingdom)": "CCEP",
     "Copart, Inc. (b)": "CPRT",
     "CrowdStrike Holdings, Inc., Class A (b)": "CRWD",
+    "Crowdstrike Holdings, Inc., Class A (b)": "CRWD",
     "Datadog, Inc., Class A (b)": "DDOG",
     "DexCom, Inc. (b)": "DXCM",
     "DoorDash, Inc., Class A (b)": "DASH",
@@ -143,6 +148,7 @@ MANUAL_OVERRIDES = {
     "Intuitive Surgical, Inc. (b)": "ISRG",
     "Kraft Heinz Co. (The)": "KHC",
     "Monolithic Power Systems, Inc.": "MPWR",
+    "Monolithic Power Systems": "MPWR",
     "Old Dominion Freight Line, Inc.": "ODFL",
     "Palo Alto Networks, Inc. (b)": "PANW",
     "Ross Stores, Inc.": "ROST",
@@ -152,16 +158,20 @@ MANUAL_OVERRIDES = {
     "Trade Desk, Inc. (The), Class A (b)": "TTD",
     "Warner Bros. Discovery, Inc. (b)": "WBD",
     "Workday, Inc., Class A (b)": "WDAY",
+    "Workday, Inc., Class A": "WDAY",
     "Zscaler, Inc. (b)": "ZS",
     "lululemon athletica, inc. (b)": "LULU",
-    "O’Reilly Automotive, Inc. (b)": "ORLY",
+    "O\u2019Reilly Automotive, Inc. (b)": "ORLY",
     "Cadence Design Systems, Inc. (b)": "CDNS",
     "CoStar Group, Inc. (b)": "CSGP",
     "GE HealthCare Technologies, Inc.": "GEHC",
     "Marriott International, Inc., Class A": "MAR",
+    "Marriott International, Inc., Class A (b)": "MAR",
     "MercadoLibre, Inc.": "MELI",
     "MercadoLibre, Inc. (Brazil) (b)": "MELI",
+    "MercadoLibre, Inc. (Argentina) (b)": "MELI",
     "Microchip Technology, Inc.": "MCHP",
+    "Microchip Technology Incorporated": "MCHP",
     "Micron Technology, Inc.": "MU",
     "Moderna, Inc.": "MRNA",
     "Moderna, Inc. (b)": "MRNA",
@@ -173,17 +183,363 @@ MANUAL_OVERRIDES = {
     "Super Micro Computer, Inc. (b)": "SMCI",
     "T-Mobile US, Inc.": "TMUS",
     "Verisk Analytics, Inc.": "VRSK",
+    "Verisk Analytics, Inc., Class A": "VRSK",
     "Vertex Pharmaceuticals, Inc.": "VRTX",
     "Tesla, Inc. (b)": "TSLA",
     "Amazon.com, Inc. (b)": "AMZN",
     "PDD Holdings, Inc., ADR (China) (b)": "PDD",
+    "Pinduoduo, Inc., ADR (China) (b)": "PDD",
     "Netflix, Inc. (b)": "NFLX",
     "Alphabet, Inc., Class A": "GOOGL",
+    "Alphabet, Inc., Class A (b)": "GOOGL",
     "Alphabet, Inc., Class C": "GOOG",
+    "Alphabet, Inc., Class C (b)": "GOOG",
     "Meta Platforms, Inc., Class A": "META",
+    "Meta Platforms, Inc., Class A (b)": "META",
     "Comcast Corp., Class A": "CMCSA",
     "Adobe, Inc. (b)": "ADBE",
-    "ANSYS, Inc. (b)": "ANSS"
+    "ANSYS, Inc. (b)": "ANSS",
+
+    # === FIXED WRONG MAPPINGS (were fuzzy-matched to wrong SEC registrants) ===
+    "Apple Computer, Inc.": "AAPL",
+    "Tesla Motors, Inc.": "TSLA",
+    "Priceline Group, Inc.": "BKNG",
+    "Priceline Group, Inc. (The)": "BKNG",
+    "priceline.com, Inc.": "BKNG",
+    "Comcast Corp.": "CMCSA",
+    "Comcast Corporation": "CMCSA",
+    "ASML Holding NV": "ASML",
+    "Baidu, Inc.": "BIDU",
+    "Baidu, Inc. ADR": "BIDU",
+    "Baidu, Inc., ADR (China) (b)": "BIDU",
+    "Baidu.com": "BIDU",
+    "Teva Pharmaceutical Industries Limited": "TEVA",
+    "Teva Pharmaceutical Industries Ltd": "TEVA",
+    "Teva Pharmaceutical Industries Ltd. - ADR": "TEVA",
+    "Teva Pharmaceutical Industries Ltd. ADR": "TEVA",
+    "Altera Corp.": "ALTR",
+    "Altera Corporation": "ALTR",
+    "Linear Technology Corp.": "LLTC",
+    "Linear Technology Corporation": "LLTC",
+    "Juniper Networks, Inc.": "JNPR",
+    "Seagate Technology": "STX",
+    "Seagate Technology PLC": "STX",
+    "Seagate Technology Holdings": "STX",
+    "Symantec Corp.": "GEN",
+    "Symantec Corporation": "GEN",
+    "Avago Technologies Ltd.": "AVGO",
+    "Avago Technologies Ltd., Class A": "AVGO",
+    "Celgene Corp.": "CELG",
+    "Celgene Corp. (b)": "CELG",
+    "Nuance Communications, Inc.": "NUAN",
+    "Costco Companies, Inc": "COST",
+    "FLIR Systems, Inc.": "FLIR",
+    "Flir Systems, Inc.": "FLIR",
+    "Charter Communications, Inc.": "CHTR",
+    "Discovery Communications, Inc.": "DISCA",
+    "Discovery Communications, Inc., Class A": "DISCA",
+    "Discovery Communications, Inc., Class C": "DISCK",
+    "Kraft Foods Group, Inc.": "KRFT",
+    "Kraft Foods, Inc., Class A": "KRFT",
+    "Level 3 Communications, Inc.": "LVLT",
+
+    # === PREVIOUSLY UNMAPPED: HIGH FREQUENCY ===
+    "Xilinx, Inc.": "XLNX",
+    "Maxim Integrated Products, Inc.": "MXIM",
+    "Citrix Systems, Inc.": "CTXS",
+    "Activision Blizzard, Inc.": "ATVI",
+    "Staples, Inc.": "SPLS",
+    "Cerner Corp.": "CERN",
+    "Sun Microsystems, Inc.": "JAVA",
+    "Expedia, Inc.": "EXPE",
+    "Adobe Systems, Inc.": "ADBE",
+    "Adobe Systems Incorporated": "ADBE",
+    "Whole Foods Market, Inc.": "WFM",
+    "JDS Uniphase Corporation": "JDSU",
+    "Walgreens Boots Alliance, Inc.": "WBA",
+    "Yahoo!, Inc.": "YHOO",
+    "Yahoo! Inc.": "YHOO",
+    "Yahoo Inc.": "YHOO",
+    "Stericycle, Inc.": "SRCL",
+    "Vodafone Group PLC ADR": "VOD",
+    "Dell, Inc.": "DELL",
+    "Dell Inc.": "DELL",
+    "Dell Computer Corporation": "DELL",
+    "Express Scripts, Inc.": "ESRX",
+    "Express Scripts, Inc., Class A": "ESRX",
+    "Express Scripts Holding Co.": "ESRX",
+    "Mattel, Inc.": "MAT",
+    "Network Appliance, Inc.": "NTAP",
+    "Google, Inc., Class A": "GOOGL",
+    "Google, Inc., Class C": "GOOG",
+    "Google, Inc.": "GOOG",
+    "Google Inc.": "GOOG",
+    "Cephalon, Inc.": "CEPH",
+    "Broadcom Corp., Class A": "BRCM",
+    "KLA-Tencor Corp.": "KLAC",
+    "KLA-Tencor Corporation": "KLAC",
+    "KLA -Tencor Corporation": "KLAC",
+    "Kla-Tencor Corp.": "KLAC",
+    "KLA-Tencor    Corp.": "KLAC",
+    "Apollo Group, Inc.": "APOL",
+    "Apollo Group, Inc., Class A": "APOL",
+    "Sigma-Aldrich Corp.": "SIAL",
+    "Sigma-Aldrich Corporation": "SIAL",
+    "Tellabs, Inc.": "TLAB",
+
+    # === PREVIOUSLY UNMAPPED: MEDIUM FREQUENCY ===
+    "MedImmune, Inc.": "MEDI",
+    "Genzyme Corporation": "GENZ",
+    "Genzyme Corp.": "GENZ",
+    "Genzyme General": "GENZ",
+    "Biogen Idec, Inc.": "BIIB",
+    "Biogen IDEC, Inc.": "BIIB",
+    "DISH Network Corp., Class A": "DISH",
+    "DISH Network Corp.": "DISH",
+    "Viacom, Inc., Class B": "VIAB",
+    "Facebook, Inc., Class A": "META",
+    "Facebook, Inc., Class A (b)": "META",
+    "Liberty Global PLC, Class A": "LBTYA",
+    "Liberty Global PLC, Series C": "LBTYK",
+    "Liberty Global PLC, Class C": "LBTYK",
+    "Liberty Global PLC, Class C (United Kingdom) (b)": "LBTYK",
+    "Liberty Global PLC, Series A (United Kingdom) (b)": "LBTYA",
+    "Liberty Global PLC, Class A (United Kingdom) (b)": "LBTYA",
+    "Liberty Global PLC LiLAC, Class A": "LILA",
+    "Liberty Global PLC LiLAC, Class C": "LILAK",
+    "Liberty Global PLC Lilac, Class A": "LILA",
+    "Liberty Global PLC Lilac, Class C": "LILAK",
+    "Liberty Global, Inc., Class A": "LBTYA",
+    "Chiron Corporation": "CHIR",
+    "Comverse Technology, Inc.": "CMVT",
+    "PETsMART, Inc.": "PETM",
+    "PetSmart, Inc.": "PETM",
+    "Virgin Media, Inc.": "VMED",
+    "Research In Motion Ltd.": "BBRY",
+    "Research In Motion, Ltd.": "BBRY",
+    "Mylan, Inc.": "MYL",
+    "Mylan NV": "MYL",
+    "Mylan N.V. (b)": "MYL",
+    "Twenty-First Century Fox, Inc., Class A": "FOXA",
+    "Twenty-First Century Fox, Inc., Class B": "FOX",
+    "Twenty-First Century Fox, Inc.": "FOXA",
+    "Fox Corp., Class A": "FOXA",
+    "Fox Corp., Class B": "FOX",
+    "BMC Software, Inc.": "BMC",
+    "VERITAS Software Corporation": "VRTS",
+    "Veritas Software Corporation": "VRTS",
+    "PeopleSoft, Inc.": "PSFT",
+    "Dollar Tree Stores, Inc.": "DLTR",
+    "Invitrogen Corporation": "IVGN",
+    "Mercury Interactive Corporation": "MERQ",
+    "Molex Incorporated": "MOLX",
+    "Sanmina-SCI Corporation": "SANM",
+    "Smurfit-Stone Container Corporation": "SSCC",
+    "American Power Conversion Corporation": "APCC",
+    "Biomet, Inc.": "BMET",
+    "Biomet, Inc": "BMET",
+    "Novellus System, Inc.": "NVLS",
+    "Joy Global, Inc.": "JOY",
+    "Joy Global Inc.": "JOY",
+    "Sirius XM Radio, Inc.": "SIRI",
+    "Sirius Satellite Radio Inc.": "SIRI",
+    "Sirius Satellite Radio, Inc.": "SIRI",
+    "XM Satellite Radio Holdings Inc.": "XMSR",
+    "XM Satellite Radio Holdings, Inc.": "XMSR",
+    "News Corp., Class A": "NWSA",
+    "Warner Chilcott PLC, Class A": "WCRX",
+    "F5 Networks, Inc.": "FFIV",
+    "Liberty Interactive Corp., Class A": "QVCA",
+    "Liberty Interactive Corp. QVC Group, Class A": "QVCA",
+    "Liberty Interactive Corp. QVC Group, Series A": "QVCA",
+    "JD.com, Inc. ADR": "JD",
+    "JD.com, Inc., ADR (China) (b)": "JD",
+    "JD.com, Inc., ADR (China)": "JD",
+
+    # === PREVIOUSLY UNMAPPED: LOWER FREQUENCY ===
+    "NTL Incorporated": "NTLI",
+    "Compuware Corporation": "CPWR",
+    "Pixar": "PIXR",
+    "IAC / InterActiveCorp": "IAC",
+    "IAC/InterActiveCorp": "IAC",
+    "IAC/InterActive Corp.": "IAC",
+    "InterActiveCorp": "IAC",
+    "USA Interactive": "USAI",
+    "Sepracor, Inc.": "SEPR",
+    "Sepracor Inc.": "SEPR",
+    "Monster Worldwide, Inc.": "MWW",
+    "Monster Worldwide Inc.": "MWW",
+    "Liberty Media Corp. - Interactive": "LINTA",
+    "Liberty Media Corp., Class A": "LMCA",
+    "Liberty Media Corp., Class C": "LMCK",
+    "Infosys Technologies Ltd. ADR": "INFY",
+    "Green Mountain Coffee Roasters, Inc.": "GMCR",
+    "Keurig Green Mountain, Inc.": "GMCR",
+    "DIRECTV": "DTV",
+    "DIRECTV, Class A": "DTV",
+    "DIRECTV Group, Inc./The": "DTV",
+    "Liberty Ventures, Series A": "LVNTA",
+    "Ctrip.com International Ltd. ADR": "CTRP",
+    "Ctrip.Com International Ltd. ADR": "CTRP",
+    "Ctrip.com International, Ltd., ADR (China) (b)": "CTRP",
+    "Trip.com Group Ltd., ADR (China) (b)": "TCOM",
+    "NetEase, Inc. ADR": "NTES",
+    "NetEase, Inc., ADR (China)": "NTES",
+    "Applied Micro Circuits Corporation": "AMCC",
+    "Conexant Systems, Inc.": "CNXT",
+    "Concord EFS, Inc.": "CEFT",
+    "Brocade Communications Systems, Inc.": "BRCD",
+    "Human Genome Sciences, Inc.": "HGSI",
+    "ICOS Corporation": "ICOS",
+    "PanAmSat Corporation": "SPOT",
+    "QLogic Corporation": "QLGC",
+    "Qlogic Corporation": "QLGC",
+    "RF Micro Devices, Inc.": "RFMD",
+    "Intersil Corporation": "ISIL",
+    "Siebel System, Inc.": "SEBL",
+    "CheckFree Corp.": "CKFR",
+    "Discovery Holding Co.": "DISCA",
+    "Patterson Cos, Inc.": "PDCO",
+    "Patterson Cos., Inc.": "PDCO",
+    "Patterson Dental Company": "PDCO",
+    "Foster Wheeler AG": "FWLT",
+    "Foster Wheeler, Ltd.": "FWLT",
+    "Foster Wheeler Ltd.": "FWLT",
+    "Catamaran Corp.": "CTRX",
+    "VimpelCom Ltd. ADR": "VEON",
+    "Randgold Resources Ltd. ADR": "GOLD",
+    "Shire PLC ADR": "SHPG",
+    "NXP Semiconductors N.V. (Netherlands)": "NXPI",
+
+    # === MORE UNMAPPED: VARIOUS FREQUENCIES ===
+    "Fiserv, Inc. (b)": "FISV",
+    "VeriSign, Inc. (b)": "VRSN",
+    "Zoom Video Communications, Inc., Class A (b)": "ZM",
+    "Incyte Corp. (b)": "INCY",
+    "DocuSign, Inc. (b)": "DOCU",
+    "Splunk, Inc. (b)": "SPLK",
+    "Seagen, Inc. (b)": "SGEN",
+    "Seattle Genetics, Inc. (b)": "SGEN",
+    "Okta, Inc. (b)": "OKTA",
+    "Peloton Interactive, Inc., Class A (b)": "PTON",
+    "Global Crossing Ltd.": "GLBC",
+    "Global Crossings Ltd.": "GLBC",
+    "PMC-Sierra, Inc.": "PMCS",
+    "PMC - Sierra, Inc.": "PMCS",
+    "SDL Incorporated": "SDLI",
+    "VoiceStream Wireless Corporation": "VSTR",
+    "MCI WorldCom, Inc.": "WCOM",
+    "Novell, Inc.": "NOVL",
+    "QUALCOMM Incorporated": "QCOM",
+    "Qualcomm, Incorporated": "QCOM",
+    "Qwest Communications International Inc.": "Q",
+    "Gemstar-TV Guide International, Inc.": "GMST",
+    "Gemstar-TV Guide International Inc.": "GMST",
+    "Atmel Corporation": "ATML",
+    "CDW Computer Centers, Inc.": "CDWC",
+    "Cytyc Corporation": "CYTC",
+    "ImClone Systems Incorporated": "IMCL",
+    "Protein Design Labs, Inc.": "PDLI",
+    "Rational Software Corporation": "RATL",
+    "Red Hat, Inc.": "RHT",
+    "UAL Corp.": "UAL",
+    "Hansen Natural, Corp.": "MNST",
+    "Hansen Natural Corp.": "MNST",
+    "Leap Wireless International, Inc.": "LEAP",
+    "Pharmaceutical Product Development, Inc.": "PPDI",
+    "Fossil, Inc.": "FOSL",
+    "Qurate Retail, Inc.": "QRTEA",
+    "Ulta Salon Cosmetics & Fragrance, Inc.": "ULTA",
+    "SBA Communications Corp.,   Class A": "SBAC",
+    "Alnylam Pharmaceuticals": "ALNY",
+    "Ferrovial SE": "FER",
+    "Insmed Incorporated": "INSM",
+    "Western Digital": "WDC",
+
+    # Misc name variants that may appear with/without (b)
+    "Automatic Data Processing, Inc. when-issued": "ADP",
+
+    # === FIX WRONG FUZZY MATCHES (these were matched to wrong SEC registrants) ===
+    "Bed Bath & Beyond, Inc.": "BBBY",
+    "Bed Bath & Beyond Inc.": "BBBY",
+    "T-Mobile    US, Inc.": "TMUS",
+    "T-Mobile US, Inc. (b)": "TMUS",
+    "Sears Holdings Corp.": "SHLD",
+    "WorldCom, Inc.": "WCOM",
+    "I2 Technologies, Inc.": "ITWO",
+    "i2 Technologies, Inc.": "ITWO",
+    "NII Holdings, Inc.": "NIHD",
+    "IDEC Pharmaceuticals Corporation": "IDPH",
+    "IDEC Pharmaceuticals Corp.": "IDPH",
+    "BEA Systems, Inc.": "BEAS",
+    "Immunex Corporation": "IMNX",
+    "Vertex Pharmaceuticals, Inc. (b)": "VRTX",
+    "SanDisk Corp.": "SNDK",
+    "SanDisk Corp": "SNDK",
+}
+
+# Tickers that were acquired — map to successor for price fallback
+SUCCESSOR_TICKERS = {
+    # === Original entries ===
+    'CELG': 'BMY',    # Celgene → Bristol-Myers (2019)
+    'XLNX': 'AMD',    # Xilinx → AMD (2022)
+    'MXIM': 'ADI',    # Maxim → Analog Devices (2021)
+    'CTXS': None,     # Citrix → taken private
+    'ATVI': 'MSFT',   # Activision → Microsoft (2023)
+    'CERN': 'ORCL',   # Cerner → Oracle (2022)
+    'ESRX': 'CI',     # Express Scripts → Cigna (2018)
+    'ALTR': 'INTC',   # Altera → Intel (2015)
+    'LLTC': 'ADI',    # Linear Tech → Analog Devices (2017)
+    'NUAN': 'MSFT',   # Nuance → Microsoft (2022)
+    'FLIR': 'TDY',    # FLIR → Teledyne (2021)
+    'LVLT': 'LUMN',   # Level 3 → Lumen (2017)
+    'WFM':  'AMZN',   # Whole Foods → Amazon (2017)
+    'KRFT': 'KHC',    # Kraft → Kraft Heinz (2015)
+    'DELL': 'DELL',   # Dell went private, came back as DELL
+    'JDSU': 'VIAV',   # JDS Uniphase → Viavi Solutions (2015)
+    'BRCM': 'AVGO',   # Broadcom Corp → Broadcom Inc (2016)
+    'YHOO': None,     # Yahoo → taken private (Altaba liquidated)
+    'SRCL': 'SRCL',   # Stericycle — still public
+    'SIAL': None,     # Sigma-Aldrich → Merck KGaA (no US ticker)
+
+    # === Expanded: more acquired companies ===
+    'GENZ': 'SNY',    # Genzyme → Sanofi (2011)
+    'CHIR': 'NVS',    # Chiron → Novartis (2006)
+    'DTV':  'T',      # DirecTV → AT&T (2015)
+    'BMET': 'ZBH',    # Biomet → Zimmer Biomet (2015)
+    'PSFT': 'ORCL',   # PeopleSoft → Oracle (2005)
+    'JAVA': 'ORCL',   # Sun Microsystems → Oracle (2010)
+    'IMNX': 'AMGN',   # Immunex → Amgen (2002)
+    'IDPH': 'BIIB',   # IDEC Pharma → Biogen IDEC (2003)
+    'BEAS': 'ORCL',   # BEA Systems → Oracle (2008)
+    'SNDK': 'WDC',    # SanDisk → Western Digital (2016)
+    'MYL':  'VTRS',   # Mylan → Viatris (2020)
+    'VIAB': 'PARA',   # Viacom → Paramount (2019)
+    'BBRY': 'BB',     # BlackBerry ticker change
+    'RHT':  'IBM',    # Red Hat → IBM (2019)
+    'MEDI': 'AZN',    # MedImmune → AstraZeneca (2007)
+    'SGEN': 'PFE',    # Seagen → Pfizer (2023)
+    'SPLK': 'CSCO',   # Splunk → Cisco (2024)
+
+    # === Additional acquired companies ===
+    'ANSS': 'SNPS',   # Ansys → Synopsys (2025)
+    'CTRP': 'TCOM',   # Ctrip → Trip.com (ticker change 2019)
+    'FOXA': 'FOX',    # 21st Century Fox → Fox Corp (2019, Disney deal)
+    'WBA':  None,     # Walgreens → taken private by Sycamore (2025)
+    'VRTS': 'GEN',    # Veritas Software → Symantec → NortonLifeLock → Gen Digital
+    'PETM': 'CHWY',   # PetSmart → Chewy spin-off (proxy)
+    'NOVL': None,     # Novell → Micro Focus (taken private)
+    'LEAP': 'T',      # Leap Wireless → AT&T (2014)
+    'NWSA': 'NWS',    # News Corp Class A (ticker variant)
+
+    # === Bankrupt / taken private (no public successor) ===
+    'SHLD': None,     # Sears → bankrupt
+    'BBBY': None,     # Bed Bath & Beyond → bankrupt
+    'WCOM': None,     # WorldCom → bankrupt (fraud)
+    'SPLS': None,     # Staples → taken private
+    'APOL': None,     # Apollo Group → taken private
+    'ITWO': None,     # I2 Technologies → JDA (private)
+    'NIHD': None,     # NII Holdings → bankrupt
 }
 
 def main():
