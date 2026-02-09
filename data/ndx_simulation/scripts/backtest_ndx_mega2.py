@@ -88,28 +88,75 @@ def backtest():
     current_constituents = set() # Standard selection
     
     print("Simulating NDX Mega 2.0 strategy...")
-    
+
+    prev_final_weights = None  # Track last good portfolio for carry-forward
+    prev_top5 = None  # Track last known good top-5 for composition quality gate
+
     for i in range(len(dates) - 1):
         start_dt = dates[i]
         end_dt = dates[i+1]
-        
+
         # 1. Selection Phase (At rebalance date start_dt)
         q_weights = weights_df[weights_df['Date'] == start_dt].copy()
-        
+
         # Sort by Weight Descending
         q_weights = q_weights.sort_values(by='Weight', ascending=False)
         q_weights['CumWeight'] = q_weights['Weight'].cumsum()
-        
+
         is_annual_recon = (start_dt.month == 12)
+
+        # Data quality gate: flag quarters where top-5 changed too drastically
+        # compared to last known good quarter (catches stale/distorted filing data).
+        current_top5 = set(q_weights.head(5)['Ticker'].tolist())
+
+        if prev_top5 is not None:
+            overlap = len(current_top5 & prev_top5)
+            if overlap < 2:
+                if prev_final_weights is not None:
+                    print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5 with prev) — carrying forward")
+                    # Carry forward previous portfolio
+                    final_weights = prev_final_weights.copy()
+                    # Still need to simulate performance for this quarter
+                    valid_tickers = [t for t in final_weights.index if t in data.columns]
+                    final_weights = final_weights[valid_tickers]
+                    if final_weights.sum() > 0:
+                        final_weights = final_weights / final_weights.sum()
+                    constituents_history.append({
+                        "Date": start_dt, "Count": len(final_weights),
+                        "Top": final_weights.idxmax() if not final_weights.empty else "N/A",
+                        "BufferRule": False, "Type": "CarryFwd",
+                        "Tickers": "|".join(final_weights.index),
+                        "Weights": "|".join([f"{w:.6f}" for w in final_weights])
+                    })
+                    # Simulate performance with carried-forward weights
+                    try:
+                        price_slice = data.loc[start_dt:end_dt, final_weights.index].ffill()
+                        if not price_slice.empty:
+                            p_start = price_slice.iloc[0]
+                            valid_mask = (p_start > 0) & (p_start.notna())
+                            valid_tkrs = valid_mask.index[valid_mask].tolist()
+                            fw = final_weights[valid_tkrs]
+                            if fw.sum() > 0:
+                                fw = fw / fw.sum()
+                            shares = (fw * current_value) / p_start[valid_tkrs]
+                            daily_vals = price_slice[valid_tkrs].dot(shares)
+                            mega_values.loc[daily_vals.index] = daily_vals
+                            current_value = daily_vals.iloc[-1]
+                    except Exception as e:
+                        print(f"  Error in carry-forward period: {e}")
+                    continue
+                else:
+                    print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5) — no previous portfolio, skipping")
+                    continue
         
         # Standard Selection (Top 40%) - Using MEGA2 constants
         standard_tickers = []
         curr_sum = 0.0
         
         if is_annual_recon or not current_constituents:
-            # Reconstitution or First Run: Strict 40% Selection
+            # Reconstitution or First Run: Strict 47% Selection
             for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum + w <= config.MEGA2_TARGET_THRESHOLD:
+                if curr_sum < config.MEGA2_TARGET_THRESHOLD: # Include stock that crosses threshold ("at least 47%")
                     if mapped:
                         standard_tickers.append(ticks)
                     curr_sum += w
@@ -247,6 +294,10 @@ def backtest():
              print(f"CRITICAL: Final weights for {start_dt} sum to {final_weights.sum():.4f}")
         # else:
         #      print(f"  Valid sum: {final_weights.sum():.4f}")
+
+        # Save as previous good portfolio for carry-forward
+        prev_final_weights = final_weights.copy()
+        prev_top5 = current_top5
 
         # Stats Log
         constituents_history.append({

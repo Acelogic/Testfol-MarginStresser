@@ -41,10 +41,12 @@ def get_price_data(tickers, start_date='2000-01-01', force_refresh=False, data_s
             missing = [t for t in tickers if t not in df.columns]
             pct_missing = len(missing) / len(tickers) if tickers else 0
             
-            if pct_missing > 0.10:
+            if pct_missing > 0.25:
                 print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%} coverage). Download recommended.")
                 print("Refreshing data to ensure coverage...")
                 return download_and_cache(tickers, start_date, cache_file, source, api_key)
+            elif pct_missing > 0.10:
+                print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%}) — likely delisted, using cache as-is.")
             
             if pd.to_datetime(start_date) < df.index[0]:
                 print(f"Cache starts {df.index[0].date()}, need {start_date}. Refreshing...")
@@ -79,14 +81,13 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
         # Check 1: Tickers not in columns
         missing_tickers = [t for t in unique_tickers if t not in downloaded_tickers]
         
-        # Check 2: Tickers in columns but all NaN (yfinance often does this for delisted)
+        # Check 2: Tickers with >50% NaN (yfinance returns partial data for many delisted)
         if not new_df.empty:
-            nan_tickers = [t for t in downloaded_tickers if new_df[t].isna().all()]
-            if nan_tickers:
-                # print(f"Found {len(nan_tickers)} all-NaN tickers from yfinance.")
-                missing_tickers.extend(nan_tickers)
-                # Drop them from new_df so we can cleanly merge Stooq data
-                new_df = new_df.drop(columns=nan_tickers)
+            for t in list(downloaded_tickers):
+                nan_pct = new_df[t].isna().mean()
+                if nan_pct > 0.50:
+                    missing_tickers.append(t)
+                    new_df = new_df.drop(columns=[t])
         
         missing_tickers = list(set(missing_tickers))
         
@@ -104,6 +105,34 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
                     new_df = new_df.join(stooq_df, how='outer').sort_index()
             else:
                  print("Stooq fallback yielded no data.")
+
+            # Individual retry for tickers that failed in batch
+            # (yfinance batch downloads sometimes miss active tickers)
+            still_missing = [t for t in missing_tickers if t not in (stooq_df.columns.tolist() if not stooq_df.empty else [])]
+            if still_missing and len(still_missing) <= 200:
+                print(f"Retrying {len(still_missing)} tickers individually via yfinance...")
+                import time
+                recovered = {}
+                for t in still_missing:
+                    try:
+                        single = yf.download(t, start=start_date, auto_adjust=True, progress=False)
+                        if not single.empty:
+                            close = single['Close'] if 'Close' in single.columns else single.iloc[:, 0]
+                            if hasattr(close, 'columns'):
+                                close = close.iloc[:, 0]
+                            if close.notna().sum() > 50:
+                                recovered[t] = close
+                        time.sleep(0.1)
+                    except Exception:
+                        pass
+                if recovered:
+                    print(f"  Individual retry recovered {len(recovered)} tickers: {list(recovered.keys())[:10]}")
+                    retry_df = pd.DataFrame(recovered)
+                    retry_df.index = pd.to_datetime(retry_df.index)
+                    if new_df.empty:
+                        new_df = retry_df
+                    else:
+                        new_df = new_df.join(retry_df, how='outer').sort_index()
 
     if new_df is None or new_df.empty:
         print("ERROR: No data downloaded!")
@@ -126,8 +155,63 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
     else:
         df = new_df
         
+    # Apply successor ticker fallback for acquired companies
+    df = apply_successor_fallback(df)
+
     df.to_pickle(cache_file)
     print(f"Saved {len(df.columns)} tickers to cache: {cache_file}")
+    return df
+
+def apply_successor_fallback(df):
+    """For delisted tickers with no data, try to fill with successor ticker data.
+    Downloads successor tickers that aren't already in the cache."""
+    try:
+        from mapper import SUCCESSOR_TICKERS
+    except ImportError:
+        return df
+
+    successors_needed = {}
+    for t, succ in SUCCESSOR_TICKERS.items():
+        if succ and succ != t:
+            # Fill if ticker is missing OR has >50% NaN (matching yfinance threshold)
+            if t not in df.columns or df[t].isna().mean() > 0.50:
+                successors_needed[t] = succ
+
+    if not successors_needed:
+        return df
+
+    # Download successor tickers that aren't in the dataframe
+    missing_succs = list(set(
+        succ for succ in successors_needed.values()
+        if succ not in df.columns or df[succ].isna().all()
+    ))
+    if missing_succs:
+        import time
+        print(f"  Downloading {len(missing_succs)} successor tickers: {missing_succs}")
+        for succ in missing_succs:
+            try:
+                single = yf.download(succ, start='2000-01-01', auto_adjust=True, progress=False)
+                if not single.empty:
+                    close = single['Close'] if 'Close' in single.columns else single.iloc[:, 0]
+                    if hasattr(close, 'columns'):
+                        close = close.iloc[:, 0]
+                    if close.notna().sum() > 50:
+                        close.index = pd.to_datetime(close.index)
+                        df[succ] = close.reindex(df.index)
+                        print(f"    Downloaded {succ}: {close.notna().sum()} days")
+                time.sleep(0.1)
+            except Exception as e:
+                print(f"    Failed to download {succ}: {e}")
+
+    filled = 0
+    for orig, succ in successors_needed.items():
+        if succ in df.columns and not df[succ].isna().all():
+            df[orig] = df[succ]
+            filled += 1
+
+    if filled:
+        print(f"  Successor fallback: filled {filled} delisted tickers with acquirer data")
+
     return df
 
 def download_from_yfinance(tickers, start_date):
@@ -142,61 +226,64 @@ def download_from_yfinance(tickers, start_date):
         return data
 
 def download_from_stooq(tickers, start_date):
-    """
-    Download price data from Stooq via pandas-datareader.
-    
-    Stooq provides 20+ years of free historical data.
-    Note: Uses .US suffix for US stocks.
-    """
-    try:
-        import pandas_datareader.data as web
-    except ImportError:
-        print("ERROR: pandas-datareader not installed!")
-        print("Install with: pip install pandas-datareader")
-        raise ImportError("Please install pandas-datareader: pip install pandas-datareader")
-    
-    print(f"[Stooq] Downloading prices for {len(tickers)} tickers from {start_date}...")
-    
+    """Download price data directly from Stooq CSV endpoint (no pandas-datareader)."""
+    import time
+    import io
+    import requests
+
+    print(f"[Stooq Direct] Downloading prices for {len(tickers)} tickers from {start_date}...")
+
     all_data = {}
     failed_tickers = []
-    
+
+    session = requests.Session()
+    session.headers.update({
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'
+    })
+
+    start_dt = pd.to_datetime(start_date)
+
     for i, ticker in enumerate(tickers):
         if (i + 1) % 20 == 0:
             print(f"  Progress: {i + 1}/{len(tickers)} tickers...")
-        
-        # Stooq uses .US suffix for US stocks (except indices like ^NDX)
-        if ticker.startswith('^'):
-            stooq_ticker = ticker  # Keep as-is for indices
-        else:
-            stooq_ticker = f"{ticker}.US"
-            
+
+        # Stooq URL format
+        stooq_ticker = f"{ticker}.US" if not ticker.startswith('^') else ticker
+        url = (f"https://stooq.com/q/d/l/"
+               f"?s={stooq_ticker}"
+               f"&d1={start_dt.strftime('%Y%m%d')}"
+               f"&d2={pd.Timestamp.now().strftime('%Y%m%d')}"
+               f"&i=d")
+
         try:
-            df = web.DataReader(stooq_ticker, 'stooq', start=start_date)
-            if not df.empty:
-                # Stooq returns newest first, reverse it
-                df = df.sort_index()
-                all_data[ticker] = df['Close']
+            resp = session.get(url, timeout=15)
+            if resp.status_code == 200 and 'Date' in resp.text[:50]:
+                df = pd.read_csv(io.StringIO(resp.text), parse_dates=['Date'], index_col='Date')
+                if not df.empty and 'Close' in df.columns:
+                    series = df['Close'].sort_index()
+                    if len(series) > 10:
+                        all_data[ticker] = series
+                    else:
+                        failed_tickers.append(ticker)
+                else:
+                    failed_tickers.append(ticker)
             else:
                 failed_tickers.append(ticker)
-        except Exception as e:
-            print(f"  Error fetching {ticker}: {e}")
+        except Exception:
             failed_tickers.append(ticker)
-    
+
+        time.sleep(0.5)  # Rate limit
+
     if failed_tickers:
-        print(f"  Failed tickers: {len(failed_tickers)} ({', '.join(failed_tickers[:10])}{'...' if len(failed_tickers) > 10 else ''})")
-    
+        print(f"  Failed: {len(failed_tickers)} tickers")
+
     if not all_data:
-        print("ERROR: No data downloaded from Stooq!")
         return pd.DataFrame()
-    
-    # Combine into DataFrame
+
     df = pd.DataFrame(all_data)
     df.index = pd.to_datetime(df.index)
     df = df.sort_index()
-    
-    print(f"  Downloaded {len(df)} trading days for {len(df.columns)} tickers")
-    print(f"  Date range: {df.index[0].date()} to {df.index[-1].date()}")
-    
+    print(f"  Downloaded {len(df.columns)} tickers, {len(df)} trading days")
     return df
 
 def download_from_polygon(tickers, start_date, api_key):
