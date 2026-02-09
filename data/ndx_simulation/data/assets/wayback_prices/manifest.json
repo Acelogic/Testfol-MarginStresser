@@ -1,0 +1,668 @@
+{
+  "YHOO": {
+    "rows": 5142,
+    "start": "1996-04-12",
+    "end": "2016-09-14",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "YHOO.csv"
+  },
+  "WCOM": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "CTXS": {
+    "rows": 484,
+    "start": "2004-05-24",
+    "end": "2008-04-25",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "CTXS.csv"
+  },
+  "JNPR": {
+    "rows": 651,
+    "start": "2003-09-11",
+    "end": "2009-07-31",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "JNPR.csv"
+  },
+  "DISH": {
+    "rows": 269,
+    "start": "2004-03-15",
+    "end": "2005-05-26",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "DISH.csv"
+  },
+  "APOL": {
+    "rows": 567,
+    "start": "2004-08-19",
+    "end": "2009-02-06",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "APOL.csv"
+  },
+  "SUNW": {
+    "rows": 639,
+    "start": "2003-07-07",
+    "end": "2007-02-16",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "SUNW.csv"
+  },
+  "SIAL": {
+    "rows": 230,
+    "start": "2004-05-27",
+    "end": "2010-02-26",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "SIAL.csv"
+  },
+  "PIXR": {
+    "rows": 304,
+    "start": "2003-07-22",
+    "end": "2005-11-21",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "PIXR.csv"
+  },
+  "XMSR": {
+    "rows": 623,
+    "start": "2003-08-29",
+    "end": "2008-03-28",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "XMSR.csv"
+  },
+  "NOVL": {
+    "rows": 338,
+    "start": "2004-07-09",
+    "end": "2010-04-09",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "NOVL.csv"
+  },
+  "AMCC": {
+    "rows": 392,
+    "start": "2003-10-22",
+    "end": "2007-02-28",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "AMCC.csv"
+  },
+  "PMCS": {
+    "rows": 542,
+    "start": "2003-08-29",
+    "end": "2010-01-12",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "PMCS.csv"
+  },
+  "GENZ": {
+    "rows": 198,
+    "start": "2003-07-22",
+    "end": "2004-08-10",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "GENZ.csv"
+  },
+  "MEDI": {
+    "rows": 432,
+    "start": "2004-06-23",
+    "end": "2007-05-17",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "MEDI.csv"
+  },
+  "GLBC": {
+    "rows": 431,
+    "start": "2004-01-22",
+    "end": "2007-05-25",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "GLBC.csv"
+  },
+  "CEFT": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "SDLI": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "VSTR": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "NVLS": {
+    "rows": 352,
+    "start": "2004-11-02",
+    "end": "2010-02-12",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "NVLS.csv"
+  },
+  "GMST": {
+    "rows": 532,
+    "start": "2004-01-29",
+    "end": "2008-02-08",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "GMST.csv"
+  },
+  "NIHD": {
+    "rows": 132,
+    "start": "2004-08-23",
+    "end": "2006-06-23",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "NIHD.csv"
+  },
+  "NTLI": {
+    "rows": 198,
+    "start": "2004-05-13",
+    "end": "2006-05-12",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "NTLI.csv"
+  },
+  "CEPH": {
+    "rows": 422,
+    "start": "2003-08-11",
+    "end": "2007-05-25",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "CEPH.csv"
+  },
+  "QLGC": {
+    "rows": 605,
+    "start": "2003-06-30",
+    "end": "2009-10-27",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "QLGC.csv"
+  },
+  "APCC": {
+    "rows": 92,
+    "start": "2004-08-24",
+    "end": "2005-01-14",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "APCC.csv"
+  },
+  "MERQ": {
+    "rows": 256,
+    "start": "2004-01-07",
+    "end": "2005-04-05",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "MERQ.csv"
+  },
+  "JOY": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "FWLT": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "IVGN": {
+    "rows": 363,
+    "start": "2003-11-10",
+    "end": "2007-01-12",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "IVGN.csv"
+  },
+  "SEPR": {
+    "rows": 268,
+    "start": "2004-07-13",
+    "end": "2007-03-14",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "SEPR.csv"
+  },
+  "MWW": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "SEBL": {
+    "rows": 344,
+    "start": "2004-03-17",
+    "end": "2005-08-29",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "SEBL.csv"
+  },
+  "LINTA": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "PDCO": {
+    "rows": 198,
+    "start": "2004-07-14",
+    "end": "2006-05-08",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "PDCO.csv"
+  },
+  "DISCA": {
+    "rows": 132,
+    "start": "2006-12-29",
+    "end": "2008-01-28",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "DISCA.csv"
+  },
+  "CDWC": {
+    "rows": 297,
+    "start": "2003-12-24",
+    "end": "2007-02-16",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "CDWC.csv"
+  },
+  "ISIL": {
+    "rows": 175,
+    "start": "2003-07-22",
+    "end": "2008-10-28",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "ISIL.csv"
+  },
+  "CKFR": {
+    "rows": 270,
+    "start": "2004-05-18",
+    "end": "2007-04-05",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "CKFR.csv"
+  },
+  "BRCD": {
+    "rows": 418,
+    "start": "2003-10-07",
+    "end": "2009-10-09",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "BRCD.csv"
+  },
+  "ICOS": {
+    "rows": 66,
+    "start": "2004-10-21",
+    "end": "2005-01-25",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "ICOS.csv"
+  },
+  "HGSI": {
+    "rows": 458,
+    "start": "2003-09-11",
+    "end": "2009-03-19",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "HGSI.csv"
+  },
+  "RFMD": {
+    "rows": 609,
+    "start": "2003-09-11",
+    "end": "2009-07-13",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "RFMD.csv"
+  },
+  "WCRX": {
+    "rows": 66,
+    "start": "2006-11-29",
+    "end": "2007-03-07",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "WCRX.csv"
+  },
+  "CYTC": {
+    "rows": 315,
+    "start": "2004-04-28",
+    "end": "2007-04-09",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "CYTC.csv"
+  },
+  "PPDI": {
+    "rows": 276,
+    "start": "2004-07-19",
+    "end": "2007-05-25",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "PPDI.csv"
+  },
+  "RATL": {
+    "rows": 0,
+    "error": "not found"
+  },
+  "PDLI": {
+    "rows": 629,
+    "start": "2003-07-10",
+    "end": "2010-03-04",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "PDLI.csv"
+  },
+  "ATML": {
+    "rows": 564,
+    "start": "2003-08-11",
+    "end": "2009-12-02",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "ATML.csv"
+  },
+  "ESRX": {
+    "rows": 198,
+    "start": "2004-03-16",
+    "end": "2010-03-01",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "ESRX.csv"
+  },
+  "SPLS": {
+    "rows": 360,
+    "start": "2004-06-18",
+    "end": "2009-09-29",
+    "columns": [
+      "Date",
+      "Open",
+      "High",
+      "Low",
+      "Close",
+      "Volume",
+      "Adj Close"
+    ],
+    "file": "SPLS.csv"
+  }
+}

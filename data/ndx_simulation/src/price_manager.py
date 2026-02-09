@@ -90,49 +90,18 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
                     new_df = new_df.drop(columns=[t])
         
         missing_tickers = list(set(missing_tickers))
-        
-        if missing_tickers:
-            print(f"Primary source (yfinance) missed {len(missing_tickers)} tickers. Attempting fallback to Stooq...")
-            stooq_df = download_from_stooq(missing_tickers, start_date)
-            
-            if not stooq_df.empty:
-                print(f"Stooq recovered {len(stooq_df.columns)} tickers: {stooq_df.columns.tolist()}")
-                
-                # Merge Stooq results into new_df
-                if new_df.empty:
-                    new_df = stooq_df
-                else:
-                    new_df = new_df.join(stooq_df, how='outer').sort_index()
-            else:
-                 print("Stooq fallback yielded no data.")
 
-            # Individual retry for tickers that failed in batch
-            # (yfinance batch downloads sometimes miss active tickers)
-            still_missing = [t for t in missing_tickers if t not in (stooq_df.columns.tolist() if not stooq_df.empty else [])]
-            if still_missing and len(still_missing) <= 200:
-                print(f"Retrying {len(still_missing)} tickers individually via yfinance...")
-                import time
-                recovered = {}
-                for t in still_missing:
-                    try:
-                        single = yf.download(t, start=start_date, auto_adjust=True, progress=False)
-                        if not single.empty:
-                            close = single['Close'] if 'Close' in single.columns else single.iloc[:, 0]
-                            if hasattr(close, 'columns'):
-                                close = close.iloc[:, 0]
-                            if close.notna().sum() > 50:
-                                recovered[t] = close
-                        time.sleep(0.1)
-                    except Exception:
-                        pass
-                if recovered:
-                    print(f"  Individual retry recovered {len(recovered)} tickers: {list(recovered.keys())[:10]}")
-                    retry_df = pd.DataFrame(recovered)
-                    retry_df.index = pd.to_datetime(retry_df.index)
-                    if new_df.empty:
-                        new_df = retry_df
-                    else:
-                        new_df = new_df.join(retry_df, how='outer').sort_index()
+        if missing_tickers:
+            print(f"  yfinance missed {len(missing_tickers)} tickers (likely delisted — wayback merge will fill these)")
+
+            # Optional: Stooq fallback (slow, only if explicitly requested)
+            use_stooq = os.environ.get('NDX_USE_STOOQ_FALLBACK', '').lower() in ('1', 'true', 'yes')
+            if use_stooq:
+                print(f"  [Stooq fallback enabled] Trying {len(missing_tickers)} tickers...")
+                stooq_df = download_from_stooq(missing_tickers, start_date)
+                if not stooq_df.empty:
+                    print(f"  Stooq recovered {len(stooq_df.columns)} tickers")
+                    new_df = new_df.join(stooq_df, how='outer').sort_index() if not new_df.empty else stooq_df
 
     if new_df is None or new_df.empty:
         print("ERROR: No data downloaded!")
@@ -158,8 +127,90 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
     # Apply successor ticker fallback for acquired companies
     df = apply_successor_fallback(df)
 
+    # Merge Wayback Machine recovered prices for delisted tickers
+    df = merge_wayback_prices(df)
+
     df.to_pickle(cache_file)
     print(f"Saved {len(df.columns)} tickers to cache: {cache_file}")
+    return df
+
+
+def merge_wayback_prices(df):
+    """Merge Wayback Machine scraped prices for delisted tickers.
+
+    Source: data/assets/wayback_prices/{TICKER}.csv
+    These were recovered from archived Yahoo Finance pages via the
+    WayBackMachineStockScraper (see data/assets/wayback_prices/manifest.json).
+
+    Coverage summary (42 tickers scraped, 38 fill yfinance gaps):
+      - 38 delisted NDX tickers recovered that yfinance/stooq cannot provide
+      - 4 redundant (ESRX, MEDI, SPLS, SUNW — yfinance has these, wayback is backup)
+      - 49 tickers still have NO source (neither yfinance nor wayback)
+
+    Strategy: gap-fill only for existing tickers, add column for new ones.
+    Uses "Adj Close" when available, falls back to "Close".
+    """
+    wayback_dir = os.path.join(config.ASSETS_DIR, "wayback_prices")
+    if not os.path.isdir(wayback_dir):
+        return df
+
+    csv_files = sorted(
+        f for f in os.listdir(wayback_dir)
+        if f.endswith('.csv') and f != 'manifest.json'
+    )
+    if not csv_files:
+        return df
+
+    # Track what yfinance is missing so we can report coverage
+    all_tickers_needed = set(df.columns)
+    missing_before = {t for t in all_tickers_needed if df[t].isna().all()}
+
+    added, gap_filled, skipped = [], [], []
+
+    for fname in csv_files:
+        ticker = fname.replace('.csv', '').upper()
+        fpath = os.path.join(wayback_dir, fname)
+        try:
+            wb = pd.read_csv(fpath, parse_dates=["Date"], index_col="Date")
+        except Exception:
+            continue
+
+        col = "Adj Close" if "Adj Close" in wb.columns else "Close"
+        series = wb[col].dropna()
+        if series.empty:
+            continue
+
+        if ticker in df.columns:
+            # Gap-fill only — don't overwrite existing data
+            na_mask = df[ticker].isna()
+            overlap = na_mask.index.intersection(series.index)
+            fillable = na_mask.loc[overlap] & series.reindex(overlap).notna()
+            if fillable.any():
+                df.loc[fillable[fillable].index, ticker] = series.reindex(fillable[fillable].index)
+                gap_filled.append((ticker, int(fillable.sum())))
+            else:
+                skipped.append(ticker)
+        else:
+            # New ticker — not in yfinance download at all
+            df[ticker] = series.reindex(df.index)
+            non_null = int(series.reindex(df.index).notna().sum())
+            added.append((ticker, non_null))
+
+    missing_after = {t for t in all_tickers_needed if df[t].isna().all()}
+    recovered = missing_before - missing_after
+
+    total = len(added) + len(gap_filled)
+    if total:
+        print(f"\n  [Wayback Machine] Merged {total} tickers from {wayback_dir}")
+        if added:
+            print(f"    Added {len(added)} new: {', '.join(t for t, _ in added)}")
+        if gap_filled:
+            print(f"    Gap-filled {len(gap_filled)}: {', '.join(f'{t}({n})' for t, n in gap_filled)}")
+        if skipped:
+            print(f"    Skipped {len(skipped)} (already complete): {', '.join(skipped)}")
+        if recovered:
+            print(f"    Recovered from all-NaN: {', '.join(sorted(recovered))}")
+
     return df
 
 def apply_successor_fallback(df):
