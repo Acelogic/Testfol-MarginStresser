@@ -406,16 +406,30 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                     hovertemplate="%{y:$,.0f}"
                 ))
             
-            # Add Unrealized P&L Trace
+            # Add Unrealized traces
             if "Unrealized P&L" in agg_df.columns and agg_df["Unrealized P&L"].abs().sum() > 0:
+                 # Cumulative Unrealized P&L (bar)
                  fig.add_trace(go.Bar(
-                    x=x_axis, 
-                    y=agg_df["Unrealized P&L"], 
+                    x=x_axis,
+                    y=agg_df["Unrealized P&L"],
                     name="Unrealized P&L (Deferred)",
-                    marker_color="#636EFA", # Blue/Purple
-                    opacity=0.6, # Slightly transparent to distinguish from realized
+                    marker_color="#636EFA",
+                    opacity=0.6,
                     hovertemplate="%{y:$,.0f}"
-                ))
+                 ))
+                 # Total Gain = Realized + Unrealized Change per period
+                 yoy_change = agg_df["Unrealized P&L"].diff()
+                 yoy_change.iloc[0] = agg_df["Unrealized P&L"].iloc[0]
+                 total_gain = agg_df["Realized P&L"] + yoy_change
+                 fig.add_trace(go.Scatter(
+                    x=x_axis,
+                    y=total_gain,
+                    name="Total Gain (Realized + Unrealized Δ)",
+                    mode="lines+markers",
+                    line=dict(color="#FECB52", width=2.5, dash="dot"),
+                    marker=dict(size=7),
+                    hovertemplate="%{y:$,.0f}"
+                 ))
                 
             
             fig.update_layout(
