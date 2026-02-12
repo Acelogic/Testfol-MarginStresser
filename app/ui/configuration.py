@@ -440,7 +440,7 @@ def render():
         with c1:
             config['chart_style'] = st.selectbox(
                 "Chart Style",
-                ["Classic (Combined)", "Classic (Dashboard)", "Candlestick"],
+                ["Classic (Combined)", "Candlestick"],
                 index=0
             )
             config['timeframe'] = st.selectbox(
@@ -449,13 +449,6 @@ def render():
                 index=2
             )
             config['log_scale'] = st.checkbox("Logarithmic Scale", value=True)
-            
-            config['log_opts'] = {}
-            if config['chart_style'] == "Classic (Dashboard)":
-                st.markdown("**Dashboard Log Scales:**")
-                config['log_opts']['portfolio'] = st.checkbox("Portfolio Chart", value=False, key="log_portfolio")
-                config['log_opts']['leverage'] = st.checkbox("Leverage Chart", value=False, key="log_leverage")
-                config['log_opts']['margin'] = st.checkbox("Margin Debt Chart", value=False, key="log_margin")
         with c2:
             config['show_range_slider'] = st.checkbox("Show Range Slider", value=True)
             config['show_volume'] = st.checkbox("Show Range/Volume Panel", value=True)

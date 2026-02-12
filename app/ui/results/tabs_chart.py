@@ -58,17 +58,6 @@ def render_chart_tab(
                     comparison_series=comp_resampled,
                     effective_rate_series=effective_rate_series
                 )
-            elif chart_style == "Classic (Dashboard)":
-                log_opts = config.get('log_opts', {})
-                charts.render_dashboard_view(
-                    tax_adj_port_series, final_adj_series, loan_series,
-                    tax_adj_equity_pct_series, tax_adj_usage_series,
-                    wmaint, stats, log_opts,
-                    bench_series=bench_resampled,
-                    comparison_series=comp_resampled,
-                    start_val=start_val,
-                    rate_annual=rate_annual
-                )
             else:  # Candlestick
                 charts.render_candlestick_chart(
                     ohlc_data,
@@ -81,7 +70,8 @@ def render_chart_tab(
                     show_range_slider=show_range_slider,
                     show_volume=show_volume,
                     bench_series=bench_resampled,
-                    comparison_series=comp_resampled
+                    comparison_series=comp_resampled,
+                    effective_rate_series=effective_rate_resampled,
                 )
 
             if pay_tax_cash:

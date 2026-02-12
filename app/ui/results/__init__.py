@@ -85,6 +85,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     chart_style = config.get('chart_style', "Classic (Combined)")
     timeframe = config.get('timeframe', "1M")
+    # Candlestick chart has its own timeframe pills — let it override sidebar
+    if chart_style == "Candlestick":
+        timeframe = st.session_state.get('candlestick_tf', timeframe)
     log_scale = config.get('log_scale', True)
     show_range_slider = config.get('show_range_slider', True)
     show_volume = config.get('show_volume', True)
