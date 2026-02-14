@@ -131,6 +131,7 @@ def _build_payload(config, start_date, end_date, bearer_token):
                 "month": reb.get("month", 1),
                 "day": reb.get("day", 1),
                 "compare_std": reb.get("compare_std", False),
+                "threshold_pct": reb.get("threshold_pct", 5.0),
             },
         })
 
@@ -228,6 +229,7 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
                 "month": reb.get("month", 1),
                 "day": reb.get("day", 1),
                 "compare_std": reb.get("compare_std", False),
+                "threshold_pct": reb.get("threshold_pct", 5.0),
             },
         })
 

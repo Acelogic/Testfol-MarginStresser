@@ -348,14 +348,15 @@ def validate_qbig():
     print(f"Chart saved to {out_img}")
 
 def compare_strategies():
-    print("\n\n=== Comparing NDX Mega 1.0 vs 2.0 ===")
-    
+    print("\n\n=== Comparing NDX Mega 1.0 vs 2.0 vs NDX30 ===")
+
     # Paths
     path1 = os.path.join(config.BASE_DIR, "..", "NDXMEGASIM.csv")
     path2 = os.path.join(config.BASE_DIR, "..", "NDXMEGA2SIM.csv")
-    
+    path3 = os.path.join(config.BASE_DIR, "..", "NDX30SIM.csv")
+
     if not (os.path.exists(path1) and os.path.exists(path2)):
-        print("Missing one or both simulation files.")
+        print("Missing one or both Mega simulation files.")
         return
 
     # Load
@@ -363,43 +364,58 @@ def compare_strategies():
     s1['Date'] = pd.to_datetime(s1['Date'])
     s1 = s1.set_index('Date').sort_index().iloc[:, 0]
     s1.name = "Mega 1.0"
-    
+
     s2 = pd.read_csv(path2)
     s2['Date'] = pd.to_datetime(s2['Date'])
     s2 = s2.set_index('Date').sort_index().iloc[:, 0]
     s2.name = "Mega 2.0"
-    
+
+    s3 = None
+    if os.path.exists(path3):
+        s3 = pd.read_csv(path3)
+        s3['Date'] = pd.to_datetime(s3['Date'])
+        s3 = s3.set_index('Date').sort_index().iloc[:, 0]
+        s3.name = "NDX30"
+
     # Align
     idx = s1.index.intersection(s2.index)
+    if s3 is not None:
+        idx = idx.intersection(s3.index)
     if idx.empty:
         print("No overlap.")
         return
-        
+
     slice1 = s1.loc[idx]
     slice2 = s2.loc[idx]
-    
+
     # Stats
     ret1 = slice1.iloc[-1] / slice1.iloc[0] - 1
     ret2 = slice2.iloc[-1] / slice2.iloc[0] - 1
-    
+
     # Plot
     norm1 = slice1 / slice1.iloc[0] * 100
     norm2 = slice2 / slice2.iloc[0] * 100
-    
+
     chart_style.apply_style()
     plt.figure(figsize=(14, 8))
     ax = plt.gca()
-    
+
     plt.plot(norm1, label=f'NDX Mega 1.0 ({ret1:.0%})', linewidth=2.0)
     plt.plot(norm2, label=f'NDX Mega 2.0 ({ret2:.0%})', linewidth=2.0)
-    
+
+    if s3 is not None:
+        slice3 = s3.loc[idx]
+        ret3 = slice3.iloc[-1] / slice3.iloc[0] - 1
+        norm3 = slice3 / slice3.iloc[0] * 100
+        plt.plot(norm3, label=f'NDX30 ({ret3:.0%})', linewidth=2.0)
+
     chart_style.format_date_axis(ax)
     chart_style.format_y_axis(ax, log=True)
-    chart_style.add_watermark(ax, "Mega vs Mega 2.0")
-    
-    plt.title(f"Strategy Comparison: NDX Mega 1.0 vs 2.0")
+    chart_style.add_watermark(ax, "Strategy Comparison")
+
+    plt.title(f"Strategy Comparison: NDX Mega 1.0 vs 2.0 vs NDX30")
     plt.legend()
-    
+
     out_img = os.path.join(config.RESULTS_DIR, "charts", "ndx_mega_comparison.png")
     plt.savefig(out_img, dpi=300, bbox_inches='tight')
     print(f"Chart saved to {out_img}")

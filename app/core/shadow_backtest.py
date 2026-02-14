@@ -226,7 +226,21 @@ def fetch_prices(tickers, start_date, end_date, invest_dividends=True):
         
     return prices, output
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None):
+def _check_drift(positions, allocation, threshold_pct):
+    """Return (triggered, max_drift_pct, worst_ticker)."""
+    total_val = sum(positions.values())
+    if total_val <= 0:
+        return False, 0.0, ""
+    max_drift, drifter = 0.0, ""
+    for ticker, target_w in allocation.items():
+        current_w = (positions.get(ticker, 0.0) / total_val) * 100.0
+        drift = abs(current_w - target_w)
+        if drift > max_drift:
+            max_drift, drifter = drift, ticker
+    return max_drift > threshold_pct, max_drift, drifter
+
+
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -252,7 +266,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     logs.append(f"Rebalance Frequency: {rebalance_freq}")
     if rebalance_freq == "Custom":
         logs.append(f"Custom Frequency: {custom_freq}, Day: {rebalance_day}" + (f", Month: {rebalance_month}" if custom_freq == "Yearly" else ""))
-    
+    if rebalance_freq in ("Threshold", "Threshold+Calendar"):
+        logs.append(f"Drift Threshold: {threshold_pct}%")
+
     if cashflow > 0:
         logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
     
@@ -669,7 +685,31 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                             last_rebal_year = date.year
                             if date.day != effective_day:
                                 logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
-                    
+
+        elif rebalance_freq == "Threshold":
+            triggered, max_drift, drifter = _check_drift(positions, allocation, threshold_pct)
+            if triggered:
+                should_rebal = True
+                logs.append(f"  ⚡ Drift trigger: {drifter} at {max_drift:.1f}pp (threshold {threshold_pct:.1f}pp)")
+
+        elif rebalance_freq == "Threshold+Calendar":
+            is_check_date = False
+            if i < len(dates) - 1:
+                next_date = dates[i+1]
+                if custom_freq == Freq.YEARLY and next_date.year != date.year:
+                    is_check_date = True
+                elif custom_freq == Freq.QUARTERLY and next_date.quarter != date.quarter:
+                    is_check_date = True
+                elif custom_freq == Freq.MONTHLY and next_date.month != date.month:
+                    is_check_date = True
+            if is_check_date:
+                triggered, max_drift, drifter = _check_drift(positions, allocation, threshold_pct)
+                if triggered:
+                    should_rebal = True
+                    logs.append(f"  ⚡ Drift trigger at {custom_freq} check: {drifter} at {max_drift:.1f}pp")
+                else:
+                    logs.append(f"  ✓ {custom_freq} check: max drift {max_drift:.1f}pp < {threshold_pct:.1f}pp — skip")
+
         # No forced rebalance on last day
                 
         # 4. Execute Rebalance

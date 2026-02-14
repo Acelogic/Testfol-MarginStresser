@@ -19,6 +19,12 @@ MEGA2_TARGET_THRESHOLD = config.MEGA2_TARGET_THRESHOLD
 SINGLE_STOCK_CAP2 = config.MEGA2_SINGLE_STOCK_CAP
 MIN_CONSTITUENTS2 = config.MEGA2_MIN_CONSTITUENTS
 
+# NDX30 Settings
+NDX30_NUM = config.NDX30_NUM_CONSTITUENTS
+NDX30_HARD_CAP = config.NDX30_HARD_CAP
+NDX30_SOFT_CAP = config.NDX30_SOFT_CAP
+NDX30_AGG_LIMIT = config.NDX30_AGG_LIMIT
+
 def apply_caps(w_series, cap, total_target=1.0):
     """
     Apply capping rules iteratively.
@@ -131,8 +137,68 @@ def get_mega2_holdings(df_date):
     mega_df['FinalWeight'] = mega_df['Ticker'].map(final_weights)
     return mega_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
 
+def apply_ndx30_caps(w_series):
+    """NDX30 two-step capping: 22.5% individual + 48% aggregate for >4.5%."""
+    w = w_series.copy()
+    if w.sum() == 0:
+        return w
+    w = w / w.sum()
+
+    # Step 1: Hard individual cap at 22.5%
+    for _ in range(20):
+        over = w[w > NDX30_HARD_CAP]
+        if over.empty:
+            break
+        surplus = (over - NDX30_HARD_CAP).sum()
+        w[w > NDX30_HARD_CAP] = NDX30_HARD_CAP
+        under = w[w < NDX30_HARD_CAP]
+        if under.empty:
+            break
+        w[under.index] = under + surplus * under / under.sum()
+
+    # Step 2: Aggregate constraint — sum(w > 4.5%) <= 48%
+    for _ in range(50):
+        above = w[w > NDX30_SOFT_CAP]
+        if above.empty or above.sum() <= NDX30_AGG_LIMIT + 0.001:
+            break
+        min_t = above.idxmin()
+        excess = w[min_t] - NDX30_SOFT_CAP
+        w[min_t] = NDX30_SOFT_CAP
+        below = w[w < NDX30_SOFT_CAP]
+        if below.empty:
+            break
+        room = NDX30_SOFT_CAP - below
+        total_room = room.sum()
+        if total_room <= excess:
+            w[below.index] = NDX30_SOFT_CAP
+        else:
+            share = excess * (room / total_room)
+            w[below.index] = below + share
+
+    return w
+
+def get_ndx30_holdings(df_date):
+    """
+    Derive NDX30 holdings for a specific date (top 30 by weight, two-step capping).
+    """
+    df_date = df_date.sort_values(by='Weight', ascending=False).copy()
+    mapped = df_date[df_date['IsMapped'] == True]
+    selected_tickers = mapped.head(NDX30_NUM)['Ticker'].tolist()
+
+    ndx30_df = df_date[df_date['Ticker'].isin(selected_tickers)].copy()
+    if ndx30_df.empty:
+        return pd.DataFrame()
+
+    ndx30_df['OriginalWeight'] = ndx30_df['Weight']
+    w_series = ndx30_df.set_index('Ticker')['OriginalWeight']
+    final_weights = apply_ndx30_caps(w_series)
+
+    ndx30_df['FinalWeight'] = ndx30_df['Ticker'].map(final_weights)
+    return ndx30_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
+
 CONST_FILE_M1 = os.path.join(config.RESULTS_DIR, "ndx_mega_constituents.csv")
 CONST_FILE_M2 = os.path.join(config.RESULTS_DIR, "ndx_mega2_constituents.csv")
+CONST_FILE_NDX30 = os.path.join(config.RESULTS_DIR, "ndx30_constituents.csv")
 
 def get_holdings_from_history(history_df, target_date):
     """
@@ -170,14 +236,20 @@ def main():
     # Load Histories
     hist_m1 = pd.DataFrame()
     hist_m2 = pd.DataFrame()
+    hist_ndx30 = pd.DataFrame()
     try:
         if os.path.exists(CONST_FILE_M1):
             hist_m1 = pd.read_csv(CONST_FILE_M1)
     except: pass
-    
+
     try:
         if os.path.exists(CONST_FILE_M2):
             hist_m2 = pd.read_csv(CONST_FILE_M2)
+    except: pass
+
+    try:
+        if os.path.exists(CONST_FILE_NDX30):
+            hist_ndx30 = pd.read_csv(CONST_FILE_NDX30)
     except: pass
         
     available_dates = sorted(df['Date'].unique())
@@ -187,6 +259,7 @@ def main():
     print(f"\nData available from {min_year} to {max_year}.")
     if not hist_m1.empty: print(f"Loaded Mega 1.0 History ({len(hist_m1)} periods)")
     if not hist_m2.empty: print(f"Loaded Mega 2.0 History ({len(hist_m2)} periods)")
+    if not hist_ndx30.empty: print(f"Loaded NDX30 History ({len(hist_ndx30)} periods)")
     
     while True:
         print("\n" + "="*50)
@@ -258,6 +331,26 @@ def main():
         print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
         print("-" * 75)
         for _, row in m2.sort_values('FinalWeight', ascending=False).iterrows():
+            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
+        print("-" * 75)
+
+        # 4. NDX30
+        m3 = get_holdings_from_history(hist_ndx30, target_date)
+        source_m3 = "Backtest History (Accurate)"
+
+        if m3 is None:
+            m3 = get_ndx30_holdings(full_slice)
+            source_m3 = "Strict Calculation (Approx)"
+        else:
+            m3 = m3.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
+            m3['Name'] = m3['Name'].fillna('Unknown')
+
+        print(f"\n--- NDX30 Holdings ({target_date.date()}) ---")
+        print(f"Source: {source_m3}")
+        print(f"Constituents: {len(m3)}")
+        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
+        print("-" * 75)
+        for _, row in m3.sort_values('FinalWeight', ascending=False).iterrows():
             print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
         print("-" * 75)
 

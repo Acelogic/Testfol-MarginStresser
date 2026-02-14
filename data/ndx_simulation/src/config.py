@@ -36,6 +36,12 @@ MEGA2_BUFFER_THRESHOLD = 0.50  # Buffer to 50%
 MEGA2_SINGLE_STOCK_CAP = 0.30  # Cap single stock at 30%
 MEGA2_MIN_CONSTITUENTS = 9     # Minimum 9 stocks
 
+# --- NDX30 (Nasdaq-100 Top 30) Settings ---
+NDX30_NUM_CONSTITUENTS = 30
+NDX30_HARD_CAP = 0.225          # 22.5% individual cap
+NDX30_SOFT_CAP = 0.045          # 4.5% threshold for aggregate constraint
+NDX30_AGG_LIMIT = 0.48          # Sum of weights > 4.5% cannot exceed 48%
+
 # --- Validation Settings ---
 WEIGHT_TOLERANCE = 0.01        # Allow 1% deviation (handling fillers etc)
 MAX_CAP_ITERATIONS = 20        # Increase from 10 to ensure convergence

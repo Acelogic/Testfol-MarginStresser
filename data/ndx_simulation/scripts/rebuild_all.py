@@ -33,7 +33,7 @@ def run_script(script_path, desc, env=None):
 def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(
-        description='Rebuild NDX/NDXMEGA/NDXMEGA2 simulation pipeline.',
+        description='Rebuild NDX/NDXMEGA/NDXMEGA2/NDX30 simulation pipeline.',
         epilog='''
 Examples:
   python rebuild_all.py                          # Use yfinance (default)
@@ -155,7 +155,7 @@ Examples:
         # So it is in Testfol-MarginStresser/data/NDXMEGASIM.csv (if that's where module is)
         # Let's rely on relative path logic matching backtest
         
-        for sim_file in ["NDXMEGASIM.csv", "NDXMEGA2SIM.csv"]:
+        for sim_file in ["NDXMEGASIM.csv", "NDXMEGA2SIM.csv", "NDX30SIM.csv"]:
             p = os.path.abspath(os.path.join(module_root, "..", sim_file))
             if os.path.exists(p):
                  try:
@@ -199,13 +199,17 @@ Examples:
     # 4. Backtest Mega 2.0 (scripts/backtest_ndx_mega2.py)
     mega2_script = os.path.join(scripts_dir, "backtest_ndx_mega2.py")
     run_script(mega2_script, "Backtest NDX Mega 2.0", env_vars)
-    
+
+    # 4.5. Backtest NDX30 (scripts/backtest_ndx30.py)
+    ndx30_script = os.path.join(scripts_dir, "backtest_ndx30.py")
+    run_script(ndx30_script, "Backtest NDX30", env_vars)
+
     # 5. Validation (scripts/validate_ndx.py)
     validate_script = os.path.join(scripts_dir, "validate_ndx.py")
     run_script(validate_script, "Validate & Compare Results", env_vars)
     
     logging.info("All steps completed successfully.")
-    logging.info("Dashboard data (NDXMEGASIM.csv / NDXMEGA2SIM.csv) has been updated.")
+    logging.info("Dashboard data (NDXMEGASIM.csv / NDXMEGA2SIM.csv / NDX30SIM.csv) has been updated.")
     
     # Summary
     if args.polygon:
