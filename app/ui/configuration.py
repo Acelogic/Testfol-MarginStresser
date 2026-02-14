@@ -30,7 +30,7 @@ def render():
                 "name": "NDXMEGASPLIT",
                 "alloc_df": _default_alloc,
                 "rebalance": {
-                    "mode": "Custom", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False
+                    "mode": "Custom", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0
                 },
                 "cashflow": {
                      "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
@@ -99,7 +99,7 @@ def render():
                         "id": new_id,
                         "name": f"Portfolio {len(st.session_state.portfolios) + 1}",
                         "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25}]),
-                        "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False}
+                        "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0}
                     })
                     st.rerun()
                 else:
@@ -148,7 +148,8 @@ def render():
                                     "freq": reb.get("freq", "Yearly"),
                                     "month": r_month,
                                     "day": reb.get("day", 1),
-                                    "compare_std": False
+                                    "compare_std": False,
+                                    "threshold_pct": reb.get("threshold_pct", 5.0),
                                 }
                             })
                             st.rerun()
@@ -208,27 +209,31 @@ def render():
         # --- Rebalancing Strategy (Moved Back) ---
         with st.expander("📅 Rebalancing Strategy", expanded=False):
             # Row 1: Mode Selection
-            mode_idx = 0 if p["rebalance"]["mode"] == "Standard" else 1
-            r_mode = st.radio("Mode", ["Standard", "Custom"], index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
+            mode_options = ["Standard", "Custom", "Threshold", "Threshold+Calendar"]
+            try:
+                mode_idx = mode_options.index(p["rebalance"]["mode"])
+            except (ValueError, KeyError):
+                mode_idx = 0
+            r_mode = st.radio("Mode", mode_options, index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
             p["rebalance"]["mode"] = r_mode
 
             # Row 2: Controls distributed horizontally
             c_r1, c_r2, c_r3, c_r4 = st.columns(4)
-            
+
             if r_mode == "Custom":
                 with c_r1:
                     freq_opts = ["Yearly", "Quarterly", "Monthly"]
                     try: f_idx = freq_opts.index(p["rebalance"]["freq"])
                     except (ValueError, KeyError): f_idx = 0
                     p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
-                
+
                 with c_r2:
                     if p["rebalance"]["freq"] == "Yearly":
                         p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"rmon_{p['id']}")
-                    else: 
+                    else:
                         p["rebalance"]["month"] = 1
                         # Placeholder or empty
-                        st.markdown("") 
+                        st.markdown("")
 
                 with c_r3:
                     p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"rday_{p['id']}")
@@ -237,10 +242,39 @@ def render():
                     st.markdown("<br>", unsafe_allow_html=True)
                     p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"cmp_{p['id']}")
 
+            elif r_mode == "Threshold":
+                with c_r1:
+                    p["rebalance"]["threshold_pct"] = st.number_input(
+                        "Drift Threshold (%)", 1.0, 50.0,
+                        float(p["rebalance"].get("threshold_pct", 5.0)),
+                        step=1.0, key=f"rthresh_{p['id']}",
+                        help="Rebalance when any position drifts more than X pp from target. Checked daily."
+                    )
+                # Reset calendar fields to defaults
+                p["rebalance"]["freq"] = "Yearly"
+                p["rebalance"]["month"] = 1
+                p["rebalance"]["day"] = 1
+
+            elif r_mode == "Threshold+Calendar":
+                with c_r1:
+                    freq_opts = ["Yearly", "Quarterly", "Monthly"]
+                    try: f_idx = freq_opts.index(p["rebalance"]["freq"])
+                    except (ValueError, KeyError): f_idx = 0
+                    p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key=f"rfreq_tc_{p['id']}")
+                with c_r2:
+                    p["rebalance"]["threshold_pct"] = st.number_input(
+                        "Drift Threshold (%)", 1.0, 50.0,
+                        float(p["rebalance"].get("threshold_pct", 5.0)),
+                        step=1.0, key=f"rthresh_tc_{p['id']}",
+                        help="Only rebalance at scheduled check dates if drift exceeds threshold."
+                    )
+                p["rebalance"]["month"] = 1
+                p["rebalance"]["day"] = 1
+
             else: # Standard Mode
                 with c_r1:
                     p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"rfreq_std_{p['id']}")
-                
+
                 # Reset custom vars implicitly
                 p["rebalance"]["month"] = 1
                 p["rebalance"]["day"] = 1

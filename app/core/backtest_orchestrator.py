@@ -82,18 +82,23 @@ def run_single_backtest(
     else:
         current_wmaint = d_maint / 100.0
 
-    # Determine engine
-    has_ndxmega = any((Tickers.NDXMEGASIM in t or Tickers.NDXMEGA2SIM in t) for t in alloc_map)
-    use_local_engine = has_ndxmega
-
-    # Cashflow settings
-    bt_cashflow = 0.0 if pay_down_margin else cashflow_amount
-    shadow_cashflow = 0.0 if pay_down_margin else cashflow_amount
-
     # Rebalance
     reb = rebalance
     r_mode = reb.get("mode", RebalMode.STANDARD)
     r_freq = reb.get("freq", Freq.YEARLY)
+    r_threshold = reb.get("threshold_pct", 5.0)
+
+    # Determine engine
+    has_ndxmega = any(
+        (Tickers.NDXMEGASIM in t or Tickers.NDXMEGA2SIM in t or Tickers.NDX30SIM in t)
+        for t in alloc_map
+    )
+    uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
+    use_local_engine = has_ndxmega or uses_threshold
+
+    # Cashflow settings
+    bt_cashflow = 0.0 if pay_down_margin else cashflow_amount
+    shadow_cashflow = 0.0 if pay_down_margin else cashflow_amount
 
     port_series = pd.Series(dtype=float)
     stats: dict = {}
@@ -180,7 +185,7 @@ def run_single_backtest(
             start_date=start_date,
             end_date=end_date,
             api_port_series=None,
-            rebalance_freq=reb.get("freq", "Yearly"),
+            rebalance_freq=r_mode if uses_threshold else reb.get("freq", "Yearly"),
             cashflow=shadow_cashflow,
             cashflow_freq=cashflow_freq,
             invest_dividends=invest_div,
@@ -191,6 +196,7 @@ def run_single_backtest(
             rebalance_month=reb.get("month", 1),
             rebalance_day=reb.get("day", 1),
             custom_freq=reb.get("freq", "Yearly"),
+            threshold_pct=r_threshold,
         )
 
         if not port_series.empty:
@@ -320,6 +326,8 @@ def run_multi_backtest(
             reb = res["_reb"]
             r_mode = res["_r_mode"]
             r_freq = reb.get("freq", "Yearly")
+            r_threshold = reb.get("threshold_pct", 5.0)
+            uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
 
             if not res.get("is_local", False):
                 # --- API Portfolio: Re-fetch with common_start ---
@@ -414,7 +422,7 @@ def run_multi_backtest(
                                 start_date=common_start.strftime("%Y-%m-%d"),
                                 end_date=end_date,
                                 api_port_series=None,
-                                rebalance_freq=reb.get("freq", "Yearly"),
+                                rebalance_freq=r_mode if uses_threshold else reb.get("freq", "Yearly"),
                                 cashflow=shadow_cf,
                                 cashflow_freq=cashflow_freq,
                                 invest_dividends=invest_div,
@@ -425,6 +433,7 @@ def run_multi_backtest(
                                 rebalance_month=reb.get("month", 1),
                                 rebalance_day=reb.get("day", 1),
                                 custom_freq=reb.get("freq", "Yearly"),
+                                threshold_pct=r_threshold,
                             )
                             res["trades_df"] = new_trades
                             res["trades"] = new_trades

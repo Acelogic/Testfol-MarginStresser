@@ -30,6 +30,62 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
             if base in combined_prices.columns:
                 continue
 
+            # SPECIAL: NDX30SIM — load simulation CSV + splice with QTOP
+            if base == Tickers.NDX30SIM:
+                try:
+                    # 1. Load Simulation CSV
+                    csv_path = f"data/{base}.csv"
+                    df_sim = pd.Series(dtype=float)
+                    if os.path.exists(csv_path):
+                        _df = pd.read_csv(csv_path)
+                        if 'Date' in _df.columns:
+                            _df['Date'] = pd.to_datetime(_df['Date'])
+                            _df = _df.set_index('Date')
+                        if 'Close' in _df.columns:
+                            df_sim = _df['Close'].sort_index()
+                    else:
+                        warnings.warn(f"{base} requested but {csv_path} not found.")
+
+                    # 2. Fetch QTOP (Live ETF)
+                    qtop_series = pd.Series(dtype=float)
+                    try:
+                        qtop_df = yf.download("QTOP", period="max", auto_adjust=True, progress=False, timeout=30)
+                        if not qtop_df.empty:
+                            if 'Close' in qtop_df:
+                                qtop_series = qtop_df['Close']
+                            elif 'Adj Close' in qtop_df:
+                                qtop_series = qtop_df['Adj Close']
+                            else:
+                                qtop_series = qtop_df.iloc[:, 0]
+                        if isinstance(qtop_series, pd.DataFrame):
+                            qtop_series = qtop_series.iloc[:, 0]
+                        qtop_series.index = pd.to_datetime(qtop_series.index)
+                        qtop_series = qtop_series.sort_index()
+                    except Exception as e:
+                        warnings.warn(f"Failed to fetch QTOP data: {e}")
+
+                    # 3. Splice
+                    if not qtop_series.empty and not df_sim.empty:
+                        splice_date = qtop_series.index[0]
+                        sim_part = df_sim[df_sim.index < splice_date]
+                        if not sim_part.empty:
+                            sim_end_val = sim_part.iloc[-1]
+                            qtop_start_val = qtop_series.iloc[0]
+                            scale_factor = qtop_start_val / sim_end_val if sim_end_val != 0 else 1.0
+                            sim_part_scaled = sim_part * scale_factor
+                            combined_prices[base] = pd.concat([sim_part_scaled, qtop_series])
+                        else:
+                            combined_prices[base] = qtop_series
+                    elif not df_sim.empty:
+                        combined_prices[base] = df_sim
+                    elif not qtop_series.empty:
+                        combined_prices[base] = qtop_series
+
+                    continue
+
+                except Exception as e:
+                    raise RuntimeError(f"Failed to load/splice NDX30SIM: {e}")
+
             # SPECIAL: Load NDX Mega simulations from local CSV + Splice with QBIG
             if base in [Tickers.NDXMEGASIM, Tickers.NDXMEGA2SIM]:
                 try:
