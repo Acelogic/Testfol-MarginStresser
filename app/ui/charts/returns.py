@@ -363,12 +363,14 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"q_hm_{full_suffix}")
         
         st.subheader("Quarterly Returns List")
+        quarterly_bal = series.resample("QE").last()
         df_quarterly_list = q_ret.copy()
         df_quarterly_list["Period"] = df_quarterly_list.index.to_period("Q").astype(str)
-        df_quarterly_list = df_quarterly_list[["Period", "Return"]].sort_index(ascending=False)
-        
+        df_quarterly_list["Balance"] = quarterly_bal.reindex(df_quarterly_list.index).values
+        df_quarterly_list = df_quarterly_list[["Period", "Return", "Balance"]].sort_index(ascending=False)
+
         st.dataframe(
-            df_quarterly_list.style.format({"Return": "{:+.1%}"}).map(color_return, subset=["Return"]),
+            df_quarterly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
             hide_index=True
         )
@@ -474,13 +476,17 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
         st.plotly_chart(fig, use_container_width=True)
         
+        annual_bal = port_series.resample("YE").last()
         df_annual = pd.DataFrame({
             "Year": annual_ret.index.year,
             "Return": annual_ret.values
         }).sort_values("Year", ascending=False)
-        
+        df_annual["Balance"] = df_annual["Year"].map(
+            dict(zip(annual_bal.index.year, annual_bal.values))
+        )
+
         st.dataframe(
-            df_annual.style.format({"Return": "{:+.1%}"}).map(color_return, subset=["Return"]),
+            df_annual.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
             hide_index=True
         )
@@ -516,10 +522,12 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             render_monthly_returns_view(port_series)
             
             st.subheader("Monthly Returns List")
+            monthly_bal = port_series.resample("ME").last()
             df_monthly_list = monthly_ret.to_frame(name="Return")
             df_monthly_list["Date"] = df_monthly_list.index.strftime("%Y-%m")
-            df_monthly_list = df_monthly_list[["Date", "Return"]].sort_index(ascending=False)
-            st.dataframe(df_monthly_list.style.format({"Return": "{:+.1%}"}).map(color_return, subset=["Return"]), use_container_width=True, hide_index=True)
+            df_monthly_list["Balance"] = monthly_bal.reindex(df_monthly_list.index).values
+            df_monthly_list = df_monthly_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
+            st.dataframe(df_monthly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]), use_container_width=True, hide_index=True)
 
         if len(hm_tabs) > 1 and "Benchmark (Comparison)" in hm_tabs:
             with m_view_tabs[hm_tabs.index("Benchmark (Comparison)")]:
@@ -558,10 +566,11 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.subheader("Daily Returns List")
         df_daily_list = daily_ret.to_frame(name="Return")
         df_daily_list["Date"] = df_daily_list.index.date
-        df_daily_list = df_daily_list[["Date", "Return"]].sort_index(ascending=False)
-        
+        df_daily_list["Balance"] = port_series.reindex(df_daily_list.index).values
+        df_daily_list = df_daily_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
+
         st.dataframe(
-            df_daily_list.style.format({"Return": "{:+.1%}"}).map(color_return, subset=["Return"]),
+            df_daily_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
             hide_index=True
         )
