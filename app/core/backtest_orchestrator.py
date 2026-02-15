@@ -416,7 +416,7 @@ def run_multi_backtest(
                                 end_date,
                             )
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr = shadow_fn(
+                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
                                 start_date=common_start.strftime("%Y-%m-%d"),
@@ -444,7 +444,12 @@ def run_multi_backtest(
                             res["logs"] = new_logs
                             res["twr_series"] = new_twr
                             res["shadow_range"] = f"{common_start.date()} to {end_date}"
-                            if new_twr is not None and not new_twr.empty:
+                            # Use port_series (includes cashflows) for chart,
+                            # TWR (strips cashflows) for stats
+                            if new_port is not None and not new_port.empty:
+                                res["series"] = new_port
+                                res["port_series"] = new_port
+                            elif new_twr is not None and not new_twr.empty:
                                 synced = (new_twr / new_twr.iloc[0]) * global_start_val
                                 res["series"] = synced
                                 res["port_series"] = synced

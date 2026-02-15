@@ -39,8 +39,22 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     if common_start:
         st.caption(f"ℹ️ Chart aligned to common start date: **{common_start.date()}**. All values rebased to ${rebase_target:,.0f}.")
 
+    # Sort by total return (highest first) for legend/tooltip ordering
+    def _total_return(idx):
+        s = results_list[idx].get('series')
+        if s is None or s.empty:
+            return 0
+        if common_start:
+            s = s[s.index >= common_start]
+        if s.empty or s.iloc[0] == 0:
+            return 0
+        return s.iloc[-1] / s.iloc[0]
+
+    sorted_indices = sorted(range(len(results_list)), key=_total_return, reverse=True)
+
     # Add Portfolios (clipped to common start, rebased to $10k)
-    for i, res in enumerate(results_list):
+    for i in sorted_indices:
+        res = results_list[i]
         name = res['name']
         series = res.get('series')
         stats = res.get('stats', {})
@@ -138,8 +152,9 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     st.markdown("### Drawdowns")
     fig_dd = go.Figure()
 
-    # 1. Portfolios Drawdown (clipped to common start)
-    for i, res in enumerate(results_list):
+    # 1. Portfolios Drawdown (clipped to common start, same sort as performance chart)
+    for i in sorted_indices:
+        res = results_list[i]
         series = res.get('series')
         if series is None or series.empty: continue
         
@@ -216,7 +231,8 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         st.markdown("### Statistics")
         
         stats_data = []
-        for res in results_list:
+        for i in sorted_indices:
+            res = results_list[i]
             series = res.get('series')
             stats = res.get('stats', {})
             if series is None or series.empty:
