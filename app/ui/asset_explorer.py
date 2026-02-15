@@ -77,6 +77,7 @@ def fetch_worker(tickers):
             
     return results
 
+@st.fragment
 def render_asset_explorer():
     """
     Renders the Periodic Table of Asset Classes view.

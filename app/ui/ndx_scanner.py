@@ -621,6 +621,7 @@ def fetch_wma_data_testfol(tickers: list, tolerance_weeks: int = 0, min_weeks_fi
     return pd.DataFrame(results)
 
 
+@st.fragment
 def render_ndx_scanner():
     """
     Main renderer for the NDX-100 Moving Average Scanner.

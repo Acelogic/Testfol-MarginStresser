@@ -15,10 +15,20 @@ def render():
     
     config = {}
 
+    # Per-portfolio widget keys — stable across tab switches, popped on switch
+    _PF_KEYS = [
+        "p_name", "p_rmode", "p_rfreq", "p_rmon", "p_rday", "p_cmp",
+        "p_rthresh", "p_rfreq_tc", "p_rthresh_tc", "p_rfreq_std",
+        "p_editor",
+    ]
+
+    def _pop_pf_keys():
+        for k in _PF_KEYS:
+            st.session_state.pop(k, None)
+
     def _portfolio_fragment():
         # --- initialize state ---
         if "portfolios" not in st.session_state:
-            # Default to hardcoded NDXMEGASPLIT
             _default_alloc = pd.DataFrame([
                 {"Ticker": "NDXMEGASIM?L=2", "Weight %": 60.0, "Maint %": 50.0},
                 {"Ticker": "GLDSIM", "Weight %": 20.0, "Maint %": 25.0},
@@ -36,26 +46,21 @@ def render():
                      "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
                 }
             }]
-            
-        # --- Global Cashflow Settings ---
+
         if "global_cashflow" not in st.session_state:
             st.session_state.global_cashflow = {
-                "start_val": 10000.0,
-                "amount": 0.0, 
-                "freq": "Monthly", 
-                "invest_div": True,
-                "pay_down_margin": False
+                "start_val": 10000.0, "amount": 0.0,
+                "freq": "Monthly", "invest_div": True, "pay_down_margin": False
             }
-            
-        # --- Sync & Determine Active Portfolio ---
+
         if "active_tab_idx" not in st.session_state:
             st.session_state.active_tab_idx = 0
 
-        # Pre-sync pending text_input renames before computing names
-        for port in st.session_state.portfolios:
-            name_key = f"name_{port['id']}"
-            if name_key in st.session_state:
-                port["name"] = st.session_state[name_key]
+        # Sync active portfolio name from the stable text_input key
+        if "p_name" in st.session_state:
+            _aidx = st.session_state.active_tab_idx
+            if _aidx < len(st.session_state.portfolios):
+                st.session_state.portfolios[_aidx]["name"] = st.session_state["p_name"]
 
         portfolio_names = [port["name"] for port in st.session_state.portfolios]
 
@@ -77,7 +82,6 @@ def render():
         # --- Render Global Section ---
         st.markdown("##### 💰 Global Capital & Cashflow")
         gc1, gc2, gc3, gc4, gc5 = st.columns([2, 2, 2, 1.5, 1.5])
-        
         with gc1:
             st.session_state.global_cashflow["start_val"] = utils.num_input("Start Value ($)", "g_start", st.session_state.global_cashflow["start_val"], 1000.0)
         with gc2:
@@ -95,8 +99,7 @@ def render():
 
         # --- Portfolio Management Toolbar ---
         c_tool1, c_tool2, c_tool3 = st.columns([1, 2, 1])
-        
-        # 1. New Portfolio
+
         with c_tool1:
             if st.button("➕ Add Empty", use_container_width=True):
                 if len(st.session_state.portfolios) < 5:
@@ -110,32 +113,31 @@ def render():
                     })
                     st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                     st.session_state.pop("portfolio_selector", None)
+                    _pop_pf_keys()
                     st.rerun()
                 else:
                     st.warning("Max 5 portfolios.")
 
-        # 2. Load Preset
         import json
         import os
         try:
             base_dir = os.path.dirname(os.path.abspath(__file__))
             preset_path = os.path.join(base_dir, "../../data/presets.json")
-            
             preset_names = []
             presets = []
             if os.path.exists(preset_path):
                 with open(preset_path, "r") as f:
                     presets = json.load(f)
                 preset_names = [p["name"] for p in presets]
-            
+
             with c_tool2:
                 selected_preset = st.selectbox(
-                    "Select Preset", 
-                    preset_names if preset_names else ["No Presets"], 
-                    key="preset_selector", 
+                    "Select Preset",
+                    preset_names if preset_names else ["No Presets"],
+                    key="preset_selector",
                     label_visibility="collapsed"
                 )
-            
+
             with c_tool3:
                 if st.button("⬇️ Load Preset", use_container_width=True):
                     if preset_names and selected_preset and selected_preset != "No Presets":
@@ -143,11 +145,9 @@ def render():
                             p_data = next(p for p in presets if p["name"] == selected_preset)
                             import uuid
                             new_id = f"p_pre_{uuid.uuid4().hex[:8]}"
-                            
                             reb = p_data.get("rebalance", {})
                             month_map = {"Jan":1, "Feb":2, "Mar":3, "Apr":4, "May":5, "Jun":6, "Jul":7, "Aug":8, "Sep":9, "Oct":10, "Nov":11, "Dec":12}
                             r_month = month_map.get(reb.get("month_str", "Jan"), 1)
-                            
                             st.session_state.portfolios.append({
                                 "id": new_id,
                                 "name": p_data["name"],
@@ -163,43 +163,53 @@ def render():
                             })
                             st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                             st.session_state.pop("portfolio_selector", None)
+                            _pop_pf_keys()
                             st.rerun()
                         else:
                             st.warning("Max 5 portfolios.")
         except Exception as e:
             st.error(f"Error: {e}")
-            
+
         st.divider()
 
         # --- Portfolio Selector (outside fragment — tab switch = full rerun) ---
-        # Sync index with widget state if available
-        if "portfolio_selector" in st.session_state and st.session_state.portfolio_selector:
+        def _on_tab_change():
+            # Save current portfolio's name before switching
+            old_idx = st.session_state.active_tab_idx
+            if "p_name" in st.session_state and old_idx < len(st.session_state.portfolios):
+                st.session_state.portfolios[old_idx]["name"] = st.session_state["p_name"]
+            # Resolve new tab
             sel = st.session_state.portfolio_selector
             if sel in display_names:
                 st.session_state.active_tab_idx = display_names.index(sel)
-                idx = st.session_state.active_tab_idx
+            # Pop per-portfolio keys so widgets reinitialize from new portfolio data
+            _pop_pf_keys()
+
+        # Ensure selector is valid before rendering
+        _sel = st.session_state.get("portfolio_selector")
+        if _sel is None or _sel not in display_names:
+            st.session_state.portfolio_selector = display_names[idx]
 
         st.segmented_control(
             "Portfolio",
             display_names,
-            default=display_names[idx],
             key="portfolio_selector",
+            on_change=_on_tab_change,
         )
 
-        # --- Per-portfolio content (inside fragment — fast reruns for edits) ---
+        # --- Per-portfolio content (inside fragment — stable keys, fast reruns) ---
         @st.fragment
         def _portfolio_content():
-            _idx = st.session_state.active_tab_idx
-            p = st.session_state.portfolios[_idx]
+            idx = st.session_state.active_tab_idx
+            p = st.session_state.portfolios[idx]
 
-            # -- Header & Actions --
             with st.container():
                 c_name, c_save, c_del = st.columns([6, 1, 1])
                 with c_name:
-                    p["name"] = st.text_input("Portfolio Name", p["name"], key=f"name_{p['id']}", label_visibility="collapsed")
+                    p["name"] = st.text_input("Portfolio Name", p["name"], key="p_name", label_visibility="collapsed")
 
                 with c_save:
-                    if st.button("💾", key=f"save_{p['id']}", help="Save as new Preset", use_container_width=True):
+                    if st.button("💾", key="p_save", help="Save as new Preset", use_container_width=True):
                         alloc_list = p["alloc_df"].to_dict("records")
                         preset_data = {
                             "name": p["name"],
@@ -217,11 +227,12 @@ def render():
                         st.rerun(scope="app")
 
                 with c_del:
-                    if st.button("🗑️", key=f"del_{p['id']}", help="Delete Portfolio", use_container_width=True):
+                    if st.button("🗑️", key="p_del", help="Delete Portfolio", use_container_width=True):
                         if len(st.session_state.portfolios) > 1:
-                            st.session_state.portfolios.pop(_idx)
-                            st.session_state.active_tab_idx = max(0, _idx-1)
+                            st.session_state.portfolios.pop(idx)
+                            st.session_state.active_tab_idx = max(0, idx-1)
                             st.session_state.pop("portfolio_selector", None)
+                            _pop_pf_keys()
                             st.rerun(scope="app")
                         else:
                             st.warning("Last portfolio")
@@ -233,7 +244,7 @@ def render():
                     mode_idx = mode_options.index(p["rebalance"]["mode"])
                 except (ValueError, KeyError):
                     mode_idx = 0
-                r_mode = st.radio("Mode", mode_options, index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
+                r_mode = st.radio("Mode", mode_options, index=mode_idx, key="p_rmode", horizontal=True, label_visibility="collapsed")
                 p["rebalance"]["mode"] = r_mode
 
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
@@ -243,28 +254,28 @@ def render():
                         freq_opts = ["Yearly", "Quarterly", "Monthly"]
                         try: f_idx = freq_opts.index(p["rebalance"]["freq"])
                         except (ValueError, KeyError): f_idx = 0
-                        p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key="p_rfreq")
 
                     with c_r2:
                         if p["rebalance"]["freq"] == "Yearly":
-                            p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"rmon_{p['id']}")
+                            p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key="p_rmon")
                         else:
                             p["rebalance"]["month"] = 1
                             st.markdown("")
 
                     with c_r3:
-                        p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"rday_{p['id']}")
+                        p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key="p_rday")
 
                     with c_r4:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"cmp_{p['id']}")
+                        p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key="p_cmp")
 
                 elif r_mode == "Threshold":
                     with c_r1:
                         p["rebalance"]["threshold_pct"] = st.number_input(
                             "Drift Threshold (%)", 1.0, 50.0,
                             float(p["rebalance"].get("threshold_pct", 5.0)),
-                            step=1.0, key=f"rthresh_{p['id']}",
+                            step=1.0, key="p_rthresh",
                             help="Rebalance when any position drifts more than X pp from target. Checked daily."
                         )
                     p["rebalance"]["freq"] = "Yearly"
@@ -276,12 +287,12 @@ def render():
                         freq_opts = ["Yearly", "Quarterly", "Monthly"]
                         try: f_idx = freq_opts.index(p["rebalance"]["freq"])
                         except (ValueError, KeyError): f_idx = 0
-                        p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key=f"rfreq_tc_{p['id']}")
+                        p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key="p_rfreq_tc")
                     with c_r2:
                         p["rebalance"]["threshold_pct"] = st.number_input(
                             "Drift Threshold (%)", 1.0, 50.0,
                             float(p["rebalance"].get("threshold_pct", 5.0)),
-                            step=1.0, key=f"rthresh_tc_{p['id']}",
+                            step=1.0, key="p_rthresh_tc",
                             help="Only rebalance at scheduled check dates if drift exceeds threshold."
                         )
                     p["rebalance"]["month"] = 1
@@ -289,14 +300,14 @@ def render():
 
                 else: # Standard Mode
                     with c_r1:
-                        p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"rfreq_std_{p['id']}")
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key="p_rfreq_std")
                     p["rebalance"]["month"] = 1
                     p["rebalance"]["day"] = 1
 
             st.markdown("##### 🥧 Asset Allocation")
             new_alloc_df = st.data_editor(
                 p["alloc_df"],
-                key=f"editor_{p['id']}",
+                key="p_editor",
                 num_rows="dynamic",
                 column_order=["Ticker", "Weight %", "Maint %"],
                 column_config={
