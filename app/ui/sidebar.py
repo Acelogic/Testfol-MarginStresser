@@ -33,7 +33,45 @@ def render():
         
         run_placeholder = st.empty()
         st.info("Configure your strategy, then click Run.")
-        
+
+        # --- Portfolio Switcher (quick access without scrolling) ---
+        if "portfolios" in st.session_state and len(st.session_state.portfolios) > 1:
+            st.markdown("---")
+            portfolios = st.session_state.portfolios
+            port_names = [p["name"] for p in portfolios]
+            # Dedup display names
+            display = list(port_names)
+            _seen = {}
+            for i, n in enumerate(display):
+                c = _seen.get(n, 0) + 1
+                _seen[n] = c
+                if c > 1:
+                    display[i] = f"{n} ({c})"
+
+            active_idx = min(st.session_state.get("active_tab_idx", 0), len(display) - 1)
+
+            def _on_sidebar_switch():
+                sel = st.session_state.get("sidebar_portfolio")
+                if sel in display:
+                    new_idx = display.index(sel)
+                    st.session_state.active_tab_idx = new_idx
+                    st.session_state["portfolio_selector"] = display[new_idx]
+                    # Pop stable keys + set p_name
+                    for k in ["p_rmode", "p_rfreq", "p_rmon", "p_rday",
+                               "p_cmp", "p_rthresh", "p_rfreq_tc", "p_rthresh_tc",
+                               "p_rfreq_std", "p_editor"]:
+                        st.session_state.pop(k, None)
+                    st.session_state["p_name"] = portfolios[new_idx]["name"]
+
+            st.session_state["sidebar_portfolio"] = display[active_idx]
+            st.radio(
+                "Portfolio",
+                display,
+                key="sidebar_portfolio",
+                on_change=_on_sidebar_switch,
+                label_visibility="collapsed",
+            )
+
         with st.expander("API Settings"):
              bearer_token = st.text_input("Bearer Token (Optional)", type="password", help="Overrides TESTFOL_API_KEY env var if set.")
              # Store in session state for use by other components (e.g., NDX Scanner)
