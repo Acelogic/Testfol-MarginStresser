@@ -864,11 +864,17 @@ def render_ndx_scanner():
                 if "portfolio_selector" in st.session_state:
                     del st.session_state.portfolio_selector
 
+                # Pop stable per-portfolio widget keys so fragment reinitializes
+                for _k in ["p_name", "p_rmode", "p_rfreq", "p_rmon", "p_rday",
+                           "p_cmp", "p_rthresh", "p_rfreq_tc", "p_rthresh_tc",
+                           "p_rfreq_std", "p_editor"]:
+                    st.session_state.pop(_k, None)
+
                 st.toast(f"✅ Loaded '{selected_ticker_analyze}' with full history! Switch to Portfolio tab.", icon="🚀")
 
-                # Rerun to refresh the app state
+                # Rerun full app (we're inside @st.fragment)
                 time.sleep(0.3)
-                st.rerun()
+                st.rerun(scope="app")
             else:
                 st.error("Portfolio state not initialized.")
     
