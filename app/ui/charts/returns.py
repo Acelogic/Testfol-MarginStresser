@@ -199,6 +199,67 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
     quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
     annual_ret = port_series.resample("YE").last().pct_change().dropna()
 
+    # --- DISTRIBUTION HELPER ---
+    def render_distribution(ret_series, period_label, freq_label):
+        """Render histogram + summary stats for a returns series."""
+        if ret_series.empty or len(ret_series) < 2:
+            return
+
+        vals = ret_series.values
+        median_val = np.nanmedian(vals)
+
+        st.subheader(f"{period_label} Returns Histogram")
+        fig = go.Figure()
+        fig.add_trace(go.Histogram(
+            x=vals * 100,
+            nbinsx=max(10, min(50, len(vals) // 2)),
+            marker_color="#42A5F5",
+            name=f"Frequency of {freq_label}",
+        ))
+        fig.add_vline(x=0, line_dash="solid", line_color="white", line_width=1)
+        fig.add_vline(
+            x=median_val * 100, line_dash="dash", line_color="#FFC107", line_width=2,
+            annotation_text=f"Median: {median_val*100:.2f}%",
+            annotation_position="top",
+            annotation_font_color="#FFC107",
+        )
+        fig.update_layout(
+            xaxis_title=f"{period_label} Return",
+            yaxis_title=f"Frequency of {freq_label}",
+            template="plotly_dark",
+            height=400,
+            showlegend=False,
+            bargap=0.05,
+            xaxis_tickformat=".2f",
+            xaxis_ticksuffix="%",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        st.subheader("Summary Statistics")
+        from scipy import stats as sp_stats
+        pcts = [1, 5, 25, 50, 75, 95, 99]
+        pct_vals = np.nanpercentile(vals, pcts)
+        stat_rows = {
+            "Minimum": f"{np.nanmin(vals)*100:.2f}%",
+            "1st Percentile": f"{pct_vals[0]*100:.2f}%",
+            "5th Percentile": f"{pct_vals[1]*100:.2f}%",
+            "25th Percentile": f"{pct_vals[2]*100:.2f}%",
+            "50th Percentile (Median)": f"{pct_vals[3]*100:.2f}%",
+            "75th Percentile": f"{pct_vals[4]*100:.2f}%",
+            "95th Percentile": f"{pct_vals[5]*100:.2f}%",
+            "99th Percentile": f"{pct_vals[6]*100:.2f}%",
+            "Maximum": f"{np.nanmax(vals)*100:.2f}%",
+            "Mean": f"{np.nanmean(vals)*100:.2f}%",
+            "Std Deviation": f"{np.nanstd(vals, ddof=1)*100:.2f}%",
+            "Skewness": f"{sp_stats.skew(vals, nan_policy='omit'):.3f}",
+            "Excess Kurtosis": f"{sp_stats.kurtosis(vals, nan_policy='omit'):.3f}",
+        }
+        col_name = f"{portfolio_name} {period_label} Returns"
+        df_stats = pd.DataFrame(
+            {"Statistic": stat_rows.keys(), col_name: stat_rows.values()}
+        )
+        st.dataframe(df_stats, use_container_width=True, hide_index=True)
+
     # --- HEATMAP HELPERS ---
     def render_seasonal_summary(series, suffix=""):
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
@@ -475,7 +536,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
-        
+
         annual_bal = port_series.resample("YE").last()
         df_annual = pd.DataFrame({
             "Year": annual_ret.index.year,
@@ -491,36 +552,51 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             hide_index=True
         )
 
+        render_distribution(annual_ret, "Annual", "Years")
+
     with tab_quarterly:
-        qt_tabs = [portfolio_name]
+        qt_tabs = []
         if comparison_series is not None and not comparison_series.empty: qt_tabs.append("Benchmark (Comparison)")
         if bench_series is not None and not bench_series.empty: qt_tabs.append("Benchmark (Primary)")
-            
-        q_view_tabs = st.tabs(qt_tabs)
-        with q_view_tabs[0]:
+
+        if qt_tabs:
+            qt_tabs.insert(0, portfolio_name)
+            q_view_tabs = st.tabs(qt_tabs)
+            q_port_ctx = q_view_tabs[0]
+        else:
+            q_port_ctx = st.container()
+
+        with q_port_ctx:
             st.subheader(f"{portfolio_name} Quarterly Returns")
             render_quarterly_returns_view(port_series)
-        
-        if len(qt_tabs) > 1 and "Benchmark (Comparison)" in qt_tabs:
+            render_distribution(quarterly_ret, "Quarterly", "Quarters")
+
+        if "Benchmark (Comparison)" in qt_tabs:
             with q_view_tabs[qt_tabs.index("Benchmark (Comparison)")]:
                 st.subheader("Standard Rebalance (Comparison) Quarterly Returns")
                 render_quarterly_returns_view(comparison_series, suffix="_comp")
-        
-        if len(qt_tabs) > 1 and "Benchmark (Primary)" in qt_tabs:
+
+        if "Benchmark (Primary)" in qt_tabs:
              with q_view_tabs[qt_tabs.index("Benchmark (Primary)")]:
                 st.subheader("Primary Benchmark Quarterly Returns")
                 render_quarterly_returns_view(bench_series, suffix="_bench")
 
     with tab_monthly:
-        hm_tabs = [portfolio_name]
+        hm_tabs = []
         if comparison_series is not None and not comparison_series.empty: hm_tabs.append("Benchmark (Comparison)")
         if bench_series is not None and not bench_series.empty: hm_tabs.append("Benchmark (Primary)")
-            
-        m_view_tabs = st.tabs(hm_tabs)
-        with m_view_tabs[0]:
+
+        if hm_tabs:
+            hm_tabs.insert(0, portfolio_name)
+            m_view_tabs = st.tabs(hm_tabs)
+            m_port_ctx = m_view_tabs[0]
+        else:
+            m_port_ctx = st.container()
+
+        with m_port_ctx:
             st.subheader(f"{portfolio_name} Monthly Returns")
             render_monthly_returns_view(port_series)
-            
+
             st.subheader("Monthly Returns List")
             monthly_bal = port_series.resample("ME").last()
             df_monthly_list = monthly_ret.to_frame(name="Return")
@@ -529,40 +605,26 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             df_monthly_list = df_monthly_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
             st.dataframe(df_monthly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]), use_container_width=True, hide_index=True)
 
-        if len(hm_tabs) > 1 and "Benchmark (Comparison)" in hm_tabs:
+            render_distribution(monthly_ret, "Monthly", "Months")
+
+        if "Benchmark (Comparison)" in hm_tabs:
             with m_view_tabs[hm_tabs.index("Benchmark (Comparison)")]:
                 st.subheader("Standard Rebalance (Comparison) Monthly Returns")
                 render_monthly_returns_view(comparison_series, suffix="_comp")
-                
-        if len(hm_tabs) > 1 and "Benchmark (Primary)" in hm_tabs:
+
+        if "Benchmark (Primary)" in hm_tabs:
              with m_view_tabs[hm_tabs.index("Benchmark (Primary)")]:
                 st.subheader("Primary Benchmark Monthly Returns")
                 render_monthly_returns_view(bench_series, suffix="_bench")
 
     with tab_daily:
         st.subheader(f"{portfolio_name} Daily Returns")
-        
+
         c1, c2, c3 = st.columns(3)
         c1.metric("Best Day", f"{daily_ret.max()*100:+.2f}%")
         c2.metric("Worst Day", f"{daily_ret.min()*100:+.2f}%")
         c3.metric("Positive Days", f"{(daily_ret > 0).mean()*100:.1f}%")
-        
-        fig = go.Figure(go.Histogram(
-            x=daily_ret * 100,
-            nbinsx=100,
-            marker_color="#636EFA"
-        ))
-        
-        fig.update_layout(
-            title="Distribution of Daily Returns",
-            xaxis_title="Return (%)",
-            yaxis_title="Frequency",
-            template="plotly_dark",
-            height=400,
-            bargap=0.1
-        )
-        st.plotly_chart(fig, use_container_width=True)
-        
+
         st.subheader("Daily Returns List")
         df_daily_list = daily_ret.to_frame(name="Return")
         df_daily_list["Date"] = df_daily_list.index.date
@@ -574,5 +636,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             use_container_width=True,
             hide_index=True
         )
+
+        render_distribution(daily_ret, "Daily", "Days")
 
 
