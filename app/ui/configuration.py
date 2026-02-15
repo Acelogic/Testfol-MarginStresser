@@ -15,7 +15,7 @@ def render():
     
     config = {}
 
-    with tab_port:
+    def _portfolio_fragment():
         # --- initialize state ---
         if "portfolios" not in st.session_state:
             # Default to hardcoded NDXMEGASPLIT
@@ -50,22 +50,29 @@ def render():
         # --- Sync & Determine Active Portfolio ---
         if "active_tab_idx" not in st.session_state:
             st.session_state.active_tab_idx = 0
-            
+
+        # Pre-sync pending text_input renames before computing names
+        for port in st.session_state.portfolios:
+            name_key = f"name_{port['id']}"
+            if name_key in st.session_state:
+                port["name"] = st.session_state[name_key]
+
         portfolio_names = [port["name"] for port in st.session_state.portfolios]
-        
-        # Sync index with widget state if available
-        if "portfolio_selector" in st.session_state and st.session_state.portfolio_selector:
-            sel = st.session_state.portfolio_selector
-            if sel in portfolio_names:
-                st.session_state.active_tab_idx = portfolio_names.index(sel)
-        
-        # Determine Current Portfolio 'p'
-        idx = st.session_state.active_tab_idx
-        if idx >= len(st.session_state.portfolios): 
+
+        # Build unique display names for segmented control (handles duplicate names)
+        display_names = list(portfolio_names)
+        _seen = {}
+        for i, name in enumerate(display_names):
+            count = _seen.get(name, 0) + 1
+            _seen[name] = count
+            if count > 1:
+                display_names[i] = f"{name} ({count})"
+
+        # Clamp active_tab_idx
+        idx = min(st.session_state.active_tab_idx, len(display_names) - 1)
+        if idx < 0:
             idx = 0
-            st.session_state.active_tab_idx = 0
-            
-        p = st.session_state.portfolios[idx]
+        st.session_state.active_tab_idx = idx
 
         # --- Render Global Section ---
         st.markdown("##### 💰 Global Capital & Cashflow")
@@ -101,6 +108,8 @@ def render():
                         "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25}]),
                         "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0}
                     })
+                    st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
+                    st.session_state.pop("portfolio_selector", None)
                     st.rerun()
                 else:
                     st.warning("Max 5 portfolios.")
@@ -152,6 +161,8 @@ def render():
                                     "threshold_pct": reb.get("threshold_pct", 5.0),
                                 }
                             })
+                            st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
+                            st.session_state.pop("portfolio_selector", None)
                             st.rerun()
                         else:
                             st.warning("Max 5 portfolios.")
@@ -160,169 +171,174 @@ def render():
             
         st.divider()
 
-        # --- Portfolio Selector & Management ---
-        
-        # Use segmented control (radio with pills) - this properly syncs state
-        # Note: We rely on key="portfolio_selector" to manage state, and synced it at the top.
-        selected = st.segmented_control(
+        # --- Portfolio Selector (outside fragment — tab switch = full rerun) ---
+        # Sync index with widget state if available
+        if "portfolio_selector" in st.session_state and st.session_state.portfolio_selector:
+            sel = st.session_state.portfolio_selector
+            if sel in display_names:
+                st.session_state.active_tab_idx = display_names.index(sel)
+                idx = st.session_state.active_tab_idx
+
+        st.segmented_control(
             "Portfolio",
-            portfolio_names,
-            default=portfolio_names[idx],
-            key="portfolio_selector"
+            display_names,
+            default=display_names[idx],
+            key="portfolio_selector",
         )
-        
-        # -- Header & Actions --
-        with st.container():
-            c_name, c_save, c_del = st.columns([6, 1, 1])
-            with c_name:
-                p["name"] = st.text_input("Portfolio Name", p["name"], key=f"name_{p['id']}", label_visibility="collapsed")
-            
-            with c_save:
-                # Save Button
-                if st.button("💾", key=f"save_{p['id']}", help="Save as new Preset", use_container_width=True):
-                    alloc_list = p["alloc_df"].to_dict("records")
-                    preset_data = {
-                        "name": p["name"],
-                        "allocation": alloc_list,
-                        "rebalance": {
-                            "mode": p["rebalance"]["mode"],
-                            "freq": p["rebalance"]["freq"],
-                            "day": p["rebalance"]["day"]
+
+        # --- Per-portfolio content (inside fragment — fast reruns for edits) ---
+        @st.fragment
+        def _portfolio_content():
+            _idx = st.session_state.active_tab_idx
+            p = st.session_state.portfolios[_idx]
+
+            # -- Header & Actions --
+            with st.container():
+                c_name, c_save, c_del = st.columns([6, 1, 1])
+                with c_name:
+                    p["name"] = st.text_input("Portfolio Name", p["name"], key=f"name_{p['id']}", label_visibility="collapsed")
+
+                with c_save:
+                    if st.button("💾", key=f"save_{p['id']}", help="Save as new Preset", use_container_width=True):
+                        alloc_list = p["alloc_df"].to_dict("records")
+                        preset_data = {
+                            "name": p["name"],
+                            "allocation": alloc_list,
+                            "rebalance": {
+                                "mode": p["rebalance"]["mode"],
+                                "freq": p["rebalance"]["freq"],
+                                "day": p["rebalance"]["day"]
+                            }
                         }
-                    }
-                    month_map_inv = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun", 7:"Jul", 8:"Aug", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dec"}
-                    preset_data["rebalance"]["month_str"] = month_map_inv.get(p["rebalance"].get("month", 1), "Jan")
-                    utils.save_preset(preset_data)
-                    st.success(f"Saved!")
-                    st.rerun()
-            
-            with c_del:
-                # Delete Button
-                if st.button("🗑️", key=f"del_{p['id']}", help="Delete Portfolio", use_container_width=True):
-                    if len(st.session_state.portfolios) > 1:
-                        st.session_state.portfolios.pop(idx)
-                        st.session_state.active_tab_idx = max(0, idx-1)
-                        st.rerun()
-                    else:
-                        st.warning("Last portfolio")
-        
-        # --- Rebalancing Strategy (Moved Back) ---
-        with st.expander("📅 Rebalancing Strategy", expanded=False):
-            # Row 1: Mode Selection
-            mode_options = ["Standard", "Custom", "Threshold", "Threshold+Calendar"]
-            try:
-                mode_idx = mode_options.index(p["rebalance"]["mode"])
-            except (ValueError, KeyError):
-                mode_idx = 0
-            r_mode = st.radio("Mode", mode_options, index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
-            p["rebalance"]["mode"] = r_mode
+                        month_map_inv = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun", 7:"Jul", 8:"Aug", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dec"}
+                        preset_data["rebalance"]["month_str"] = month_map_inv.get(p["rebalance"].get("month", 1), "Jan")
+                        utils.save_preset(preset_data)
+                        st.success(f"Saved!")
+                        st.rerun(scope="app")
 
-            # Row 2: Controls distributed horizontally
-            c_r1, c_r2, c_r3, c_r4 = st.columns(4)
+                with c_del:
+                    if st.button("🗑️", key=f"del_{p['id']}", help="Delete Portfolio", use_container_width=True):
+                        if len(st.session_state.portfolios) > 1:
+                            st.session_state.portfolios.pop(_idx)
+                            st.session_state.active_tab_idx = max(0, _idx-1)
+                            st.session_state.pop("portfolio_selector", None)
+                            st.rerun(scope="app")
+                        else:
+                            st.warning("Last portfolio")
 
-            if r_mode == "Custom":
-                with c_r1:
-                    freq_opts = ["Yearly", "Quarterly", "Monthly"]
-                    try: f_idx = freq_opts.index(p["rebalance"]["freq"])
-                    except (ValueError, KeyError): f_idx = 0
-                    p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
+            # --- Rebalancing Strategy ---
+            with st.expander("📅 Rebalancing Strategy", expanded=False):
+                mode_options = ["Standard", "Custom", "Threshold", "Threshold+Calendar"]
+                try:
+                    mode_idx = mode_options.index(p["rebalance"]["mode"])
+                except (ValueError, KeyError):
+                    mode_idx = 0
+                r_mode = st.radio("Mode", mode_options, index=mode_idx, key=f"rmode_{p['id']}", horizontal=True, label_visibility="collapsed")
+                p["rebalance"]["mode"] = r_mode
 
-                with c_r2:
-                    if p["rebalance"]["freq"] == "Yearly":
-                        p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"rmon_{p['id']}")
-                    else:
-                        p["rebalance"]["month"] = 1
-                        # Placeholder or empty
-                        st.markdown("")
+                c_r1, c_r2, c_r3, c_r4 = st.columns(4)
 
-                with c_r3:
-                    p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"rday_{p['id']}")
+                if r_mode == "Custom":
+                    with c_r1:
+                        freq_opts = ["Yearly", "Quarterly", "Monthly"]
+                        try: f_idx = freq_opts.index(p["rebalance"]["freq"])
+                        except (ValueError, KeyError): f_idx = 0
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"rfreq_{p['id']}")
 
-                with c_r4:
-                    st.markdown("<br>", unsafe_allow_html=True)
-                    p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"cmp_{p['id']}")
+                    with c_r2:
+                        if p["rebalance"]["freq"] == "Yearly":
+                            p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"rmon_{p['id']}")
+                        else:
+                            p["rebalance"]["month"] = 1
+                            st.markdown("")
 
-            elif r_mode == "Threshold":
-                with c_r1:
-                    p["rebalance"]["threshold_pct"] = st.number_input(
-                        "Drift Threshold (%)", 1.0, 50.0,
-                        float(p["rebalance"].get("threshold_pct", 5.0)),
-                        step=1.0, key=f"rthresh_{p['id']}",
-                        help="Rebalance when any position drifts more than X pp from target. Checked daily."
-                    )
-                # Reset calendar fields to defaults
-                p["rebalance"]["freq"] = "Yearly"
-                p["rebalance"]["month"] = 1
-                p["rebalance"]["day"] = 1
+                    with c_r3:
+                        p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"rday_{p['id']}")
 
-            elif r_mode == "Threshold+Calendar":
-                with c_r1:
-                    freq_opts = ["Yearly", "Quarterly", "Monthly"]
-                    try: f_idx = freq_opts.index(p["rebalance"]["freq"])
-                    except (ValueError, KeyError): f_idx = 0
-                    p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key=f"rfreq_tc_{p['id']}")
-                with c_r2:
-                    p["rebalance"]["threshold_pct"] = st.number_input(
-                        "Drift Threshold (%)", 1.0, 50.0,
-                        float(p["rebalance"].get("threshold_pct", 5.0)),
-                        step=1.0, key=f"rthresh_tc_{p['id']}",
-                        help="Only rebalance at scheduled check dates if drift exceeds threshold."
-                    )
-                p["rebalance"]["month"] = 1
-                p["rebalance"]["day"] = 1
+                    with c_r4:
+                        st.markdown("<br>", unsafe_allow_html=True)
+                        p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"cmp_{p['id']}")
 
-            else: # Standard Mode
-                with c_r1:
-                    p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"rfreq_std_{p['id']}")
+                elif r_mode == "Threshold":
+                    with c_r1:
+                        p["rebalance"]["threshold_pct"] = st.number_input(
+                            "Drift Threshold (%)", 1.0, 50.0,
+                            float(p["rebalance"].get("threshold_pct", 5.0)),
+                            step=1.0, key=f"rthresh_{p['id']}",
+                            help="Rebalance when any position drifts more than X pp from target. Checked daily."
+                        )
+                    p["rebalance"]["freq"] = "Yearly"
+                    p["rebalance"]["month"] = 1
+                    p["rebalance"]["day"] = 1
 
-                # Reset custom vars implicitly
-                p["rebalance"]["month"] = 1
-                p["rebalance"]["day"] = 1
+                elif r_mode == "Threshold+Calendar":
+                    with c_r1:
+                        freq_opts = ["Yearly", "Quarterly", "Monthly"]
+                        try: f_idx = freq_opts.index(p["rebalance"]["freq"])
+                        except (ValueError, KeyError): f_idx = 0
+                        p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key=f"rfreq_tc_{p['id']}")
+                    with c_r2:
+                        p["rebalance"]["threshold_pct"] = st.number_input(
+                            "Drift Threshold (%)", 1.0, 50.0,
+                            float(p["rebalance"].get("threshold_pct", 5.0)),
+                            step=1.0, key=f"rthresh_tc_{p['id']}",
+                            help="Only rebalance at scheduled check dates if drift exceeds threshold."
+                        )
+                    p["rebalance"]["month"] = 1
+                    p["rebalance"]["day"] = 1
 
-        st.markdown("##### 🥧 Asset Allocation")
-        new_alloc_df = st.data_editor(
-            p["alloc_df"],
-            key=f"editor_{p['id']}",
-            num_rows="dynamic",
-            column_order=["Ticker", "Weight %", "Maint %"],
-            column_config={
-                "Weight %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
-                "Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
-            },
-            use_container_width=True
-        )
+                else: # Standard Mode
+                    with c_r1:
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"rfreq_std_{p['id']}")
+                    p["rebalance"]["month"] = 1
+                    p["rebalance"]["day"] = 1
 
-        # Explicitly handle state updates to prevent reversion bugs
-        # If the editor output differs from our current state, update and force a rerun
-        if not new_alloc_df.equals(p["alloc_df"]):
-            p["alloc_df"] = new_alloc_df
-            st.rerun()
-
-        # Validation & Metrics
-        try:
-            p_alloc_preview, p_maint_preview = api.table_to_dicts(p["alloc_df"])
-            p_total_weight = sum(p_alloc_preview.values())
-            d_maint = config.get('default_maint', 25.0)
-            p_wmaint = sum(
-                (wt/100) * (p_maint_preview.get(t.split("?")[0], d_maint)/100)
-                for t, wt in p_alloc_preview.items()
+            st.markdown("##### 🥧 Asset Allocation")
+            new_alloc_df = st.data_editor(
+                p["alloc_df"],
+                key=f"editor_{p['id']}",
+                num_rows="dynamic",
+                column_order=["Ticker", "Weight %", "Maint %"],
+                column_config={
+                    "Weight %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
+                    "Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
+                },
+                use_container_width=True
             )
-        except Exception:
-            p_total_weight = 0.0
-            p_wmaint = 0.0
 
-        st.markdown("---")
-        mc1, mc2 = st.columns(2)
-        mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
-        mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
+            if not new_alloc_df.equals(p["alloc_df"]):
+                p["alloc_df"] = new_alloc_df
+                st.rerun(scope="fragment")
+
+            # Validation & Metrics
+            try:
+                p_alloc_preview, p_maint_preview = api.table_to_dicts(p["alloc_df"])
+                p_total_weight = sum(p_alloc_preview.values())
+                d_maint = config.get('default_maint', 25.0)
+                p_wmaint = sum(
+                    (wt/100) * (p_maint_preview.get(t.split("?")[0], d_maint)/100)
+                    for t, wt in p_alloc_preview.items()
+                )
+            except Exception:
+                p_total_weight = 0.0
+                p_wmaint = 0.0
+
+            st.markdown("---")
+            mc1, mc2 = st.columns(2)
+            mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
+            mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
+
+        _portfolio_content()
         
-        # Export for Charting
+    with tab_port:
+        _portfolio_fragment()
         config['portfolios'] = st.session_state.portfolios
         config['global_cashflow'] = st.session_state.get('global_cashflow', {
             "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
         })
 
-    with tab_margin:
+    @st.fragment
+    def _margin_fragment():
         # Move Tax Simulation to top to control state of other inputs
         tax_sim_mode = st.radio(
             "Tax Payment Simulation",
@@ -458,7 +474,8 @@ def render():
             # Portfolio Margin Toggle
             config['pm_enabled'] = st.checkbox("Enable Portfolio Margin (PM)", value=False, help="Enforces $100k Minimum Equity requirement.", disabled=margin_disabled)
 
-
+    with tab_margin:
+        _margin_fragment()
 
     with tab_asset:
         # Asset Explorer is self-contained.
@@ -469,7 +486,8 @@ def render():
         # NDX-100 Moving Average Scanner
         ndx_scanner.render_ndx_scanner()
 
-    with tab_settings:
+    @st.fragment
+    def _settings_fragment():
         c1, c2 = st.columns(2)
         with c1:
             config['chart_style'] = st.selectbox(
@@ -516,5 +534,8 @@ def render():
                     st.success("All caches cleared!")
                 else:
                     st.info("Caches are already empty.")
+
+    with tab_settings:
+        _settings_fragment()
 
     return config
