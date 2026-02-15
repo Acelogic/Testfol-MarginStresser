@@ -864,11 +864,13 @@ def render_ndx_scanner():
                 if "portfolio_selector" in st.session_state:
                     del st.session_state.portfolio_selector
 
-                # Pop stable per-portfolio widget keys so fragment reinitializes
-                for _k in ["p_name", "p_rmode", "p_rfreq", "p_rmon", "p_rday",
+                # Pop stable per-portfolio widget keys and set p_name explicitly
+                # (fragment widget cache may not pick up new defaults from pop alone)
+                for _k in ["p_rmode", "p_rfreq", "p_rmon", "p_rday",
                            "p_cmp", "p_rthresh", "p_rfreq_tc", "p_rthresh_tc",
                            "p_rfreq_std", "p_editor"]:
                     st.session_state.pop(_k, None)
+                st.session_state["p_name"] = new_name
 
                 st.toast(f"✅ Loaded '{selected_ticker_analyze}' with full history! Switch to Portfolio tab.", icon="🚀")
 

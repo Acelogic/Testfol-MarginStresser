@@ -113,6 +113,7 @@ def render():
                     st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                     st.session_state.pop("portfolio_selector", None)
                     _pop_pf_keys()
+                    st.session_state["p_name"] = f"Portfolio {len(st.session_state.portfolios)}"
                     st.rerun()
                 else:
                     st.warning("Max 5 portfolios.")
@@ -163,6 +164,7 @@ def render():
                             st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                             st.session_state.pop("portfolio_selector", None)
                             _pop_pf_keys()
+                            st.session_state["p_name"] = p_data["name"]
                             st.rerun()
                         else:
                             st.warning("Max 5 portfolios.")
@@ -180,9 +182,14 @@ def render():
             # Resolve new tab
             sel = st.session_state.portfolio_selector
             if sel in display_names:
-                st.session_state.active_tab_idx = display_names.index(sel)
-            # Pop per-portfolio keys so widgets reinitialize from new portfolio data
-            _pop_pf_keys()
+                new_idx = display_names.index(sel)
+                st.session_state.active_tab_idx = new_idx
+                # Explicitly set p_name to target portfolio's name
+                # (fragment widget cache may not pick up the new default)
+                _pop_pf_keys()
+                st.session_state["p_name"] = st.session_state.portfolios[new_idx]["name"]
+            else:
+                _pop_pf_keys()
 
         # Ensure selector is valid before rendering
         _sel = st.session_state.get("portfolio_selector")
@@ -229,9 +236,11 @@ def render():
                     if st.button("🗑️", key="p_del", help="Delete Portfolio", use_container_width=True):
                         if len(st.session_state.portfolios) > 1:
                             st.session_state.portfolios.pop(idx)
-                            st.session_state.active_tab_idx = max(0, idx-1)
+                            new_idx = max(0, idx-1)
+                            st.session_state.active_tab_idx = new_idx
                             st.session_state.pop("portfolio_selector", None)
                             _pop_pf_keys()
+                            st.session_state["p_name"] = st.session_state.portfolios[new_idx]["name"]
                             st.rerun(scope="app")
                         else:
                             st.warning("Last portfolio")
