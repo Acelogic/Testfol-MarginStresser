@@ -240,7 +240,7 @@ def _check_drift(positions, allocation, threshold_pct):
     return max_drift > threshold_pct, max_drift, drifter
 
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=0.08):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -268,6 +268,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(f"Custom Frequency: {custom_freq}, Day: {rebalance_day}" + (f", Month: {rebalance_month}" if custom_freq == "Yearly" else ""))
     if rebalance_freq in ("Threshold", "Threshold+Calendar"):
         logs.append(f"Drift Threshold: {threshold_pct}%")
+
+    # PM Buy Block tracking
+    pm_blocked_dates = []
+    loan_balance = starting_loan
+    daily_rate = margin_rate_annual / 252.0
+    if pm_buy_block:
+        logs.append(f"PM Buy Block: Enabled (threshold ${pm_buy_block_threshold:,.0f}, loan ${starting_loan:,.0f})")
 
     if cashflow > 0:
         logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
@@ -412,7 +419,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # We cannot simulate if assets are missing.
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float), []
             
     # Determine Simulation Start Date (Hybrid Logic)
     # 2024-12-17: Fix - Enforce user start_date if provided
@@ -426,7 +433,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(f"Error: No valid data found after start date {start_date}.")
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float), []
         
     sim_start_date = valid_returns.index[0]
     logs.append(f"First valid data found at: {sim_start_date.date()}")
@@ -543,7 +550,11 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # Record daily value
         portfolio_history_dates.append(date)
         portfolio_history_vals.append(day_port_val)
-        
+
+        # PM loan balance tracking (lightweight, for buy block threshold check)
+        if pm_buy_block and loan_balance > 0:
+            loan_balance *= (1 + daily_rate)
+
         # Calculate TWR
         # Return = Current Pre-Flow / Previous Post-Flow
         if prev_post_flow_val > 0:
@@ -713,6 +724,14 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # No forced rebalance on last day
                 
         # 4. Execute Rebalance
+        buys_blocked = False
+        if should_rebal and pm_buy_block and loan_balance > 0:
+            estimated_equity = day_port_val - loan_balance
+            if estimated_equity < pm_buy_block_threshold:
+                buys_blocked = True
+                pm_blocked_dates.append(date)
+                logs.append(f"\n  ⛔ PM Buy Block: Equity ${estimated_equity:,.0f} < ${pm_buy_block_threshold:,.0f} — buys skipped")
+
         if should_rebal:
             logs.append(f"\n[REBALANCE] {date.date()} | Portfolio Value: ${day_port_val:,.2f}")
             logs.append(f"{'Ticker':<10} {'Action':<6} {'Amount':<12} {'ST Gain':<12} {'LT Gain':<12}")
@@ -745,12 +764,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 tax_treatment = get_tax_treatment(ticker)
                 
                 if trade_amt > 0: # BUY
-                    # Add new tax lot
-                    # We need to determine "shares" bought.
-                    # Since we don't have real prices, we use the ratio of current_pos / sum(lots.quantity)
-                    # Wait, if we track quantity = initial value, then:
-                    # Current Price = Current Value / Total Quantity
-                    
+                    if buys_blocked:
+                        logs.append(f"{ticker:<10} {'SKIP':<6} ${trade_amt:,.2f}      PM Buy Block")
+                        continue  # Skip this buy — sells still execute
+
                     total_qty = sum(lot.quantity for lot in tax_lots[ticker])
                     if total_qty > 0:
                         current_price = current_pos / total_qty
@@ -876,7 +893,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 
     # Record final composition snapshot
     if dates.empty:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, pd.Series(dtype=float), pd.Series(dtype=float)
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, pd.Series(dtype=float), pd.Series(dtype=float), []
         
     last_date = dates[-1]
     
@@ -946,4 +963,4 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     except Exception as e:
         logs.append(f"Failed to write log file: {e}")
         
-    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series, twr_series
+    return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series, twr_series, pm_blocked_dates

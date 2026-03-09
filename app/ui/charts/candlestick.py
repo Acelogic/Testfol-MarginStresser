@@ -7,7 +7,8 @@ from lightweight_charts.widgets import StreamlitChart
 def _prepare_candlestick_data(ohlc_df, equity_series, loan_series,  # noqa: ARG001 (kept for cache key)
                                usage_series, equity_pct_series,
                                bench_series, comparison_series,
-                               effective_rate_series=None):
+                               effective_rate_series=None,
+                               pm_usage_series=None):
     """Compute SMAs and format DataFrames for lightweight-charts. Cached."""
     _ = equity_series, loan_series  # unused but part of cache key from caller
     # OHLC in lightweight-charts format (lowercase + 'time' column)
@@ -114,6 +115,20 @@ def _prepare_candlestick_data(ohlc_df, equity_series, loan_series,  # noqa: ARG0
     if effective_rate_series is not None:
         eff_rate_df = _to_line_df(effective_rate_series, 'Margin Rate %')
 
+    # PM Usage
+    pm_usage_df = None
+    if pm_usage_series is not None:
+        pm_pct = (pm_usage_series * 100).dropna()
+        if not pm_pct.empty:
+            aligned = pm_pct.reindex(candle_idx, method='nearest',
+                                      tolerance=pd.Timedelta(days=5))
+            aligned = aligned.dropna()
+            if not aligned.empty:
+                pm_usage_df = pd.DataFrame({
+                    'time': aligned.index,
+                    'PM Usage %': aligned.values,
+                })
+
     # OHLC table data (preformatted for display)
     table_data = ohlc_df.copy()
     table_data['Date'] = table_data.index.strftime('%Y-%m-%d')
@@ -143,6 +158,7 @@ def _prepare_candlestick_data(ohlc_df, equity_series, loan_series,  # noqa: ARG0
         'equity_pct_df': equity_pct_df,
         'eff_rate_df': eff_rate_df,
         'danger_timestamps': danger_timestamps,
+        'pm_usage_df': pm_usage_df,
         'display_df': display_df,
     }
 
@@ -152,7 +168,8 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
                               log_scale, show_range_slider=True,
                               show_volume=True, bench_series=None,
                               comparison_series=None,
-                              effective_rate_series=None):
+                              effective_rate_series=None,
+                              pm_usage_series=None, pm_mode="Off"):
     title_map = {
         "1D": "Daily", "1W": "Weekly", "1M": "Monthly",
         "3M": "Quarterly", "1Y": "Yearly",
@@ -173,6 +190,8 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
 
     # ── Margin series toggle pills ─────────────────────────────────────
     margin_series_options = ["Usage %", "Equity %", "Rate %", "Danger"]
+    if pm_usage_series is not None and not pm_usage_series.empty:
+        margin_series_options.append("PM Usage %")
     selected_margin = st.pills(
         "Margin Series", margin_series_options,
         default=["Usage %", "Equity %", "Danger"],
@@ -187,6 +206,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
         usage_series, equity_pct_series,
         bench_series, comparison_series,
         effective_rate_series,
+        pm_usage_series=pm_usage_series,
     )
 
     # ── Chart with synced margin indicator pane ────────────────────────
@@ -265,8 +285,10 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
     margin_pane.legend(visible=True, font_size=11)
 
     if "Usage %" in selected_margin and data['usage_df'] is not None:
+        _has_pm = "PM Usage %" in selected_margin and data.get('pm_usage_df') is not None
         usage_line = margin_pane.create_line(
-            'Margin Usage %', color='#FFD700', width=2, style='solid',
+            'Reg-T Usage %' if _has_pm else 'Margin Usage %',
+            color='#FFD700', width=2, style='solid',
             price_line=False, price_label=False,
         )
         usage_line.set(data['usage_df'])
@@ -290,6 +312,13 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
             price_line=False, price_label=False,
         )
         eq_pct_line.set(data['equity_pct_df'])
+
+    if "PM Usage %" in selected_margin and data.get('pm_usage_df') is not None:
+        pm_line = margin_pane.create_line(
+            'PM Usage %', color='#00CED1', width=2, style='dashed',
+            price_line=False, price_label=False,
+        )
+        pm_line.set(data['pm_usage_df'])
 
     if "Rate %" in selected_margin and data['eff_rate_df'] is not None:
         rate_line = margin_pane.create_line(

@@ -5,22 +5,26 @@
             {
                 "Ticker": "NDXMEGASIM?L=2",
                 "Weight %": 60.0,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "GLDSIM",
                 "Weight %": 20.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
             },
             {
                 "Ticker": "VXUSSIM",
                 "Weight %": 15.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
             },
             {
                 "Ticker": "QQQSIM?L=3",
                 "Weight %": 5.0,
-                "Maint %": 75.0
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
@@ -36,12 +40,14 @@
             {
                 "Ticker": "SPY",
                 "Weight %": 60,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "TLT",
                 "Weight %": 40,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -55,12 +61,14 @@
             {
                 "Ticker": "UPRO",
                 "Weight %": 55,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "TMF",
                 "Weight %": 45,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -74,27 +82,32 @@
             {
                 "Ticker": "SPY",
                 "Weight %": 30,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "TLT",
                 "Weight %": 40,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "IEF",
                 "Weight %": 15,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLD",
                 "Weight %": 7.5,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "DBC",
                 "Weight %": 7.5,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -108,22 +121,26 @@
             {
                 "Ticker": "VTI",
                 "Weight %": 20,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "IJS",
                 "Weight %": 20,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "TLT",
                 "Weight %": 20,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLD",
                 "Weight %": 20,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -139,7 +156,8 @@
             {
                 "Ticker": "NDXMEGASIM?L=2",
                 "Weight %": 100,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -155,57 +173,68 @@
             {
                 "Ticker": "AAPL?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "MSFT?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "AVGO?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "AMZN?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "META?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "NVDA?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "GOOGL?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "TSLA?L=2",
                 "Weight %": 7.5,
-                "Maint %": 50
+                "Maint %": 50,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "GLD",
                 "Weight %": 20.0,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 15.0
             },
             {
                 "Ticker": "VXUS",
                 "Weight %": 15.0,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 9.0
             },
             {
                 "Ticker": "TQQQ",
                 "Weight %": 5.0,
-                "Maint %": 75
+                "Maint %": 75,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
@@ -219,7 +248,8 @@
             {
                 "Ticker": "SPY",
                 "Weight %": 100.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -233,7 +263,8 @@
             {
                 "Ticker": "MAGS",
                 "Weight %": 100.0,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -247,37 +278,44 @@
             {
                 "Ticker": "AAPL",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "MSFT",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "AMZN",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "META",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "NVDA",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GOOGL",
                 "Weight %": 14.28,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "TSLA",
                 "Weight %": 14.32,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -291,117 +329,25 @@
             {
                 "Ticker": "SPYSIM?L=2",
                 "Weight %": 60.0,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "ZROZSIM",
                 "Weight %": 20.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLDSIM",
                 "Weight %": 20.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
             "mode": "Standard",
             "freq": "Yearly"
-        }
-    },
-    {
-        "name": "Main Split PM",
-        "allocation": [
-            {
-                "Ticker": "AAPL?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "MSFT?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "AVGO?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "AMZN?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "META?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "NVDA?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "GOOGL?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "TSLA?L=2",
-                "Weight %": 7.5,
-                "Maint %": 30
-            },
-            {
-                "Ticker": "GLD",
-                "Weight %": 20.0,
-                "Maint %": 15
-            },
-            {
-                "Ticker": "VXUS",
-                "Weight %": 15.0,
-                "Maint %": 9
-            },
-            {
-                "Ticker": "TQQQ",
-                "Weight %": 5.0,
-                "Maint %": 30
-            }
-        ],
-        "rebalance": {
-            "mode": "Standard",
-            "freq": "Yearly"
-        }
-    },
-    {
-        "name": "NDXMEGASPLITPM",
-        "allocation": [
-            {
-                "Ticker": "NDXMEGASIM?L=2",
-                "Weight %": 60.0,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "GLDSIM",
-                "Weight %": 20.0,
-                "Maint %": 15.0
-            },
-            {
-                "Ticker": "VXUSSIM",
-                "Weight %": 15.0,
-                "Maint %": 9.0
-            },
-            {
-                "Ticker": "QQQSIM?L=3",
-                "Weight %": 5.0,
-                "Maint %": 30.0
-            }
-        ],
-        "rebalance": {
-            "mode": "Standard",
-            "freq": "Yearly",
-            "day": 1,
-            "month_str": "Jan"
         }
     },
     {
@@ -410,12 +356,14 @@
             {
                 "Ticker": "QQQSIM?L=3",
                 "Weight %": 60.0,
-                "Maint %": 75.0
+                "Maint %": 75.0,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLDSIM",
                 "Weight %": 40.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -431,7 +379,8 @@
             {
                 "Ticker": "QQQSIM?L=2",
                 "Weight %": 100,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -447,7 +396,8 @@
             {
                 "Ticker": "NDXMEGASIM?L=2",
                 "Weight %": 100,
-                "Maint %": 25
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -463,62 +413,74 @@
             {
                 "Ticker": "NDXMEGASIM?L=2",
                 "Weight %": 30.0,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "GLDSIM",
                 "Weight %": 20.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
             },
             {
                 "Ticker": "VXUSSIM",
                 "Weight %": 15.0,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
             },
             {
                 "Ticker": "QQQSIM?L=3",
                 "Weight %": 5.0,
-                "Maint %": 75.0
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "AAPL?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "MSFT?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "AVGO?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "AMZN?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "META?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "NVDA?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "GOOG?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "TSLA?L=2",
                 "Weight %": 3.75,
-                "Maint %": 50.0
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
@@ -534,88 +496,20 @@
             {
                 "Ticker": "VXUSSIM",
                 "Weight %": 37.5,
-                "Maint %": 25.0
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLDSIM",
                 "Weight %": 50.0,
-                "Maint %": 15.0
+                "Maint %": 15.0,
+                "PM Maint %": 0.0
             },
             {
                 "Ticker": "QQQSIM?L=3",
                 "Weight %": 12.5,
-                "Maint %": 75.0
-            }
-        ],
-        "rebalance": {
-            "mode": "Standard",
-            "freq": "Yearly",
-            "day": 1,
-            "month_str": "Jan"
-        }
-    },
-    {
-        "name": "NDXMEGASPLIT Nigged PM",
-        "allocation": [
-            {
-                "Ticker": "NDXMEGASIM?L=2",
-                "Weight %": 30.0,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "GLDSIM",
-                "Weight %": 20.0,
-                "Maint %": 15.0
-            },
-            {
-                "Ticker": "VXUSSIM",
-                "Weight %": 15.0,
-                "Maint %": 9.0
-            },
-            {
-                "Ticker": "QQQSIM?L=3",
-                "Weight %": 5.0,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "AAPL?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "MSFT?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "AVGO?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "AMZN?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "META?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "NVDA?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "GOOG?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
-            },
-            {
-                "Ticker": "TSLA?L=2",
-                "Weight %": 3.75,
-                "Maint %": 30.0
+                "Maint %": 75.0,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {

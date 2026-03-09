@@ -73,7 +73,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     filing_status = config.get('filing_status', 'Single')
     tax_method = config.get('tax_method', '2025_fixed')
     use_std_deduction = config.get('use_std_deduction', True)
-    state_tax_rate = config.get('state_tax_rate', 0.0)
+    state_code = config.get('state_code', '')
 
     rate_annual = config.get('rate_annual', 8.0)
     draw_monthly = config.get('draw_monthly', 0.0)
@@ -93,6 +93,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     show_volume = config.get('show_volume', True)
 
     pm_enabled = config.get('pm_enabled', False)
+    pm_mode = config.get('pm_mode', 'Off')
+    pm_threshold = config.get('pm_threshold', 110000.0)
+    wmaint_pm = results.get("wmaint_pm", 0.0)
+    pm_blocked_dates = results.get("pm_blocked_dates", [])
 
     # Extract Benchmark (Standard Comparison or Custom)
     bench_series = results.get("bench_series", None)
@@ -124,18 +128,11 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             use_standard_deduction=use_std_deduction
         )
 
-        # State Tax
-        state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
-        loss_cf_state = 0.0
-        total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
-
-        for y, pl in total_pl_series.sort_index().items():
-            net = pl - loss_cf_state
-            if net > 0:
-                state_tax_series[y] = net * state_tax_rate
-                loss_cf_state = 0.0
-            else:
-                loss_cf_state = abs(net)
+        # State Tax (progressive brackets)
+        state_tax_series = tax_library.calculate_state_tax_series_with_carryforward(
+            pl_by_year, other_income, state_code, filing_status,
+            use_standard_deduction=use_std_deduction
+        )
     else:
         # No realized P&L = No Tax
         fed_tax_series = pd.Series(0.0, index=[dt.date.today().year]) # Dummy index
@@ -195,6 +192,23 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         tax_series=sim_tax_series,
         repayment_series=repayment_series
     )
+
+    # Compute PM usage series post-hoc (loan is invariant to margin type)
+    pm_usage_series = pd.Series(dtype=float)
+    if pm_mode != 'Off' and wmaint_pm > 0 and not loan_series.empty:
+        max_loan_pm = port_series * (1 - wmaint_pm)
+        valid_pm = max_loan_pm > 0
+        pm_usage_series = pd.Series(0.0, index=port_series.index)
+        pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
+        pm_usage_series.name = "PM Usage %"
+
+    # For Dynamic mode, blend Reg-T and PM based on equity threshold
+    dynamic_usage_series = pd.Series(dtype=float)
+    if pm_mode == 'Dynamic' and not pm_usage_series.empty and not equity_series.empty:
+        above_threshold = equity_series >= pm_threshold
+        dynamic_usage_series = usage_series.copy()
+        dynamic_usage_series.name = "Dynamic Usage %"
+        dynamic_usage_series[above_threshold] = pm_usage_series[above_threshold]
 
     # Update session state with latest margin results for reporting
     results.update({
@@ -259,6 +273,21 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         max_loan_series = tax_adj_port_series * (1 - wmaint)
         valid_loan = max_loan_series > 0
         tax_adj_usage_series[valid_loan] = loan_series[valid_loan] / max_loan_series[valid_loan]
+
+    # PM tax-adjusted usage
+    tax_adj_pm_usage_series = pd.Series(dtype=float)
+    if pm_mode != 'Off' and wmaint_pm > 0:
+        tax_adj_pm_usage_series = pd.Series(0.0, index=tax_adj_port_series.index)
+        max_loan_pm = tax_adj_port_series * (1 - wmaint_pm)
+        valid_pm = max_loan_pm > 0
+        tax_adj_pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
+
+    # Dynamic blended (tax-adjusted)
+    tax_adj_dynamic_usage = pd.Series(dtype=float)
+    if pm_mode == 'Dynamic' and not tax_adj_pm_usage_series.empty and not final_adj_series.empty:
+        above = final_adj_series >= pm_threshold
+        tax_adj_dynamic_usage = tax_adj_usage_series.copy()
+        tax_adj_dynamic_usage[above] = tax_adj_pm_usage_series[above]
 
 
     ohlc_data = utils.resample_data(tax_adj_port_series, timeframe, method="ohlc")
@@ -468,6 +497,11 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         start_val=start_val,
         rate_annual=rate_annual,
         pm_enabled=pm_enabled,
+        pm_mode=pm_mode,
+        pm_usage_series=tax_adj_pm_usage_series if pm_mode == 'Compare' else tax_adj_dynamic_usage,
+        wmaint_pm=wmaint_pm,
+        pm_threshold=pm_threshold,
+        pm_blocked_dates=pm_blocked_dates,
     )
 
     # --- Returns Tab (inline, small) ---
@@ -486,7 +520,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             unique_id=portfolio_name,
             portfolio_name=portfolio_name,
             component_data=component_prices,
-            raw_port_series=port_series
+            raw_port_series=port_series,
+            stats=stats,
+            raw_response=raw_response,
         )
 
     # --- Rebalancing Tab (inline, small) ---
@@ -503,20 +539,28 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
                         ratio = target_total / current_total
                         composition_df.loc[composition_df["Date"] == d, "Value"] *= ratio
 
+        # Clip component prices to match the common start date
+        alloc_component_prices = component_prices
+        if not component_prices.empty and not port_series.empty:
+            alloc_component_prices = component_prices[component_prices.index >= port_series.index[0]]
+
         charts.render_rebalancing_analysis(
             trades_df, pl_by_year, composition_df,
-            tax_method, other_income, filing_status, state_tax_rate,
+            tax_method, other_income, filing_status, state_code,
             rebalance_freq=rebal_freq_for_chart,
             use_standard_deduction=use_std_deduction,
             unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
             custom_freq=config.get('custom_freq', 'Yearly'),
-            unique_id=portfolio_name
+            unique_id=portfolio_name,
+            component_prices=alloc_component_prices,
+            allocation=results.get("allocation", {}),
+            start_val=start_val,
         )
 
     # --- Tax Analysis (charts) within same tax tab ---
     with res_tab_tax:
         charts.render_tax_analysis(
-            pl_by_year, other_income, filing_status, state_tax_rate,
+            pl_by_year, other_income, filing_status, state_code,
             tax_method=tax_method,
             use_standard_deduction=use_std_deduction,
             unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),

@@ -43,6 +43,11 @@ def render_chart_tab(
     start_val: float,
     rate_annual,
     pm_enabled: bool,
+    pm_mode: str = "Off",
+    pm_usage_series: pd.Series | None = None,
+    wmaint_pm: float = 0.0,
+    pm_threshold: float = 110000.0,
+    pm_blocked_dates: list | None = None,
 ) -> None:
     with tab:
         chart_subtabs = st.tabs(["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📊 Munger200WMA", "📜 Cheat Sheet"])
@@ -56,7 +61,10 @@ def render_chart_tab(
                     series_opts, log_scale,
                     bench_series=bench_resampled,
                     comparison_series=comp_resampled,
-                    effective_rate_series=effective_rate_series
+                    effective_rate_series=effective_rate_series,
+                    pm_usage_series=pm_usage_series if pm_mode != 'Off' else None,
+                    pm_mode=pm_mode,
+                    pm_blocked_dates=pm_blocked_dates,
                 )
             else:  # Candlestick
                 charts.render_candlestick_chart(
@@ -72,6 +80,8 @@ def render_chart_tab(
                     bench_series=bench_resampled,
                     comparison_series=comp_resampled,
                     effective_rate_series=effective_rate_resampled,
+                    pm_usage_series=pm_usage_series if pm_mode != 'Off' else None,
+                    pm_mode=pm_mode,
                 )
 
             if pay_tax_cash:
@@ -81,6 +91,11 @@ def render_chart_tab(
                     tax_adj_port_series, final_adj_series, loan_series,
                     equity_series, usage_series, equity_pct_series,
                     final_tax_series, draw_monthly, wmaint, pm_enabled,
+                    pm_mode=pm_mode,
+                    pm_usage_series=pm_usage_series,
+                    wmaint_pm=wmaint_pm,
+                    pm_threshold=pm_threshold,
+                    pm_blocked_dates=pm_blocked_dates,
                 )
 
         with chart_subtabs[1]:
@@ -145,6 +160,11 @@ def _render_margin_statistics(
     draw_monthly: float,
     wmaint: float,
     pm_enabled: bool,
+    pm_mode: str = "Off",
+    pm_usage_series: pd.Series | None = None,
+    wmaint_pm: float = 0.0,
+    pm_threshold: float = 110000.0,
+    pm_blocked_dates: list | None = None,
 ) -> None:
     with st.expander("Detailed Margin Statistics", expanded=True):
         if usage_series.empty:
@@ -210,44 +230,102 @@ def _render_margin_statistics(
         m2.metric("Avg Margin Usage", f"{avg_usage*100:.2f}%", help="Chronic Stress Level")
         m3.metric("Safety Buffer", f"{safety_buffer*100:.2f}%", help="% Market Drop allowed before Margin Call")
 
-        # Standard Margin Breaches (Usage >= 100%)
-        breaches = pd.DataFrame({
-            "Date": usage_series[usage_series >= 1].index.date,
-            "Usage %": (usage_series[usage_series >= 1] * 100).round(2),
-            "Equity %": (equity_pct_series[usage_series >= 1] * 100).round(2),
-            "Type": "Reg T Call"
-        })
+        # PM Metrics (side by side with Reg-T)
+        if pm_mode != 'Off' and pm_usage_series is not None and not pm_usage_series.empty:
+            st.markdown("##### Portfolio Margin (PM) Metrics")
+            pm1, pm2, pm3 = st.columns(3)
+            pm_final = pm_usage_series.iloc[-1]
+            pm_max_val = pm_usage_series.max()
+            pm_max_idx = pm_usage_series.idxmax()
+            pm_safety = 1.0 - pm_final
+            pm_max_loan_allowed = current_port_val * (1 - wmaint_pm) if wmaint_pm > 0 else 0
+            pm_avail = pm_max_loan_allowed - final_loan_val if pm_max_loan_allowed > 0 else 0
 
-        # Portfolio Margin Breaches (Equity < $100k)
-        if pm_enabled:
-            pm_breach_mask = equity_series < 100000
-            if pm_breach_mask.any():
-                pm_breaches = pd.DataFrame({
-                    "Date": equity_series[pm_breach_mask].index.date,
-                    "Usage %": (usage_series[pm_breach_mask] * 100).round(2),
-                    "Equity %": (equity_pct_series[pm_breach_mask] * 100).round(2),
-                    "Type": "PM Min Equity < $100k"
+            pm1.metric("Final PM Usage", f"{pm_final*100:.2f}%")
+            pm2.metric("Max PM Usage", f"{pm_max_val*100:.2f}%", f"{pm_max_idx.date()}", delta_color="off")
+            pm3.metric("PM Safety Buffer", f"{pm_safety*100:.2f}%")
+
+            if pm_mode == 'Dynamic':
+                # Regime analysis
+                above = equity_series >= pm_threshold
+                pct_pm = above.mean() * 100
+                crossings = (above.astype(int).diff().abs() > 0).sum()
+                dc1, dc2 = st.columns(2)
+                dc1.metric("Time in PM Regime", f"{pct_pm:.1f}%", help=f"Equity >= ${pm_threshold:,.0f}")
+                dc2.metric("Threshold Crossings", f"{int(crossings)}")
+
+        # Standard Margin Breaches (Usage >= 100%)
+        breach_episodes = []
+
+        def _group_episodes(mask, usage_src, eq_pct_src, breach_type):
+            """Group consecutive True days into episodes with summary stats."""
+            if not mask.any():
+                return
+            dates = mask.index[mask]
+            # Split into contiguous runs (gap > 3 trading days = new episode)
+            groups, current = [], [dates[0]]
+            for d in dates[1:]:
+                if (d - current[-1]).days <= 5:  # allow weekends/holidays
+                    current.append(d)
+                else:
+                    groups.append(current)
+                    current = [d]
+            groups.append(current)
+
+            for grp in groups:
+                start, end = grp[0], grp[-1]
+                usage_slice = usage_src.loc[grp] * 100
+                eq_slice = eq_pct_src.loc[grp] * 100
+                breach_episodes.append({
+                    "Start": start.strftime("%Y-%m-%d"),
+                    "End": end.strftime("%Y-%m-%d"),
+                    "Days": len(grp),
+                    "Peak Usage %": round(usage_slice.max(), 1),
+                    "Min Equity %": round(eq_slice.min(), 1),
+                    "Type": breach_type,
                 })
-                breaches = pd.concat([breaches, pm_breaches]).sort_values("Date")
+
+        reg_t_mask = usage_series >= 1
+        _group_episodes(reg_t_mask, usage_series, equity_pct_series, "Reg-T Call")
+
+        if pm_mode != 'Off' and pm_usage_series is not None and not pm_usage_series.empty:
+            pm_call_mask = pm_usage_series >= 1.0
+            _group_episodes(pm_call_mask, pm_usage_series, equity_pct_series, "PM Call")
+
+        if pm_enabled or pm_mode != 'Off':
+            pm_eq_mask = equity_series < 100000
+            if pm_eq_mask.any():
+                _group_episodes(pm_eq_mask, usage_series, equity_pct_series, "PM Min Eq < $100k")
 
         st.markdown("##### Margin & PM Breaches")
-        if breaches.empty:
+        if not breach_episodes:
             st.success("No breaches triggered! 🎉")
         else:
-            reg_t_count = len(breaches[breaches["Type"] == "Reg T Call"])
-            pm_count = len(breaches[breaches["Type"] == "PM Min Equity < $100k"])
+            episodes_df = pd.DataFrame(breach_episodes)
+
+            reg_t_eps = episodes_df[episodes_df["Type"] == "Reg-T Call"]
+            pm_eps = episodes_df[episodes_df["Type"] != "Reg-T Call"]
+            reg_t_days = int(reg_t_eps["Days"].sum()) if not reg_t_eps.empty else 0
+            pm_days = int(pm_eps["Days"].sum()) if not pm_eps.empty else 0
 
             msg_parts = []
-            if reg_t_count > 0:
-                msg_parts.append(f"{reg_t_count} Margin Call(s)")
-            if pm_count > 0:
-                msg_parts.append(f"{pm_count} PM Breach(es)")
+            if not reg_t_eps.empty:
+                msg_parts.append(f"{len(reg_t_eps)} Margin Call episode(s) ({reg_t_days} days)")
+            if not pm_eps.empty:
+                msg_parts.append(f"{len(pm_eps)} PM Breach episode(s) ({pm_days} days)")
 
-            full_msg = f"⚠️ {' + '.join(msg_parts)} triggered."
+            full_msg = f"⚠️ {' + '.join(msg_parts)}"
 
-            if reg_t_count > 0:
+            if not reg_t_eps.empty:
                 st.error(full_msg)
             else:
                 st.warning(full_msg)
 
-            st.dataframe(breaches, use_container_width=True)
+            st.dataframe(episodes_df, use_container_width=True, hide_index=True)
+
+        # PM Buy-Blocked Dates
+        if pm_blocked_dates:
+            st.markdown("##### PM Buy-Blocked Rebalance Dates")
+            st.warning(f"{len(pm_blocked_dates)} rebalance(s) had buys blocked due to PM equity < ${pm_threshold:,.0f}")
+            blocked_df = pd.DataFrame({"Date": [d.date() if hasattr(d, 'date') else d for d in pm_blocked_dates]})
+            st.dataframe(blocked_df, use_container_width=True, hide_index=True)

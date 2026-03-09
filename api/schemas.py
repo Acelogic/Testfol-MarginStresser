@@ -30,6 +30,7 @@ class PortfolioConfig(BaseModel):
     name: str = "Portfolio"
     allocation: dict[str, float]
     maint_pcts: dict[str, float] = Field(default_factory=dict)
+    pm_maint_pcts: dict[str, float] = Field(default_factory=dict)
     rebalance: RebalanceConfig = Field(default_factory=RebalanceConfig)
 
 
@@ -73,6 +74,7 @@ class BacktestResult(BaseModel):
     sim_range: str = ""
     shadow_range: str = ""
     wmaint: float = 0.25
+    wmaint_pm: float = 0.0
 
 
 class MultiBacktestResponse(BaseModel):

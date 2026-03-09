@@ -95,6 +95,8 @@ def _deserialize_result(item):
         "sim_range": item.get("sim_range", ""),
         "shadow_range": item.get("shadow_range", ""),
         "wmaint": item.get("wmaint", 0.25),
+        "wmaint_pm": item.get("wmaint_pm", 0.0),
+        "pm_blocked_dates": item.get("pm_blocked_dates", []),
     }
 
 
@@ -116,15 +118,20 @@ def _build_payload(config, start_date, end_date, bearer_token):
 
         alloc_map = dict(zip(alloc_df["Ticker"], alloc_df["Weight %"]))
         maint_pcts = {}
+        pm_maint_pcts = {}
         for _, row in alloc_df.iterrows():
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
+            pm_val = float(row.get("PM Maint %", 0))
+            if pm_val > 0:
+                pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
         api_portfolios.append({
             "name": p.get("name", "Portfolio"),
             "allocation": alloc_map,
             "maint_pcts": maint_pcts,
+            "pm_maint_pcts": pm_maint_pcts,
             "rebalance": {
                 "mode": reb.get("mode", "Standard"),
                 "freq": reb.get("freq", "Yearly"),
@@ -214,15 +221,20 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
 
         alloc_map = dict(zip(alloc_df["Ticker"], alloc_df["Weight %"]))
         maint_pcts = {}
+        pm_maint_pcts = {}
         for _, row in alloc_df.iterrows():
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
+            pm_val = float(row.get("PM Maint %", 0))
+            if pm_val > 0:
+                pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
         portfolios_plain.append({
             "name": p.get("name", "Portfolio"),
             "allocation": alloc_map,
             "maint_pcts": maint_pcts,
+            "pm_maint_pcts": pm_maint_pcts,
             "rebalance": {
                 "mode": reb.get("mode", "Standard"),
                 "freq": reb.get("freq", "Yearly"),
@@ -239,6 +251,12 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
     gcf = config.get("global_cashflow", {})
     tax_config = {k: v for k, v in config.items() if k.startswith(("st_rate", "lt_rate", "nii_rate", "state_rate", "tax_"))}
 
+    pm_config = {
+        "pm_buy_block": config.get("pm_buy_block", False),
+        "pm_buy_block_threshold": config.get("pm_buy_block_threshold", 100000.0),
+        "starting_loan": config.get("starting_loan", 0.0),
+    }
+
     results_list, bench_series_list = run_multi_backtest(
         portfolios=portfolios_plain,
         start_date=str(start_date),
@@ -252,6 +270,7 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
         bearer_token=bearer_token,
         fetch_backtest_fn=_cached_fetch_backtest,
         run_shadow_fn=_cached_run_shadow_backtest,
+        pm_config=pm_config,
     )
 
     return results_list, bench_series_list

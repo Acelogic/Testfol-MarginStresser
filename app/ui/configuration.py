@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from app.common import utils
+from app.core import tax_library
 from app.services import testfol_api as api
 from . import asset_explorer
 from . import ndx_scanner
@@ -29,10 +30,10 @@ def render():
         # --- initialize state ---
         if "portfolios" not in st.session_state:
             _default_alloc = pd.DataFrame([
-                {"Ticker": "NDXMEGASIM?L=2", "Weight %": 60.0, "Maint %": 50.0},
-                {"Ticker": "GLDSIM", "Weight %": 20.0, "Maint %": 25.0},
-                {"Ticker": "VXUSSIM", "Weight %": 15.0, "Maint %": 25.0},
-                {"Ticker": "QQQSIM?L=3", "Weight %": 5.0, "Maint %": 75.0}
+                {"Ticker": "NDXMEGASIM?L=2", "Weight %": 60.0, "Maint %": 50.0, "PM Maint %": 30.0},
+                {"Ticker": "GLDSIM", "Weight %": 20.0, "Maint %": 25.0, "PM Maint %": 15.0},
+                {"Ticker": "VXUSSIM", "Weight %": 15.0, "Maint %": 25.0, "PM Maint %": 9.0},
+                {"Ticker": "QQQSIM?L=3", "Weight %": 5.0, "Maint %": 75.0, "PM Maint %": 30.0}
             ])
             st.session_state.portfolios = [{
                 "id": "p1",
@@ -107,7 +108,7 @@ def render():
                     st.session_state.portfolios.append({
                         "id": new_id,
                         "name": f"Portfolio {len(st.session_state.portfolios) + 1}",
-                        "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25}]),
+                        "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25, "PM Maint %": 0.0}]),
                         "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0}
                     })
                     st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
@@ -148,10 +149,13 @@ def render():
                             reb = p_data.get("rebalance", {})
                             month_map = {"Jan":1, "Feb":2, "Mar":3, "Apr":4, "May":5, "Jun":6, "Jul":7, "Aug":8, "Sep":9, "Oct":10, "Nov":11, "Dec":12}
                             r_month = month_map.get(reb.get("month_str", "Jan"), 1)
+                            _preset_df = pd.DataFrame(p_data["allocation"])
+                            if "PM Maint %" not in _preset_df.columns:
+                                _preset_df["PM Maint %"] = 0.0
                             st.session_state.portfolios.append({
                                 "id": new_id,
                                 "name": p_data["name"],
-                                "alloc_df": pd.DataFrame(p_data["allocation"]),
+                                "alloc_df": _preset_df,
                                 "rebalance": {
                                     "mode": reb.get("mode", "Standard"),
                                     "freq": reb.get("freq", "Yearly"),
@@ -313,14 +317,18 @@ def render():
                     p["rebalance"]["day"] = 1
 
             st.markdown("##### 🥧 Asset Allocation")
+            # Ensure PM Maint % column exists (backward compat)
+            if "PM Maint %" not in p["alloc_df"].columns:
+                p["alloc_df"]["PM Maint %"] = 0.0
             new_alloc_df = st.data_editor(
                 p["alloc_df"],
                 key="p_editor",
                 num_rows="dynamic",
-                column_order=["Ticker", "Weight %", "Maint %"],
+                column_order=["Ticker", "Weight %", "Maint %", "PM Maint %"],
                 column_config={
                     "Weight %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.01, format="%.2f"),
                     "Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
+                    "PM Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
                 },
                 use_container_width=True
             )
@@ -342,10 +350,30 @@ def render():
                 p_total_weight = 0.0
                 p_wmaint = 0.0
 
+            # Compute PM weighted maint
+            p_wmaint_pm = 0.0
+            has_pm = False
+            try:
+                for _, _row in p["alloc_df"].iterrows():
+                    _pm_val = float(_row.get("PM Maint %", 0))
+                    if _pm_val > 0:
+                        has_pm = True
+                        _t = _row["Ticker"].split("?")[0]
+                        _wt = float(_row.get("Weight %", 0))
+                        p_wmaint_pm += (_wt / 100) * (_pm_val / 100)
+            except Exception:
+                pass
+
             st.markdown("---")
-            mc1, mc2 = st.columns(2)
-            mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
-            mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
+            if has_pm:
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
+                mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
+                mc3.metric("Weighted PM Maint", f"{p_wmaint_pm*100:.2f}%")
+            else:
+                mc1, mc2 = st.columns(2)
+                mc1.metric("Total Allocation", f"{p_total_weight:.2f}%", delta=None if abs(p_total_weight - 100) < 0.01 else "Must be 100%", delta_color="off" if abs(p_total_weight - 100) < 0.01 else "inverse")
+                mc2.metric("Weighted Maint Req", f"{p_wmaint*100:.2f}%")
 
         _portfolio_content()
         
@@ -378,7 +406,15 @@ def render():
             with c_tax2:
                 config['filing_status'] = st.selectbox("Filing Status", ["Single", "Married Filing Jointly", "Head of Household", "Married Filing Separately"], index=0, key="filing_status")
             with c_tax3:
-                config['state_tax_rate'] = utils.num_input("State Tax Rate (%)", "state_tax_rate", 0.0, 0.1)
+                state_options = ["(None)"] + [f"{code} - {name}" for code, name in tax_library.US_STATES]
+                state_sel = st.selectbox("State", state_options, index=0, key="state_code")
+                config['state_code'] = state_sel.split(" - ")[0] if " - " in state_sel else ""
+
+                if config['state_code'] in tax_library.NO_INCOME_TAX_STATES:
+                    st.caption("No state income tax")
+                elif config['state_code']:
+                    top = tax_library.get_state_top_rate(config['state_code'])
+                    st.caption(f"Progressive brackets (top rate {top*100:.2f}%)")
 
             st.caption("Federal tax brackets are automatically applied based on income & filing status.")
             
@@ -490,8 +526,38 @@ def render():
             config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
             config['default_maint'] = utils.num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
             
-            # Portfolio Margin Toggle
-            config['pm_enabled'] = st.checkbox("Enable Portfolio Margin (PM)", value=False, help="Enforces $100k Minimum Equity requirement.", disabled=margin_disabled)
+            # Portfolio Margin Controls
+            st.markdown("##### Portfolio Margin (PM)")
+            pm_mode = st.selectbox(
+                "PM Comparison Mode",
+                ["Off", "Compare", "Dynamic"],
+                index=0,
+                help="**Off**: Reg-T only.\n**Compare**: Show Reg-T and PM usage curves side by side.\n**Dynamic**: Single curve that switches from Reg-T to PM when equity >= threshold.",
+                disabled=margin_disabled,
+                key="pm_mode",
+            )
+            config['pm_mode'] = pm_mode
+
+            if pm_mode == "Dynamic":
+                config['pm_threshold'] = utils.num_input("PM Activation Threshold ($)", "pm_threshold", 110000.0, 1000.0, disabled=margin_disabled)
+            else:
+                config['pm_threshold'] = 110000.0
+
+            pm_buy_block = st.checkbox(
+                "Simulate PM Buy Block (Equity < threshold)",
+                value=False,
+                help="When enabled, the shadow backtest skips BUY trades at rebalance points where estimated PM equity < threshold. Sells still execute.",
+                disabled=margin_disabled,
+                key="pm_buy_block",
+            )
+            config['pm_buy_block'] = pm_buy_block
+            if pm_buy_block:
+                config['pm_buy_block_threshold'] = utils.num_input("PM Buy Block Threshold ($)", "pm_buy_block_threshold", 100000.0, 1000.0, disabled=margin_disabled)
+            else:
+                config['pm_buy_block_threshold'] = 100000.0
+
+            # Backward compat
+            config['pm_enabled'] = pm_mode != "Off"
 
     with tab_margin:
         _margin_fragment()

@@ -264,10 +264,11 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
 
 @st.cache_data(show_spinner=False)
-def render_classic_chart(port_series, final_adj_series, loan_series, 
-                        equity_pct_series, usage_series, 
+def render_classic_chart(port_series, final_adj_series, loan_series,
+                        equity_pct_series, usage_series,
                         series_opts, log_scale,
-                        bench_series=None, comparison_series=None, effective_rate_series=None):
+                        bench_series=None, comparison_series=None, effective_rate_series=None,
+                        pm_usage_series=None, pm_mode="Off", pm_blocked_dates=None):
     """
     Renders the classic line chart with toggleable traces.
     """
@@ -331,12 +332,13 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
         ))
 
     if "Margin usage %" in series_opts:
+        _usage_label = "Reg-T Usage" if pm_mode != "Off" and pm_usage_series is not None and not pm_usage_series.empty else "Usage"
         fig.add_trace(go.Scatter(
             x=usage_series.index, y=usage_series,
-            name="Margin Usage %",
+            name="Margin Usage %" if pm_mode == "Off" else "Reg-T Usage %",
             line=dict(color='#FFD700', width=1),
             yaxis="y2",
-            hovertemplate="Usage: %{y:.1%}<extra></extra>"
+            hovertemplate=f"{_usage_label}: %{{y:.1%}}<extra></extra>"
         ))
         
     if "Equity %" in series_opts:
@@ -347,6 +349,34 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             yaxis="y2",
             hovertemplate="Equity %: %{y:.1%}<extra></extra>"
         ))
+
+    # PM Usage overlay
+    if pm_usage_series is not None and not pm_usage_series.empty and "Margin usage %" in series_opts:
+        if pm_mode == "Compare":
+            fig.add_trace(go.Scatter(
+                x=pm_usage_series.index, y=pm_usage_series,
+                name="PM Usage %",
+                line=dict(color='#00CED1', width=1.5, dash='dash'),
+                yaxis="y2",
+                hovertemplate="PM Usage: %{y:.1%}<extra></extra>"
+            ))
+        elif pm_mode == "Dynamic":
+            fig.add_trace(go.Scatter(
+                x=pm_usage_series.index, y=pm_usage_series,
+                name="Dynamic Usage % (Reg-T/PM)",
+                line=dict(color='#00CED1', width=1.5),
+                yaxis="y2",
+                hovertemplate="Dynamic Usage: %{y:.1%}<extra></extra>"
+            ))
+
+    # PM buy-blocked rebalance markers
+    if pm_blocked_dates and "Margin usage %" in series_opts:
+        for bd in pm_blocked_dates:
+            fig.add_vline(
+                x=bd, line_width=1, line_dash="dot", line_color="#FF6347",
+                annotation_text="Buy Block", annotation_position="top",
+                annotation_font_size=8, annotation_font_color="#FF6347",
+            )
 
     # Margin Call Threshold Line (100% Usage)
     if "Margin usage %" in series_opts:

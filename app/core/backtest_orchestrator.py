@@ -58,6 +58,8 @@ def run_single_backtest(
     name: str = "Portfolio",
     fetch_backtest_fn=None,
     run_shadow_fn=None,
+    pm_maint_pcts: dict | None = None,
+    pm_config: dict | None = None,
 ) -> dict:
     """
     Run a single portfolio backtest (API or local engine).
@@ -81,6 +83,19 @@ def run_single_backtest(
             current_wmaint += (weight / 100) * (m / 100)
     else:
         current_wmaint = d_maint / 100.0
+
+    # PM weighted maintenance
+    current_wmaint_pm = 0.0
+    if pm_maint_pcts and total_w > 0:
+        for ticker, weight in alloc_map.items():
+            m_pm = pm_maint_pcts.get(ticker.split("?")[0], 0.0)
+            if m_pm > 0:
+                current_wmaint_pm += (weight / 100) * (m_pm / 100)
+
+    # PM buy block config
+    _pm_cfg = pm_config or {}
+    pm_buy_block = _pm_cfg.get("pm_buy_block", False)
+    pm_buy_block_threshold = _pm_cfg.get("pm_buy_block_threshold", 100000.0)
 
     # Rebalance
     reb = rebalance
@@ -111,6 +126,7 @@ def run_single_backtest(
     unrealized_pl_df = pd.DataFrame()
     logs: list = []
     prices_df = pd.DataFrame()
+    pm_blocked_dates: list = []
 
     if not use_local_engine:
         # --- API Path ---
@@ -158,7 +174,7 @@ def run_single_backtest(
 
         # Run shadow backtest (tax tracking)
         if not port_series.empty:
-            trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series = shadow_fn(
+            trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series, *_ = shadow_fn(
                 allocation=alloc_map,
                 start_val=start_val,
                 start_date=start_date,
@@ -179,7 +195,7 @@ def run_single_backtest(
         tickers = list(alloc_map.keys())
         prices_df = fetch_component_data(tickers, start_date, end_date)
 
-        trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = shadow_fn(
+        _shadow_result = shadow_fn(
             allocation=alloc_map,
             start_val=start_val,
             start_date=start_date,
@@ -197,7 +213,16 @@ def run_single_backtest(
             rebalance_day=reb.get("day", 1),
             custom_freq=reb.get("freq", "Yearly"),
             threshold_pct=r_threshold,
+            pm_buy_block=pm_buy_block,
+            pm_buy_block_threshold=pm_buy_block_threshold,
+            starting_loan=_pm_cfg.get("starting_loan", 0.0),
         )
+        # Unpack: shadow backtest returns 7-tuple or 8-tuple (with pm_blocked_dates)
+        if isinstance(_shadow_result, tuple) and len(_shadow_result) == 8:
+            trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series, pm_blocked_dates = _shadow_result
+        else:
+            trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = _shadow_result
+            pm_blocked_dates = []
 
         if not port_series.empty:
             stats = calculations.generate_stats(twr_series if twr_series is not None else port_series)
@@ -224,6 +249,8 @@ def run_single_backtest(
         "sim_range": f"{start_date} to {end_date}",
         "shadow_range": f"{start_date} to {end_date}",
         "wmaint": current_wmaint,
+        "wmaint_pm": current_wmaint_pm,
+        "pm_blocked_dates": pm_blocked_dates,
         # Internal: kept for pass-2 re-fetch
         "_reb": reb,
         "_r_mode": r_mode,
@@ -243,6 +270,7 @@ def run_multi_backtest(
     bearer_token: str | None,
     fetch_backtest_fn=None,
     run_shadow_fn=None,
+    pm_config: dict | None = None,
 ) -> tuple[list[dict], list]:
     """
     Run backtests for multiple portfolios with common-start alignment.
@@ -276,6 +304,8 @@ def run_multi_backtest(
             name=p.get("name", "Portfolio"),
             fetch_backtest_fn=fetch_fn,
             run_shadow_fn=shadow_fn,
+            pm_maint_pcts=p.get("pm_maint_pcts"),
+            pm_config=pm_config,
         )
         results_list.append(raw)
 
@@ -359,7 +389,7 @@ def run_multi_backtest(
                         # Re-run shadow backtest aligned
                         try:
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr = shadow_fn(
+                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_ = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
                                 start_date=common_start.strftime("%Y-%m-%d"),
@@ -416,7 +446,7 @@ def run_multi_backtest(
                                 end_date,
                             )
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr = shadow_fn(
+                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_ = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
                                 start_date=common_start.strftime("%Y-%m-%d"),

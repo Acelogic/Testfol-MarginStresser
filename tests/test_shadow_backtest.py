@@ -39,7 +39,7 @@ def test_basic_flat_backtest(flat_prices, sample_allocation):
         prices_df=flat_prices,
         rebalance_freq="Yearly",
     )
-    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = result
+    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series, *_ = result
     assert not port_series.empty
     # With flat prices, portfolio should stay near start_val
     assert port_series.iloc[-1] == pytest.approx(10000.0, rel=0.01)
@@ -55,7 +55,7 @@ def test_growth_backtest(growing_prices, sample_allocation):
         prices_df=growing_prices,
         rebalance_freq="Yearly",
     )
-    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = result
+    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series, *_ = result
     assert not port_series.empty
     # Prices go from 100 to 200 => portfolio should roughly double
     final_val = port_series.iloc[-1]
@@ -74,7 +74,7 @@ def test_dca_monthly(flat_prices, sample_allocation):
         cashflow=1000.0,
         cashflow_freq="Monthly",
     )
-    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = result
+    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series, *_ = result
     # Should have roughly 11-12 monthly cashflow buy events
     if not trades_df.empty:
         buy_trades = trades_df[trades_df["Trade Amount"] > 0]
@@ -91,8 +91,8 @@ def test_return_structure(flat_prices, sample_allocation):
         prices_df=flat_prices,
         rebalance_freq="Yearly",
     )
-    assert len(result) == 7
-    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = result
+    assert len(result) == 8
+    trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series, *_ = result
     assert isinstance(trades_df, pd.DataFrame)
     assert isinstance(logs, list)
     assert isinstance(port_series, pd.Series)
