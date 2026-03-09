@@ -24,9 +24,12 @@ from app.ui.charts.returns import (
     render_cheat_sheet,
     render_returns_analysis,
 )
+from app.ui.charts.metrics import render_risk_return_metrics
+from app.ui.charts.rolling import render_rolling_metrics
 from app.ui.charts.rebalancing import (
     render_rebalance_sankey,
     render_portfolio_composition,
+    render_portfolio_allocation,
     render_rebalancing_analysis,
 )
 from app.ui.charts.analysis import (
@@ -45,7 +48,10 @@ __all__ = [
     "render_returns_analysis",
     "render_rebalance_sankey",
     "render_portfolio_composition",
+    "render_portfolio_allocation",
     "render_rebalancing_analysis",
     "render_tax_analysis",
     "render_monte_carlo_view",
+    "render_risk_return_metrics",
+    "render_rolling_metrics",
 ]

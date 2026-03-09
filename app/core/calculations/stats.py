@@ -237,6 +237,27 @@ def generate_stats(series: pd.Series) -> dict:
              best_year = yearly.max() * 100
              worst_year = yearly.min() * 100
 
+    # Sortino Ratio
+    sortino = 0.0
+    if not returns.empty:
+        neg = np.minimum(returns.values, 0)
+        downside_dev = np.sqrt(np.mean(neg ** 2))
+        if downside_dev > 0:
+            sortino = (returns.mean() / downside_dev) * (252 ** 0.5)
+
+    # Ulcer Index: sqrt(mean(drawdown_pct^2))
+    ulcer_index = 0.0
+    cummax = series.cummax()
+    dd_pct = (series - cummax) / cummax * 100
+    ulcer_index = float(np.sqrt(np.mean(dd_pct ** 2)))
+
+    # Calmar Ratio: CAGR / |Max DD|
+    calmar = abs(cagr / mdd) if mdd != 0 else 0.0
+
+    # Average Drawdown
+    below = dd_pct[dd_pct < 0]
+    avg_drawdown = float(below.mean()) if not below.empty else 0.0
+
     return {
         "cagr": cagr,
         "std": std,
@@ -244,6 +265,8 @@ def generate_stats(series: pd.Series) -> dict:
         "max_drawdown": mdd,
         "best_year": best_year,
         "worst_year": worst_year,
-        "ulcer": 0.0, # Not vital for now
-        "sortino": 0.0 # Not vital for now
+        "ulcer_index": ulcer_index,
+        "sortino": sortino,
+        "calmar": calmar,
+        "avg_drawdown": avg_drawdown,
     }

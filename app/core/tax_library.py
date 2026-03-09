@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 
@@ -732,5 +733,235 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
         
         # Apply tax savings (refund)
         tax_owed_series[year] = tax - tax_savings
-            
+
     return tax_owed_series
+
+
+# =============================================================================
+# State Income Tax — Progressive Brackets (2014–2026+)
+# =============================================================================
+
+# Constants for UI
+US_STATES = [
+    ("AL", "Alabama"), ("AK", "Alaska"), ("AZ", "Arizona"), ("AR", "Arkansas"),
+    ("CA", "California"), ("CO", "Colorado"), ("CT", "Connecticut"), ("DE", "Delaware"),
+    ("DC", "District of Columbia"), ("FL", "Florida"), ("GA", "Georgia"), ("HI", "Hawaii"),
+    ("ID", "Idaho"), ("IL", "Illinois"), ("IN", "Indiana"), ("IA", "Iowa"),
+    ("KS", "Kansas"), ("KY", "Kentucky"), ("LA", "Louisiana"), ("ME", "Maine"),
+    ("MD", "Maryland"), ("MA", "Massachusetts"), ("MI", "Michigan"), ("MN", "Minnesota"),
+    ("MS", "Mississippi"), ("MO", "Missouri"), ("MT", "Montana"), ("NE", "Nebraska"),
+    ("NV", "Nevada"), ("NH", "New Hampshire"), ("NJ", "New Jersey"), ("NM", "New Mexico"),
+    ("NY", "New York"), ("NC", "North Carolina"), ("ND", "North Dakota"), ("OH", "Ohio"),
+    ("OK", "Oklahoma"), ("OR", "Oregon"), ("PA", "Pennsylvania"), ("RI", "Rhode Island"),
+    ("SC", "South Carolina"), ("SD", "South Dakota"), ("TN", "Tennessee"), ("TX", "Texas"),
+    ("UT", "Utah"), ("VT", "Vermont"), ("VA", "Virginia"), ("WA", "Washington"),
+    ("WV", "West Virginia"), ("WI", "Wisconsin"), ("WY", "Wyoming"),
+]
+
+NO_INCOME_TAX_STATES = {"AK", "FL", "NV", "NH", "SD", "TN", "TX", "WA", "WY"}
+
+DEFAULT_STATE_TAX_JSON = "data/state_income_tax_rates.json"
+
+# Global cache for state tax tables
+_STATE_TAX_TABLES = {}
+
+
+def load_state_tax_tables(json_path=DEFAULT_STATE_TAX_JSON):
+    """Load state tax bracket data from JSON into _STATE_TAX_TABLES cache."""
+    global _STATE_TAX_TABLES
+    if _STATE_TAX_TABLES:
+        return
+
+    try:
+        with open(json_path, "r") as f:
+            _STATE_TAX_TABLES = json.load(f)
+        logger.info(f"Loaded state tax tables from {json_path}")
+    except FileNotFoundError:
+        logger.warning(f"State tax data not found: {json_path}")
+    except Exception as e:
+        logger.error(f"Error loading state tax tables: {e}")
+
+
+def _get_brackets_for_year(state_data, year, filing_status):
+    """Get brackets for a specific year, falling back to closest available."""
+    brackets_by_year = state_data.get("brackets", {})
+    year_str = str(year)
+
+    if year_str in brackets_by_year:
+        return brackets_by_year[year_str].get(filing_status, [])
+
+    # Fallback: closest available year
+    available = sorted(int(y) for y in brackets_by_year if y.isdigit())
+    if not available:
+        return []
+
+    closest = min(available, key=lambda y: abs(y - year))
+    return brackets_by_year[str(closest)].get(filing_status, [])
+
+
+def _get_deduction_for_year(state_data, year, filing_status):
+    """Get state standard deduction for a year, falling back to closest."""
+    std_deds = state_data.get("standard_deductions", {})
+    year_str = str(year)
+
+    if year_str in std_deds:
+        return std_deds[year_str].get(filing_status, 0)
+
+    available = sorted(int(y) for y in std_deds if y.isdigit())
+    if not available:
+        return 0
+
+    closest = min(available, key=lambda y: abs(y - year))
+    return std_deds[str(closest)].get(filing_status, 0)
+
+
+def _progressive_tax(brackets, taxable_income):
+    """Calculate progressive tax from brackets [[threshold, rate], ...]."""
+    if taxable_income <= 0 or not brackets:
+        return 0.0
+
+    tax = 0.0
+    for i, (threshold, rate) in enumerate(brackets):
+        if i + 1 < len(brackets):
+            upper = brackets[i + 1][0]
+        else:
+            upper = float("inf")
+
+        if taxable_income > threshold:
+            taxable = min(taxable_income, upper) - threshold
+            tax += taxable * rate
+
+    return tax
+
+
+def calculate_state_tax(year, state_code, filing_status, other_income,
+                        short_term_gain, long_term_gain, use_standard_deduction=True):
+    """
+    Calculate state income tax on capital gains using progressive brackets.
+    Applies LT exclusion for eligible states. Stacks gains on top of other_income.
+    Returns 0.0 for no-tax states.
+    """
+    if not state_code or state_code in NO_INCOME_TAX_STATES:
+        return 0.0
+
+    load_state_tax_tables()
+
+    state_data = _STATE_TAX_TABLES.get(state_code, {})
+    if not state_data or not state_data.get("has_income_tax", True):
+        return 0.0
+
+    brackets = _get_brackets_for_year(state_data, year, filing_status)
+    if not brackets:
+        return 0.0
+
+    # Apply LT exclusion
+    lt_exclusion = state_data.get("lt_exclusion_pct", 0.0)
+    taxable_lt = long_term_gain * (1.0 - lt_exclusion)
+    total_gain = short_term_gain + taxable_lt
+
+    if total_gain <= 0:
+        return 0.0
+
+    # Apply state standard deduction
+    std_ded = 0.0
+    if use_standard_deduction:
+        std_ded = _get_deduction_for_year(state_data, year, filing_status)
+
+    # Deduction applies to other_income first, then to gains
+    effective_other = max(0, other_income - std_ded)
+    unused_ded = max(0, std_ded - other_income)
+    effective_gain = max(0, total_gain - unused_ded)
+
+    if effective_gain <= 0:
+        return 0.0
+
+    # Marginal tax: (tax on other_income + gain) - (tax on other_income)
+    total_income = effective_other + effective_gain
+    base_tax = _progressive_tax(brackets, effective_other)
+    total_tax = _progressive_tax(brackets, total_income)
+
+    return max(0, total_tax - base_tax)
+
+
+def calculate_state_tax_series_with_carryforward(
+    pl_series, other_income, state_code, filing_status="Single",
+    use_standard_deduction=True
+):
+    """
+    Calculate state tax for a P&L series with loss carryforward.
+    Mirrors calculate_tax_series_with_carryforward() for state taxes.
+    Follows federal $3k capital loss deduction limit.
+    """
+    if not state_code or state_code in NO_INCOME_TAX_STATES:
+        return pd.Series(0.0, index=pl_series.index)
+
+    load_state_tax_tables()
+
+    tax_series = pd.Series(0.0, index=pl_series.index)
+    loss_cf = 0.0
+
+    # Extract total P&L and optional ST/LT split
+    if isinstance(pl_series, pd.DataFrame):
+        total_pl = pl_series["Realized P&L"] if "Realized P&L" in pl_series.columns else pl_series.iloc[:, 0]
+        has_st_lt = ("Realized ST P&L" in pl_series.columns and "Realized LT P&L" in pl_series.columns)
+    else:
+        total_pl = pl_series
+        has_st_lt = False
+
+    for year in sorted(total_pl.index):
+        pl = float(total_pl[year])
+
+        # Apply carryforward
+        net = pl - loss_cf
+
+        if net <= 0:
+            # Allow up to $3k deduction against ordinary income (mirrors federal)
+            total_loss = abs(net)
+            deduction = min(total_loss, 3000.0)
+            loss_cf = total_loss - deduction
+            tax_series[year] = 0.0
+            continue
+
+        loss_cf = 0.0
+
+        # Determine ST/LT split for exclusion calculation
+        st_gain = 0.0
+        lt_gain = net
+
+        if has_st_lt:
+            st_raw = float(pl_series.loc[year, "Realized ST P&L"])
+            lt_raw = float(pl_series.loc[year, "Realized LT P&L"])
+            if st_raw > 0 and lt_raw > 0:
+                lt_fraction = lt_raw / (st_raw + lt_raw)
+                lt_gain = net * lt_fraction
+                st_gain = net - lt_gain
+            elif st_raw > 0:
+                st_gain = net
+                lt_gain = 0.0
+            # else: all LT (default)
+
+        tax = calculate_state_tax(
+            year, state_code, filing_status, other_income,
+            st_gain, lt_gain, use_standard_deduction
+        )
+        tax_series[year] = max(0.0, tax)
+
+    return tax_series
+
+
+def get_state_top_rate(state_code, year=2025, filing_status="Single"):
+    """Get the top marginal rate for a state (for display purposes)."""
+    if not state_code or state_code in NO_INCOME_TAX_STATES:
+        return 0.0
+
+    load_state_tax_tables()
+
+    state_data = _STATE_TAX_TABLES.get(state_code, {})
+    if not state_data:
+        return 0.0
+
+    brackets = _get_brackets_for_year(state_data, year, filing_status)
+    if not brackets:
+        return 0.0
+
+    return brackets[-1][1]  # Last bracket's rate = top marginal rate

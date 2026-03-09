@@ -8,23 +8,30 @@ import os
 from app.core import tax_library
 
 @st.cache_data(show_spinner=False)
-def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False):
+def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False):
     """
     Renders the Tax Analysis tab.
     """
     st.markdown("### 🏛️ Tax Analysis")
-    
+
     # 1. Configuration Summary
     with st.expander("Tax Configuration", expanded=False):
         c1, c2, c3 = st.columns(3)
         c1.metric("Filing Status", filing_status)
         c2.metric("Other Income", f"${other_income:,.0f}")
-        c3.metric("State Tax Rate", f"{state_tax_rate*100:.1f}%")
-        
+        if state_code and state_code not in tax_library.NO_INCOME_TAX_STATES:
+            top_rate = tax_library.get_state_top_rate(state_code)
+            state_name = dict(tax_library.US_STATES).get(state_code, state_code)
+            c3.metric("State", f"{state_name} ({top_rate*100:.1f}%)")
+        elif state_code:
+            c3.metric("State", f"{state_code} (No Tax)")
+        else:
+            c3.metric("State", "None")
+
         c4, c5, c6 = st.columns(3)
         c4.metric("Tax Method", tax_method)
         c5.metric("Std Deduction", "Yes" if use_standard_deduction else "No")
-        
+
         payment_source = "External Cash" if pay_tax_cash else ("Margin Loan" if pay_tax_margin else "None (Gross)")
         c6.metric("Payment Source", payment_source)
 
@@ -33,30 +40,23 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate,
         return
 
     # 2. Calculate Detailed Tax Series
-    # We recalculate here to show the breakdown (Fed vs State)
     fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
-        pl_by_year, 
+        pl_by_year,
         other_income,
         filing_status,
         method=tax_method,
         use_standard_deduction=use_standard_deduction
     )
-    
-    # State Tax
-    state_tax_series = pd.Series(0.0, index=fed_tax_series.index)
-    loss_cf_state = 0.0
-    total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
-    
-    for y, pl in total_pl_series.sort_index().items():
-        net = pl - loss_cf_state
-        if net > 0:
-            state_tax_series[y] = net * state_tax_rate
-            loss_cf_state = 0.0
-        else:
-            loss_cf_state = abs(net)
+
+    # State Tax (progressive brackets)
+    state_tax_series = tax_library.calculate_state_tax_series_with_carryforward(
+        pl_by_year, other_income, state_code, filing_status,
+        use_standard_deduction=use_standard_deduction
+    )
             
     total_tax_series = fed_tax_series + state_tax_series
-    
+    total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
+
     # 3. Summary Metrics
     total_tax_paid = total_tax_series.sum()
     total_realized_pl = total_pl_series.sum()
@@ -84,6 +84,7 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_tax_rate,
         color_discrete_map={"Federal Tax": "#EF553B", "State Tax": "#636EFA"}
     )
     fig.update_layout(barmode='stack', hovermode="x unified")
+    fig.update_traces(hovertemplate="%{y:$,.0f}")
     st.plotly_chart(fig, use_container_width=True)
     
     # 5. Detailed Table

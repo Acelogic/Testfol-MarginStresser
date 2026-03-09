@@ -193,7 +193,7 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
             </div>
             """, unsafe_allow_html=True)
 
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None):
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None):
     daily_ret = port_series.pct_change().dropna()
     monthly_ret = port_series.resample("ME").last().pct_change().dropna()
     quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
@@ -515,6 +515,23 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
     with tab_summary:
         st.subheader(f"{portfolio_name} Seasonal Summary")
         render_seasonal_summary(port_series)
+
+        # Rolling Metrics charts
+        from app.ui.charts.rolling import render_rolling_metrics
+        render_rolling_metrics(
+            port_series,
+            raw_response=raw_response,
+            unique_id=unique_id,
+        )
+
+        # Risk & Return Metrics table
+        from app.ui.charts.metrics import render_risk_return_metrics
+        render_risk_return_metrics(
+            port_series,
+            stats=stats or {},
+            raw_response=raw_response,
+            unique_id=unique_id,
+        )
     
     with tab_annual:
         st.subheader(f"{portfolio_name} Annual Returns")

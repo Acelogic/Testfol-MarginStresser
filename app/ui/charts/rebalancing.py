@@ -193,7 +193,147 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         )
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_tax_rate, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None):
+def render_portfolio_allocation(
+    component_prices: pd.DataFrame,
+    allocation: dict,
+    composition_df: pd.DataFrame,
+    start_val: float,
+    unique_id: str = "",
+):
+    """Render a 100% stacked area chart showing portfolio allocation drift over time."""
+    if component_prices.empty or not allocation:
+        return
+
+    # Map full tickers (e.g. AAPL?L=2) to base tickers used in component_prices columns
+    weights: dict[str, float] = {}
+    for full_tk, weight in allocation.items():
+        base = full_tk.split("?")[0]
+        weights[base] = weights.get(base, 0) + weight
+
+    available = [t for t in weights if t in component_prices.columns]
+    if not available:
+        return
+
+    prices = component_prices[available].dropna(how="all").ffill().dropna(how="any")
+    if prices.empty or len(prices) < 2:
+        return
+
+    total_weight = sum(weights[t] for t in available)
+    if total_weight <= 0:
+        return
+
+    # Get rebalance dates from composition_df
+    rebal_dates: list[pd.Timestamp] = []
+    if not composition_df.empty:
+        rebal_dates = sorted(pd.to_datetime(composition_df["Date"].unique()))
+
+    # Build segment boundaries: [start, rebal_1, rebal_2, ..., end]
+    seg_starts = [prices.index[0]]
+    for rd in rebal_dates:
+        # Snap to nearest trading day in prices
+        idx_loc = prices.index.searchsorted(rd)
+        if 0 < idx_loc < len(prices.index):
+            snapped = prices.index[idx_loc]
+            if snapped > seg_starts[-1]:
+                seg_starts.append(snapped)
+
+    # Compute daily position values segment by segment
+    all_positions = []
+    for i, seg_start in enumerate(seg_starts):
+        seg_end = seg_starts[i + 1] if i + 1 < len(seg_starts) else prices.index[-1]
+
+        if i + 1 < len(seg_starts):
+            seg_prices = prices.loc[seg_start:seg_end].iloc[:-1]  # exclude next segment start
+        else:
+            seg_prices = prices.loc[seg_start:]
+
+        if seg_prices.empty:
+            continue
+
+        # Determine total value at segment start
+        if i == 0:
+            total_val = start_val
+        else:
+            # Use end of previous segment's total value
+            prev_end = all_positions[-1].iloc[-1] if all_positions else None
+            total_val = prev_end.sum() if prev_end is not None else start_val
+
+        # Vectorized: position(t) = (alloc_value / start_price) * price(t)
+        start_prices = seg_prices.iloc[0]
+        seg_pos = pd.DataFrame(index=seg_prices.index, columns=available, dtype=float)
+        for t in available:
+            if start_prices[t] > 0:
+                alloc_val = total_val * (weights[t] / total_weight)
+                seg_pos[t] = alloc_val * (seg_prices[t] / start_prices[t])
+            else:
+                seg_pos[t] = 0.0
+
+        all_positions.append(seg_pos)
+
+    if not all_positions:
+        return
+
+    positions = pd.concat(all_positions)
+    # Remove any duplicate indices (shouldn't happen but safety)
+    positions = positions[~positions.index.duplicated(keep="first")]
+
+    # Convert to percentages
+    row_totals = positions.sum(axis=1)
+    pct = positions.div(row_totals, axis=0) * 100
+    pct = pct.fillna(0)
+
+    st.subheader("Portfolio Allocation")
+
+    fig = go.Figure()
+    for t in available:
+        fig.add_trace(go.Scatter(
+            x=pct.index,
+            y=pct[t],
+            name=t,
+            mode="lines",
+            stackgroup="one",
+            line=dict(width=0.5),
+            hovertemplate=f"{t}: %{{y:.2f}}%<extra></extra>",
+        ))
+
+    # Vertical lines at each rebalance date
+    for rd in seg_starts[1:]:  # skip the first (portfolio start)
+        rd_ms = int(pd.Timestamp(rd).timestamp() * 1000)
+        fig.add_shape(
+            type="line",
+            x0=rd_ms, x1=rd_ms, y0=0, y1=100,
+            xref="x", yref="y",
+            line=dict(dash="dot", color="rgba(255,255,255,0.25)", width=1),
+        )
+        fig.add_annotation(
+            x=rd_ms, y=100,
+            xref="x", yref="y",
+            text="Rebalance",
+            showarrow=False,
+            font=dict(size=8, color="rgba(255,255,255,0.5)"),
+            textangle=-90,
+            yanchor="bottom",
+        )
+
+    fig.update_layout(
+        yaxis=dict(
+            title="Allocation",
+            ticksuffix="%",
+            range=[0, 100],
+        ),
+        template="plotly_dark",
+        height=450,
+        showlegend=True,
+        hovermode="x unified",
+        margin=dict(l=60, r=20, t=20, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+    )
+
+    key_suffix = f"_{unique_id}" if unique_id else ""
+    st.plotly_chart(fig, use_container_width=True, key=f"port_alloc_area{key_suffix}")
+
+
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -474,18 +614,11 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                 use_standard_deduction=use_standard_deduction
             )
             
-            # 2. Calculate Annual State Tax (Base)
-            state_tax_annual = pd.Series(0.0, index=federal_tax_annual.index)
-            loss_cf = 0.0
-            total_pl_series = pl_by_year["Realized P&L"] if isinstance(pl_by_year, pd.DataFrame) else pl_by_year
-            
-            for y, pl in total_pl_series.sort_index().items():
-                net = pl - loss_cf
-                if net > 0:
-                    state_tax_annual[y] = net * state_tax_rate
-                    loss_cf = 0.0
-                else:
-                    loss_cf = abs(net)
+            # 2. Calculate Annual State Tax (progressive brackets)
+            state_tax_annual = tax_library.calculate_state_tax_series_with_carryforward(
+                pl_by_year, other_income, state_code, filing_status,
+                use_standard_deduction=use_standard_deduction
+            )
             
             total_tax_annual = federal_tax_annual + state_tax_annual
             
@@ -580,9 +713,19 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         )
 
 
+    # Portfolio Allocation (100% stacked area — drift between rebalances)
+    if component_prices is not None and allocation is not None:
+        render_portfolio_allocation(
+            component_prices,
+            allocation,
+            composition_df,
+            start_val=start_val,
+            unique_id=unique_id or "",
+        )
+
     # Portfolio Composition
     render_portfolio_composition(comp_df_to_plot, view_freq=view_freq)
-        
+
     # Sankey Diagram
     render_rebalance_sankey(trades_df, view_freq=view_freq, unique_id=unique_id)
     

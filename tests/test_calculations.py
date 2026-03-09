@@ -85,7 +85,7 @@ def test_generate_stats_keys():
     dates = pd.bdate_range("2023-01-02", "2023-12-29")
     series = pd.Series(np.linspace(10000, 12000, len(dates)), index=dates)
     stats = generate_stats(series)
-    expected_keys = {"cagr", "std", "sharpe", "max_drawdown", "best_year", "worst_year", "ulcer", "sortino"}
+    expected_keys = {"cagr", "std", "sharpe", "max_drawdown", "best_year", "worst_year", "ulcer_index", "sortino", "calmar", "avg_drawdown"}
     assert expected_keys.issubset(stats.keys())
 
 
