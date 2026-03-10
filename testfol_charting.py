@@ -123,8 +123,7 @@ def _build_payload(config, start_date, end_date, bearer_token):
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
             pm_val = float(row.get("PM Maint %", 0))
-            if pm_val > 0:
-                pm_maint_pcts[ticker] = pm_val
+            pm_maint_pcts[ticker] = pm_val if pm_val > 0 else maint_pcts[ticker]
 
         reb = p.get("rebalance", {})
         api_portfolios.append({
@@ -226,8 +225,7 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
             pm_val = float(row.get("PM Maint %", 0))
-            if pm_val > 0:
-                pm_maint_pcts[ticker] = pm_val
+            pm_maint_pcts[ticker] = pm_val if pm_val > 0 else maint_pcts[ticker]
 
         reb = p.get("rebalance", {})
         portfolios_plain.append({

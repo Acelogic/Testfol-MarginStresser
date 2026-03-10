@@ -245,15 +245,6 @@ def _render_margin_statistics(
             pm2.metric("Max PM Usage", f"{pm_max_val*100:.2f}%", f"{pm_max_idx.date()}", delta_color="off")
             pm3.metric("PM Safety Buffer", f"{pm_safety*100:.2f}%")
 
-            if pm_mode == 'Dynamic':
-                # Regime analysis
-                above = equity_series >= pm_threshold
-                pct_pm = above.mean() * 100
-                crossings = (above.astype(int).diff().abs() > 0).sum()
-                dc1, dc2 = st.columns(2)
-                dc1.metric("Time in PM Regime", f"{pct_pm:.1f}%", help=f"Equity >= ${pm_threshold:,.0f}")
-                dc2.metric("Threshold Crossings", f"{int(crossings)}")
-
         # Standard Margin Breaches (Usage >= 100%)
         breach_episodes = []
 

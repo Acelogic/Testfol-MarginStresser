@@ -350,24 +350,15 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             hovertemplate="Equity %: %{y:.1%}<extra></extra>"
         ))
 
-    # PM Usage overlay
-    if pm_usage_series is not None and not pm_usage_series.empty and "Margin usage %" in series_opts:
-        if pm_mode == "Compare":
-            fig.add_trace(go.Scatter(
-                x=pm_usage_series.index, y=pm_usage_series,
-                name="PM Usage %",
-                line=dict(color='#00CED1', width=1.5, dash='dash'),
-                yaxis="y2",
-                hovertemplate="PM Usage: %{y:.1%}<extra></extra>"
-            ))
-        elif pm_mode == "Dynamic":
-            fig.add_trace(go.Scatter(
-                x=pm_usage_series.index, y=pm_usage_series,
-                name="Dynamic Usage % (Reg-T/PM)",
-                line=dict(color='#00CED1', width=1.5),
-                yaxis="y2",
-                hovertemplate="Dynamic Usage: %{y:.1%}<extra></extra>"
-            ))
+    # PM Usage overlay (Compare mode)
+    if pm_usage_series is not None and not pm_usage_series.empty and "Margin usage %" in series_opts and pm_mode == "Compare":
+        fig.add_trace(go.Scatter(
+            x=pm_usage_series.index, y=pm_usage_series,
+            name="PM Usage %",
+            line=dict(color='#00CED1', width=1.5, dash='dash'),
+            yaxis="y2",
+            hovertemplate="PM Usage: %{y:.1%}<extra></extra>"
+        ))
 
     # PM buy-blocked rebalance markers
     if pm_blocked_dates and "Margin usage %" in series_opts:

@@ -530,18 +530,14 @@ def render():
             st.markdown("##### Portfolio Margin (PM)")
             pm_mode = st.selectbox(
                 "PM Comparison Mode",
-                ["Off", "Compare", "Dynamic"],
+                ["Off", "Compare"],
                 index=0,
-                help="**Off**: Reg-T only.\n**Compare**: Show Reg-T and PM usage curves side by side.\n**Dynamic**: Single curve that switches from Reg-T to PM when equity >= threshold.",
+                help="**Off**: Reg-T only.\n**Compare**: Show Reg-T and PM usage curves side by side.",
                 disabled=margin_disabled,
                 key="pm_mode",
             )
             config['pm_mode'] = pm_mode
-
-            if pm_mode == "Dynamic":
-                config['pm_threshold'] = utils.num_input("PM Activation Threshold ($)", "pm_threshold", 110000.0, 1000.0, disabled=margin_disabled)
-            else:
-                config['pm_threshold'] = 110000.0
+            config['pm_threshold'] = 110000.0
 
             pm_buy_block = st.checkbox(
                 "Simulate PM Buy Block (Equity < threshold)",

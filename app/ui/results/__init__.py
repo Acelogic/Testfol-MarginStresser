@@ -96,6 +96,26 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     pm_mode = config.get('pm_mode', 'Off')
     pm_threshold = config.get('pm_threshold', 110000.0)
     wmaint_pm = results.get("wmaint_pm", 0.0)
+    # Recompute wmaint_pm from current allocation so PM reflects UI changes without re-run
+    if pm_mode != 'Off':
+        _computed_pm = 0.0
+        _port_name = results.get("name", "")
+        for _p_cfg in config.get("portfolios", []):
+            if _p_cfg.get("name") == _port_name:
+                _adf = _p_cfg.get("alloc_df")
+                if _adf is not None and not _adf.empty and "PM Maint %" in _adf.columns:
+                    _d_maint = config.get("default_maint", 25.0)
+                    for _, _r in _adf.iterrows():
+                        _pm_v = float(_r.get("PM Maint %", 0))
+                        _wt = float(_r.get("Weight %", 0))
+                        _reg_v = float(_r.get("Maint %", _d_maint))
+                        _eff = _pm_v if _pm_v > 0 else _reg_v
+                        _computed_pm += (_wt / 100) * (_eff / 100)
+                break
+        if _computed_pm > 0:
+            wmaint_pm = _computed_pm
+        elif wmaint_pm == 0.0:
+            wmaint_pm = wmaint  # final fallback
     pm_blocked_dates = results.get("pm_blocked_dates", [])
 
     # Extract Benchmark (Standard Comparison or Custom)
@@ -202,14 +222,6 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
         pm_usage_series.name = "PM Usage %"
 
-    # For Dynamic mode, blend Reg-T and PM based on equity threshold
-    dynamic_usage_series = pd.Series(dtype=float)
-    if pm_mode == 'Dynamic' and not pm_usage_series.empty and not equity_series.empty:
-        above_threshold = equity_series >= pm_threshold
-        dynamic_usage_series = usage_series.copy()
-        dynamic_usage_series.name = "Dynamic Usage %"
-        dynamic_usage_series[above_threshold] = pm_usage_series[above_threshold]
-
     # Update session state with latest margin results for reporting
     results.update({
         "loan_series": loan_series,
@@ -281,14 +293,6 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         max_loan_pm = tax_adj_port_series * (1 - wmaint_pm)
         valid_pm = max_loan_pm > 0
         tax_adj_pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
-
-    # Dynamic blended (tax-adjusted)
-    tax_adj_dynamic_usage = pd.Series(dtype=float)
-    if pm_mode == 'Dynamic' and not tax_adj_pm_usage_series.empty and not final_adj_series.empty:
-        above = final_adj_series >= pm_threshold
-        tax_adj_dynamic_usage = tax_adj_usage_series.copy()
-        tax_adj_dynamic_usage[above] = tax_adj_pm_usage_series[above]
-
 
     ohlc_data = utils.resample_data(tax_adj_port_series, timeframe, method="ohlc")
     equity_resampled = utils.resample_data(final_adj_series, timeframe, method="last")
@@ -498,7 +502,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         rate_annual=rate_annual,
         pm_enabled=pm_enabled,
         pm_mode=pm_mode,
-        pm_usage_series=tax_adj_pm_usage_series if pm_mode == 'Compare' else tax_adj_dynamic_usage,
+        pm_usage_series=tax_adj_pm_usage_series,
         wmaint_pm=wmaint_pm,
         pm_threshold=pm_threshold,
         pm_blocked_dates=pm_blocked_dates,
