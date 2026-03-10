@@ -264,6 +264,10 @@ def get_standard_deduction(year, filing_status, income=0):
     Returns the standard deduction for the given year and filing status.
     Handles pre-1970 logic (10% of income capped at $1,000).
     """
+    # MFS deduction = half of MFJ
+    if filing_status == "Married Filing Separately":
+        return get_standard_deduction(year, "Married Filing Jointly", income=income) // 2
+
     # Normalize filing status
     if filing_status not in ["Single", "Married Filing Jointly", "Head of Household"]:
         filing_status = "Single" # Fallback
@@ -412,19 +416,24 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
     
         else:
             # Default: 2024 Fixed Brackets
-            lt_tax = calculate_federal_tax(long_term_gain, stacking_income, filing_status)
+            lt_tax = calculate_federal_tax(long_term_gain, stacking_income, filing_status, year=year)
 
     # 3. NIIT (2013-Present)
     # NIIT applies on top of everything else for high earners
     niit = 0.0
     if year >= 2013:
-        niit_threshold = 250000 if filing_status == "Married Filing Jointly" else 200000
-        magi = other_income + short_term_gain + long_term_gain
+        if filing_status == "Married Filing Jointly":
+            niit_threshold = 250000
+        elif filing_status == "Married Filing Separately":
+            niit_threshold = 125000
+        else:
+            niit_threshold = 200000
+        magi = other_income + short_term_gain + long_term_gain + long_term_gain_collectible
         if magi > niit_threshold:
             excess = magi - niit_threshold
             # NIIT applies to the lesser of (Net Investment Income) or (Excess MAGI)
-            # NII = ST Gain + LT Gain
-            investment_income = short_term_gain + long_term_gain
+            # NII = ST Gain + LT Gain + Collectible Gain
+            investment_income = short_term_gain + long_term_gain + long_term_gain_collectible
             subject_to_niit = min(investment_income, excess)
             niit = subject_to_niit * 0.038
             
@@ -433,20 +442,19 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
 def calculate_federal_tax(realized_gain, other_income, filing_status="Single", year=2025):
     """
     Calculates estimated federal tax on long-term capital gains using specific year brackets.
-    Includes Net Investment Income Tax (NIIT).
+    Does NOT include NIIT — that is applied separately in calculate_tax_on_realized_gains().
     """
     if realized_gain <= 0:
         return 0.0
-        
+
     # Define Brackets
     # Format: (Threshold, Rate)
     # 0% up to Threshold 1
     # 15% up to Threshold 2
     # 20% above Threshold 2
-    
+
     brackets = []
-    niit_threshold = 200000
-    
+
     if year == 2024:
         if filing_status == "Married Filing Jointly":
             brackets = [
@@ -454,22 +462,25 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
                 (583750, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 250000
         elif filing_status == "Head of Household":
             brackets = [
                 (63000, 0.00),
                 (551350, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 200000
+        elif filing_status == "Married Filing Separately":
+            brackets = [
+                (47025, 0.00),
+                (291875, 0.15),
+                (float("inf"), 0.20)
+            ]
         else: # Single
             brackets = [
                 (47025, 0.00),
                 (518900, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 200000
-            
+
     else: # Default to 2025 (and future)
         if filing_status == "Married Filing Jointly":
             brackets = [
@@ -477,30 +488,33 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
                 (613700, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 250000
         elif filing_status == "Head of Household":
             brackets = [
                 (64750, 0.00),
                 (566700, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 200000
+        elif filing_status == "Married Filing Separately":
+            brackets = [
+                (49450, 0.00),
+                (306850, 0.15),
+                (float("inf"), 0.20)
+            ]
         else: # Single
             brackets = [
                 (49450, 0.00),
                 (545500, 0.15),
                 (float("inf"), 0.20)
             ]
-            niit_threshold = 200000
-        
+
     # Calculate Capital Gains Tax
     # The capital gains "stack" on top of other income.
     # So we start filling brackets from `other_income`.
-    
+
     current_income_level = other_income
     gains_remaining = realized_gain
     total_tax = 0.0
-    
+
     # 0% Bracket
     limit_0 = brackets[0][0]
     if current_income_level < limit_0:
@@ -509,10 +523,10 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
         # Tax is 0
         gains_remaining -= taxable_at_0
         current_income_level += taxable_at_0
-        
+
     if gains_remaining <= 0:
         return total_tax
-        
+
     # 15% Bracket
     limit_15 = brackets[1][0]
     if current_income_level < limit_15:
@@ -521,21 +535,13 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
         total_tax += taxable_at_15 * 0.15
         gains_remaining -= taxable_at_15
         current_income_level += taxable_at_15
-        
+
     if gains_remaining <= 0:
         pass
     else:
         # 20% Bracket (Remaining)
         total_tax += gains_remaining * 0.20
-        current_income_level += gains_remaining
-        
-    # Net Investment Income Tax (NIIT)
-    magi = other_income + realized_gain
-    if magi > niit_threshold:
-        excess = magi - niit_threshold
-        subject_to_niit = min(realized_gain, excess)
-        total_tax += subject_to_niit * 0.038
-        
+
     return total_tax
 
 def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, use_standard_deduction=True):
