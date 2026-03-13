@@ -8,7 +8,7 @@ import os
 from app.core import tax_library
 
 @st.cache_data(show_spinner=False)
-def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False):
+def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax_method="2024_fixed", use_standard_deduction=True, unrealized_pl_df=None, trades_df=None, pay_tax_cash=False, pay_tax_margin=False, retirement_income=None, retirement_year=None):
     """
     Renders the Tax Analysis tab.
     """
@@ -45,13 +45,17 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax
         other_income,
         filing_status,
         method=tax_method,
-        use_standard_deduction=use_standard_deduction
+        use_standard_deduction=use_standard_deduction,
+        retirement_income=retirement_income,
+        retirement_year=retirement_year,
     )
 
     # State Tax (progressive brackets)
     state_tax_series = tax_library.calculate_state_tax_series_with_carryforward(
         pl_by_year, other_income, state_code, filing_status,
-        use_standard_deduction=use_standard_deduction
+        use_standard_deduction=use_standard_deduction,
+        retirement_income=retirement_income,
+        retirement_year=retirement_year,
     )
             
     total_tax_series = fed_tax_series + state_tax_series
@@ -112,7 +116,8 @@ def render_monte_carlo_view(mc_results, unique_id=None):
     """
     Renders the Monte Carlo 'Cone of Uncertainty' chart.
     """
-    if not mc_results or mc_results.get("percentiles").empty:
+    percs = mc_results.get("percentiles") if mc_results else None
+    if percs is None or percs.empty:
         st.info("Insufficient data for Monte Carlo simulation.")
         return
 

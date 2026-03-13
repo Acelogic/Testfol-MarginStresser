@@ -239,3 +239,69 @@ def test_simulate_margin_variable_rate(port_series):
     assert rate.iloc[0] == pytest.approx(6.0, abs=0.01)
     # Loan should grow slightly from interest
     assert loan.iloc[-1] > 5000
+
+
+# ---------------------------------------------------------------------------
+# draw_start_date tests
+# ---------------------------------------------------------------------------
+
+def test_simulate_margin_draw_start_date_none_means_start(port_series):
+    """draw_start_date=None should behave like draws from the beginning."""
+    loan_no_start, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25, draw_start_date=None,
+    )
+    loan_default, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25,
+    )
+    # Both should produce the same result
+    pd.testing.assert_series_equal(loan_no_start, loan_default)
+
+
+def test_simulate_margin_draw_start_date_mid_backtest(port_series):
+    """Draws starting mid-backtest should produce less loan than from the start."""
+    import datetime
+    mid_date = datetime.date(2023, 2, 15)
+
+    loan_from_start, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25,
+    )
+    loan_mid, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25, draw_start_date=mid_date,
+    )
+    # Loan with delayed start should be smaller
+    assert loan_mid.iloc[-1] < loan_from_start.iloc[-1]
+    assert loan_mid.iloc[-1] > 0  # But still has some draws
+
+
+def test_simulate_margin_draw_start_date_after_backtest(port_series):
+    """If draw_start_date is after the backtest period, no draws should occur."""
+    import datetime
+    future_date = datetime.date(2025, 1, 1)
+
+    loan, equity, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25, draw_start_date=future_date,
+    )
+    # No draws should have occurred — loan stays at 0
+    assert loan.iloc[-1] == pytest.approx(0, abs=1e-6)
+
+
+def test_simulate_margin_draw_start_date_before_backtest(port_series):
+    """If draw_start_date is before the backtest, draws should happen from the start."""
+    import datetime
+    past_date = datetime.date(2020, 1, 1)
+
+    loan_past, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25, draw_start_date=past_date,
+    )
+    loan_default, *_ = simulate_margin(
+        port=port_series, starting_loan=0, rate_annual=5.0,
+        draw_monthly=500, maint_pct=0.25,
+    )
+    # Both should produce the same result since past date is before backtest start
+    pd.testing.assert_series_equal(loan_past, loan_default)

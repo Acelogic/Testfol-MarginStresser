@@ -65,7 +65,7 @@ def _mock_shadow(allocation, start_val, start_date, end_date,
                  cashflow=0.0, cashflow_freq="Monthly", prices_df=None,
                  rebalance_month=1, rebalance_day=1, custom_freq="Yearly",
                  invest_dividends=True, pay_down_margin=False,
-                 tax_config=None, custom_rebal_config=None):
+                 tax_config=None, custom_rebal_config=None, **kwargs):
     """Minimal mock for run_shadow_backtest."""
     dates = pd.bdate_range(start_date, end_date)
     vals = [start_val * (1 + 0.0003 * i) for i in range(len(dates))]

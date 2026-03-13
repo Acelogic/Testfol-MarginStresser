@@ -163,6 +163,10 @@ def render():
                                     "day": reb.get("day", 1),
                                     "compare_std": False,
                                     "threshold_pct": reb.get("threshold_pct", 5.0),
+                                },
+                                "cashflow": {
+                                    "start_val": 10000.0, "amount": 0.0, "freq": "Monthly",
+                                    "invest_div": True, "pay_down_margin": False
                                 }
                             })
                             st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
@@ -454,12 +458,11 @@ def render():
             
             # Calculate leverage for display (handle zero division)
             curr_start_val = config.get('global_cashflow', {}).get('start_val', 10000.0)
-            if curr_start_val != config['starting_loan']:
+            if config['starting_loan'] < curr_start_val:
                 current_lev = curr_start_val / (curr_start_val - config['starting_loan'])
+                st.caption(f"Current Leverage: **{current_lev:.2f}x**")
             else:
-                current_lev = 0.0
-                
-            st.caption(f"Current Leverage: **{current_lev:.2f}x**")
+                st.caption("Current Leverage: **∞x**")
             
         with c2:
             st.markdown("##### Rates & Maintenance")
@@ -524,6 +527,20 @@ def render():
             config['rate_annual'] = margin_config
             
             config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
+            if config['draw_monthly'] > 0:
+                config['draw_start_date'] = st.date_input(
+                    "Draw Start Date",
+                    value=None,
+                    key="draw_start_date",
+                    help="Date when monthly draws begin. Defaults to backtest start if not set.",
+                )
+                config['retirement_income'] = utils.num_input(
+                    "Retirement Income ($)", "retirement_income", 0.0, 5000.0,
+                )
+                st.caption("Annual non-portfolio income after draw start date (replaces Annual Income for tax brackets).")
+            else:
+                config['draw_start_date'] = None
+                config['retirement_income'] = None
             config['default_maint'] = utils.num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
             
             # Portfolio Margin Controls

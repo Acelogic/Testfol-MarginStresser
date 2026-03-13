@@ -189,6 +189,7 @@ def simulate_margin(
     maint_pct: float,
     tax_series: pd.Series | None = None,
     repayment_series: pd.Series | None = None,
+    draw_start_date=None,
 ) -> tuple[pd.Series, pd.Series, pd.Series, pd.Series, pd.Series]:
     """
     Simulates margin loan and calculates equity/usage metrics.
@@ -202,6 +203,9 @@ def simulate_margin(
         months = port.index.month.values
         month_changes = months != np.roll(months, 1)
         month_changes[0] = False # Explicitly ignore first day
+        if draw_start_date is not None:
+            after_start = np.array(port.index >= pd.Timestamp(draw_start_date))
+            month_changes = month_changes & after_start
         cashflows.values[month_changes] += draw_monthly
 
     # Add Tax Payments

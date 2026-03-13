@@ -77,7 +77,17 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     rate_annual = config.get('rate_annual', 8.0)
     draw_monthly = config.get('draw_monthly', 0.0)
+    draw_start_date = config.get('draw_start_date', None)
+    retirement_income = config.get('retirement_income', None)
     starting_loan = config.get('starting_loan', 0.0)
+
+    # Derive retirement year from draw_start_date
+    _retirement_year = None
+    if retirement_income is not None and draw_start_date is not None:
+        if hasattr(draw_start_date, 'year'):
+            _retirement_year = draw_start_date.year
+        elif isinstance(draw_start_date, str):
+            _retirement_year = int(draw_start_date[:4])
 
     cashflow = config.get('cashflow', 0.0)
     cashfreq = config.get('cashfreq', "Monthly")
@@ -145,13 +155,17 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             other_income,
             filing_status,
             method=tax_method,
-            use_standard_deduction=use_std_deduction
+            use_standard_deduction=use_std_deduction,
+            retirement_income=retirement_income,
+            retirement_year=_retirement_year,
         )
 
         # State Tax (progressive brackets)
         state_tax_series = tax_library.calculate_state_tax_series_with_carryforward(
             pl_by_year, other_income, state_code, filing_status,
-            use_standard_deduction=use_std_deduction
+            use_standard_deduction=use_std_deduction,
+            retirement_income=retirement_income,
+            retirement_year=_retirement_year,
         )
     else:
         # No realized P&L = No Tax
@@ -210,7 +224,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         port_series, eff_loan,
         eff_rate, eff_draw, wmaint,
         tax_series=sim_tax_series,
-        repayment_series=repayment_series
+        repayment_series=repayment_series,
+        draw_start_date=draw_start_date,
     )
 
     # Compute PM usage series post-hoc (loan is invariant to margin type)
@@ -243,12 +258,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         elif pay_tax_cash:
             if tax_payment_series is not None and tax_payment_series.sum() > 0:
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date
                 )
             else:
                 empty_tax = pd.Series(0.0, index=equity_series.index)
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date
                 )
         else: # None (Gross)
             final_adj_series = equity_series
@@ -260,15 +275,17 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # Retrieve benchmark if available
     bench_series = results.get("bench_series")
     bench_resampled = None
+    bench_aligned = None
     if bench_series is not None:
-            bench_aligned = bench_series.reindex(tax_adj_port_series.index).ffill().fillna(0)
+            bench_aligned = bench_series.reindex(tax_adj_port_series.index).ffill().bfill()
             bench_resampled = utils.resample_data(bench_aligned, timeframe, method="last")
 
     # Retrieve Comparison Benchmark (Standard Rebalance) if available
     comp_series = results.get("comparison_series")
     comp_resampled = None
+    comp_aligned = None
     if comp_series is not None:
-             comp_aligned = comp_series.reindex(tax_adj_port_series.index).ffill().fillna(0)
+             comp_aligned = comp_series.reindex(tax_adj_port_series.index).ffill().bfill()
              comp_resampled = utils.resample_data(comp_aligned, timeframe, method="last")
              if comp_series.name is None:
                  comp_resampled.name = "Standard (Yearly)"
@@ -376,7 +393,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs {bench_label}", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs {bench_label}", help="Pre-tax risk-adjusted return")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs {bench_label}", delta_color="inverse")
-        m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+        if not final_adj_series.empty and final_adj_series.iloc[-1] != 0:
+            m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+        else:
+            m5.metric("Leverage", "N/A")
 
         # Detailed Comparison Table
         bench_end_val = active_bench_series.iloc[-1] if active_bench_series is not None and not active_bench_series.empty else 0
@@ -400,7 +420,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", help="Pre-tax risk-adjusted return")
         m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
-        m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+        if not final_adj_series.empty and final_adj_series.iloc[-1] != 0:
+            m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
+        else:
+            m5.metric("Leverage", "N/A")
 
     # --- Secondary Metrics in Expander (Only show when tax simulation is active) ---
     tax_sim_active = pay_tax_margin or pay_tax_cash
@@ -435,8 +458,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # =========================================================================
     # Tabs
     # =========================================================================
-    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_xray, res_tab_mc, res_tab_debug = st.tabs(
-        ["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔍 X-Ray", "🔮 Monte Carlo", "🔧 Debug"]
+    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_xray, res_tab_mc, res_tab_debug, res_tab_withdrawals = st.tabs(
+        ["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔍 X-Ray", "🔮 Monte Carlo", "🔧 Debug", "💰 Withdrawals"]
     )
 
     # --- Tax Impact Tab ---
@@ -463,6 +486,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     # --- Debug Tab ---
     render_debug_tab(res_tab_debug, logs, raw_response, portfolio_name)
+
+    # --- Withdrawals Tab ---
+    from app.ui.results.tabs_withdrawals import render_withdrawals_tab
+    render_withdrawals_tab(res_tab_withdrawals, logs, draw_monthly, draw_start_date, loan_series=loan_series)
 
     # --- Chart Tab ---
     render_chart_tab(
@@ -497,6 +524,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         config=config,
         pay_tax_cash=pay_tax_cash,
         draw_monthly=draw_monthly,
+        draw_start_date=draw_start_date,
         final_tax_series=final_tax_series,
         start_val=start_val,
         rate_annual=rate_annual,
@@ -519,8 +547,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
         charts.render_returns_analysis(
             tax_adj_port_series,
-            bench_series=bench_resampled,
-            comparison_series=comp_resampled,
+            bench_series=bench_aligned if bench_series is not None else None,
+            comparison_series=comp_aligned if comp_series is not None else None,
             unique_id=portfolio_name,
             portfolio_name=portfolio_name,
             component_data=component_prices,
@@ -559,6 +587,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             component_prices=alloc_component_prices,
             allocation=results.get("allocation", {}),
             start_val=start_val,
+            retirement_income=retirement_income,
+            retirement_year=_retirement_year,
         )
 
     # --- Tax Analysis (charts) within same tax tab ---
@@ -570,7 +600,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
             trades_df=trades_df,
             pay_tax_cash=pay_tax_cash,
-            pay_tax_margin=pay_tax_margin
+            pay_tax_margin=pay_tax_margin,
+            retirement_income=retirement_income,
+            retirement_year=_retirement_year,
         )
 
     # --- X-Ray Tab (inline, small) ---

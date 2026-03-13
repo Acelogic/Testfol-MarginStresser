@@ -43,6 +43,7 @@ def render_chart_tab(
     start_val: float,
     rate_annual,
     pm_enabled: bool,
+    draw_start_date=None,
     pm_mode: str = "Off",
     pm_usage_series: pd.Series | None = None,
     wmaint_pm: float = 0.0,
@@ -85,12 +86,13 @@ def render_chart_tab(
                 )
 
             if pay_tax_cash:
-                _render_cash_statistics(final_adj_series, final_tax_series, draw_monthly, equity_series)
+                _render_cash_statistics(final_adj_series, final_tax_series, draw_monthly, equity_series, draw_start_date=draw_start_date)
             else:
                 _render_margin_statistics(
                     tax_adj_port_series, final_adj_series, loan_series,
                     equity_series, usage_series, equity_pct_series,
                     final_tax_series, draw_monthly, wmaint, pm_enabled,
+                    draw_start_date=draw_start_date,
                     pm_mode=pm_mode,
                     pm_usage_series=pm_usage_series,
                     wmaint_pm=wmaint_pm,
@@ -121,16 +123,19 @@ def _render_cash_statistics(
     final_tax_series: pd.Series,
     draw_monthly: float,
     equity_series: pd.Series,
+    draw_start_date=None,
 ) -> None:
     with st.expander("Detailed Cash Statistics", expanded=True):
         total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
 
         total_draws = 0.0
         if draw_monthly > 0 and not equity_series.empty:
+            _ds = pd.Timestamp(draw_start_date) if draw_start_date is not None else None
             prev_m = equity_series.index[0].month
             for d in equity_series.index[1:]:
                 if d.month != prev_m:
-                    total_draws += draw_monthly
+                    if _ds is None or d >= _ds:
+                        total_draws += draw_monthly
                     prev_m = d.month
 
         total_withdrawn = total_tax_paid + total_draws
@@ -160,6 +165,7 @@ def _render_margin_statistics(
     draw_monthly: float,
     wmaint: float,
     pm_enabled: bool,
+    draw_start_date=None,
     pm_mode: str = "Off",
     pm_usage_series: pd.Series | None = None,
     wmaint_pm: float = 0.0,
@@ -179,10 +185,12 @@ def _render_margin_statistics(
 
         total_draws = 0.0
         if draw_monthly > 0 and not equity_series.empty:
+            _ds = pd.Timestamp(draw_start_date) if draw_start_date is not None else None
             prev_m = equity_series.index[0].month
             for d in equity_series.index[1:]:
                 if d.month != prev_m:
-                    total_draws += draw_monthly
+                    if _ds is None or d >= _ds:
+                        total_draws += draw_monthly
                     prev_m = d.month
 
         total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0

@@ -9,6 +9,7 @@ Dependency injection: callers can pass cached versions of fetch_backtest
 and run_shadow_backtest via the `fetch_backtest_fn` / `run_shadow_fn` params.
 """
 
+import datetime
 import logging
 
 import pandas as pd
@@ -96,6 +97,23 @@ def run_single_backtest(
     _pm_cfg = pm_config or {}
     pm_buy_block = _pm_cfg.get("pm_buy_block", False)
     pm_buy_block_threshold = _pm_cfg.get("pm_buy_block_threshold", 100000.0)
+    pm_draw_monthly = _pm_cfg.get("draw_monthly", 0.0)
+    _raw_draw_start = _pm_cfg.get("draw_start_date", None)
+    # Clamp draw_start_date to backtest range
+    _bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+    _bt_end = pd.Timestamp(end_date).date() if isinstance(end_date, str) else end_date
+    if _raw_draw_start is not None:
+        if isinstance(_raw_draw_start, str):
+            _raw_draw_start = pd.Timestamp(_raw_draw_start).date()
+        elif isinstance(_raw_draw_start, datetime.datetime):
+            _raw_draw_start = _raw_draw_start.date()
+        pm_draw_start_date = max(_raw_draw_start, _bt_start)
+        pm_draw_start_date = min(pm_draw_start_date, _bt_end)
+    else:
+        pm_draw_start_date = _bt_start
+    pm_margin_rate = _pm_cfg.get("margin_rate_annual", 8.0)
+    pm_cf_for_loan = _pm_cfg.get("cashflow_for_loan", 0.0)
+    pm_cf_freq = _pm_cfg.get("cashflow_freq", "Monthly")
 
     # Rebalance
     reb = rebalance
@@ -180,13 +198,24 @@ def run_single_backtest(
                 start_date=start_date,
                 end_date=end_date,
                 api_port_series=port_series,
-                rebalance_freq="Custom",
+                rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
                 cashflow=shadow_cashflow,
                 cashflow_freq=cashflow_freq,
                 invest_dividends=invest_div,
                 pay_down_margin=pay_down_margin,
                 tax_config=tax_config,
                 custom_rebal_config=reb if r_mode == "Custom" else {},
+                rebalance_month=reb.get("month", 1),
+                rebalance_day=reb.get("day", 1),
+                custom_freq=reb.get("freq", "Yearly"),
+                pm_buy_block=pm_buy_block,
+                pm_buy_block_threshold=pm_buy_block_threshold,
+                starting_loan=_pm_cfg.get("starting_loan", 0.0),
+                margin_rate_annual=pm_margin_rate,
+                draw_monthly=pm_draw_monthly,
+                draw_start_date=pm_draw_start_date,
+                loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
+                loan_repayment_freq=pm_cf_freq,
             )
             if api_twr_series is not None:
                 twr_series = api_twr_series
@@ -216,6 +245,11 @@ def run_single_backtest(
             pm_buy_block=pm_buy_block,
             pm_buy_block_threshold=pm_buy_block_threshold,
             starting_loan=_pm_cfg.get("starting_loan", 0.0),
+            margin_rate_annual=pm_margin_rate,
+            draw_monthly=pm_draw_monthly,
+            draw_start_date=pm_draw_start_date,
+            loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
+            loan_repayment_freq=pm_cf_freq,
         )
         # Unpack: shadow backtest returns 7-tuple or 8-tuple (with pm_blocked_dates)
         if isinstance(_shadow_result, tuple) and len(_shadow_result) == 8:
@@ -344,6 +378,21 @@ def run_multi_backtest(
     common_start = max(start_dates) if start_dates else None
     global_start_val = start_val
 
+    # Resolve draw_start_date for Pass 2 re-runs
+    _p2_cfg = pm_config or {}
+    _p2_raw_draw_start = _p2_cfg.get("draw_start_date", None)
+    if _p2_raw_draw_start is not None:
+        if isinstance(_p2_raw_draw_start, str):
+            _p2_raw_draw_start = pd.Timestamp(_p2_raw_draw_start).date()
+        elif isinstance(_p2_raw_draw_start, datetime.datetime):
+            _p2_raw_draw_start = _p2_raw_draw_start.date()
+        _p2_bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+        _p2_bt_end = pd.Timestamp(end_date).date() if isinstance(end_date, str) else end_date
+        pm_draw_start_date = max(_p2_raw_draw_start, _p2_bt_start)
+        pm_draw_start_date = min(pm_draw_start_date, _p2_bt_end)
+    else:
+        pm_draw_start_date = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+
     if common_start:
         for i, res in enumerate(results_list):
             series = res.get("series")
@@ -395,13 +444,17 @@ def run_multi_backtest(
                                 start_date=common_start.strftime("%Y-%m-%d"),
                                 end_date=end_date,
                                 api_port_series=new_series,
-                                rebalance_freq="Custom",
+                                rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
                                 cashflow=shadow_cf,
                                 cashflow_freq=cashflow_freq,
                                 invest_dividends=invest_div,
                                 pay_down_margin=pay_down_margin,
                                 tax_config=tax_config,
                                 custom_rebal_config=reb if r_mode == "Custom" else {},
+                                rebalance_month=reb.get("month", 1),
+                                rebalance_day=reb.get("day", 1),
+                                custom_freq=reb.get("freq", "Yearly"),
+                                draw_start_date=pm_draw_start_date,
                             )
                             res["trades_df"] = new_trades
                             res["trades"] = new_trades
@@ -411,6 +464,20 @@ def run_multi_backtest(
                             res["unrealized_pl_df"] = new_unrealized
                             res["logs"] = new_logs
                             res["twr_series"] = new_twr
+                            # Rebuild API TWR from re-fetched response
+                            new_extra = res.get("raw_response")
+                            if new_extra and "daily_returns" in new_extra:
+                                d_rets = new_extra["daily_returns"]
+                                if d_rets:
+                                    try:
+                                        df_tmp = pd.DataFrame(d_rets, columns=["Date", "Pct", "Val"])
+                                        df_tmp["Date"] = pd.to_datetime(df_tmp["Date"])
+                                        df_tmp = df_tmp.set_index("Date").sort_index()
+                                        api_twr = (1 + df_tmp["Pct"] / 100.0).cumprod()
+                                        api_twr.name = "TWR (API)"
+                                        res["twr_series"] = api_twr
+                                    except Exception:
+                                        pass
                             res["shadow_range"] = f"{common_start.date()} to {end_date}"
                         except Exception as shadow_e:
                             logger.warning(f"Failed to re-run shadow for {res['name']}: {shadow_e}")
@@ -446,6 +513,7 @@ def run_multi_backtest(
                                 end_date,
                             )
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
+                            _pm_cfg2 = pm_config or {}
                             new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_ = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
@@ -464,6 +532,14 @@ def run_multi_backtest(
                                 rebalance_day=reb.get("day", 1),
                                 custom_freq=reb.get("freq", "Yearly"),
                                 threshold_pct=r_threshold,
+                                pm_buy_block=_pm_cfg2.get("pm_buy_block", False),
+                                pm_buy_block_threshold=_pm_cfg2.get("pm_buy_block_threshold", 100000.0),
+                                starting_loan=_pm_cfg2.get("starting_loan", 0.0),
+                                margin_rate_annual=_pm_cfg2.get("margin_rate_annual", 8.0),
+                                draw_monthly=_pm_cfg2.get("draw_monthly", 0.0),
+                                draw_start_date=pm_draw_start_date,
+                                loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
+                                loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
                             )
                             res["trades_df"] = new_trades
                             res["trades"] = new_trades
@@ -488,5 +564,11 @@ def run_multi_backtest(
                             )
                         except Exception as shadow_e:
                             logger.warning(f"Failed to re-run shadow for local {res['name']}: {shadow_e}")
+
+    # Align benchmarks to common_start (Bug 11 fix)
+    if common_start:
+        for j, b in enumerate(bench_series_list):
+            if b is not None and not b.empty and b.index[0] < common_start:
+                bench_series_list[j] = b[b.index >= common_start]
 
     return results_list, bench_series_list

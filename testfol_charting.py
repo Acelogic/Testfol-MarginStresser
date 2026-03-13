@@ -104,6 +104,9 @@ def _deserialize_result(item):
 # Payload Builder (API mode)
 # ─────────────────────────────────────────────────────────────────────────────
 
+_TAX_KEYS = {"pay_tax_margin", "pay_tax_cash", "other_income", "filing_status", "state_code", "tax_method"}
+
+
 def _build_payload(config, start_date, end_date, bearer_token):
     """Build a MultiBacktestRequest payload from Streamlit config."""
     portfolios_cfg = _get_portfolios_cfg(config)
@@ -142,6 +145,32 @@ def _build_payload(config, start_date, end_date, bearer_token):
         })
 
     gcf = config.get("global_cashflow", {})
+
+    # Approximate effective margin rate for buy-block loan estimation
+    _rate_cfg = config.get("rate_annual", 8.0)
+    if isinstance(_rate_cfg, dict):
+        _rtype = _rate_cfg.get("type", "Fixed")
+        if _rtype == "Fixed":
+            _approx_rate = _rate_cfg.get("rate_pct", 5.0)
+        else:
+            _tiers = _rate_cfg.get("tiers", [])
+            _spread = _tiers[0][1] if _tiers else _rate_cfg.get("spread_pct", 1.0)
+            _approx_rate = 4.5 + _spread
+    else:
+        _approx_rate = float(_rate_cfg)
+
+    _draw_start = config.get("draw_start_date", None)
+    pm_config = {
+        "pm_buy_block": config.get("pm_buy_block", False),
+        "pm_buy_block_threshold": config.get("pm_buy_block_threshold", 100000.0),
+        "starting_loan": config.get("starting_loan", 0.0),
+        "draw_monthly": config.get("draw_monthly", 0.0),
+        "draw_start_date": str(_draw_start) if _draw_start is not None else None,
+        "margin_rate_annual": _approx_rate,
+        "cashflow_for_loan": gcf.get("amount", 0.0),
+        "cashflow_freq": gcf.get("freq", "Monthly"),
+    }
+
     payload = {
         "portfolios": api_portfolios,
         "start_date": str(start_date),
@@ -153,8 +182,9 @@ def _build_payload(config, start_date, end_date, bearer_token):
             "invest_div": gcf.get("invest_div", True),
             "pay_down_margin": gcf.get("pay_down_margin", False),
         },
-        "tax_config": {k: v for k, v in config.items() if k.startswith(("st_rate", "lt_rate", "nii_rate", "state_rate", "tax_"))},
+        "tax_config": {k: v for k, v in config.items() if k in _TAX_KEYS},
         "bearer_token": bearer_token,
+        "pm_config": pm_config,
     }
     return payload
 
@@ -196,7 +226,7 @@ def _cached_fetch_backtest(*args, **kwargs):
 
 
 @st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
-def _cached_run_shadow_backtest(*args, **kwargs):
+def _cached_run_shadow_backtest(*args, _v=2, **kwargs):
     from app.core import run_shadow_backtest
     return run_shadow_backtest(*args, **kwargs)
 
@@ -247,12 +277,31 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
         return [], []
 
     gcf = config.get("global_cashflow", {})
-    tax_config = {k: v for k, v in config.items() if k.startswith(("st_rate", "lt_rate", "nii_rate", "state_rate", "tax_"))}
+    tax_config = {k: v for k, v in config.items() if k in _TAX_KEYS}
+
+    # Approximate effective margin rate for buy-block loan estimation
+    _rate_cfg = config.get("rate_annual", 8.0)
+    if isinstance(_rate_cfg, dict):
+        _rtype = _rate_cfg.get("type", "Fixed")
+        if _rtype == "Fixed":
+            _approx_rate = _rate_cfg.get("rate_pct", 5.0)
+        else:
+            # Variable/Tiered: base ~current fed + lowest spread
+            _tiers = _rate_cfg.get("tiers", [])
+            _spread = _tiers[0][1] if _tiers else _rate_cfg.get("spread_pct", 1.0)
+            _approx_rate = 4.5 + _spread  # conservative fed funds estimate
+    else:
+        _approx_rate = float(_rate_cfg)
 
     pm_config = {
         "pm_buy_block": config.get("pm_buy_block", False),
         "pm_buy_block_threshold": config.get("pm_buy_block_threshold", 100000.0),
         "starting_loan": config.get("starting_loan", 0.0),
+        "draw_monthly": config.get("draw_monthly", 0.0),
+        "draw_start_date": config.get("draw_start_date", None),
+        "margin_rate_annual": _approx_rate,
+        "cashflow_for_loan": gcf.get("amount", 0.0),
+        "cashflow_freq": gcf.get("freq", "Monthly"),
     }
 
     results_list, bench_series_list = run_multi_backtest(

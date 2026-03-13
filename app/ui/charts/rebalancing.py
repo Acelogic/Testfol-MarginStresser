@@ -333,7 +333,7 @@ def render_portfolio_allocation(
     st.plotly_chart(fig, use_container_width=True, key=f"port_alloc_area{key_suffix}")
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -593,7 +593,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             
         fig.update_layout(
             yaxis_title="Realized P&L ($)",
-            xaxis_title=view_freq[:-2], # Year/Quarter/Month
+            xaxis_title={"Yearly": "Year", "Quarterly": "Quarter", "Monthly": "Month", "Per Event": "Event"}.get(view_freq, view_freq),
             template="plotly_dark",
             showlegend=True,
             height=400,
@@ -607,17 +607,21 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             
             # 1. Calculate Annual Federal Tax (Base)
             federal_tax_annual = tax_library.calculate_tax_series_with_carryforward(
-                pl_by_year, 
+                pl_by_year,
                 other_income,
                 filing_status,
                 method=tax_method,
-                use_standard_deduction=use_standard_deduction
+                use_standard_deduction=use_standard_deduction,
+                retirement_income=retirement_income,
+                retirement_year=retirement_year,
             )
-            
+
             # 2. Calculate Annual State Tax (progressive brackets)
             state_tax_annual = tax_library.calculate_state_tax_series_with_carryforward(
                 pl_by_year, other_income, state_code, filing_status,
-                use_standard_deduction=use_standard_deduction
+                use_standard_deduction=use_standard_deduction,
+                retirement_income=retirement_income,
+                retirement_year=retirement_year,
             )
             
             total_tax_annual = federal_tax_annual + state_tax_annual
@@ -683,7 +687,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                 ))
                 fig_tax.update_layout(
                     yaxis_title="Tax Owed ($)",
-                    xaxis_title=view_freq[:-2], # Year/Quarter/Month
+                    xaxis_title={"Yearly": "Year", "Quarterly": "Quarter", "Monthly": "Month", "Per Event": "Event"}.get(view_freq, view_freq),
                     template="plotly_dark",
                     showlegend=False,
                     height=400,

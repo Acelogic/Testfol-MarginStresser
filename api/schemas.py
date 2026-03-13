@@ -50,6 +50,7 @@ class MultiBacktestRequest(BaseModel):
     cashflow: CashflowConfig = Field(default_factory=CashflowConfig)
     tax_config: dict = Field(default_factory=dict)
     bearer_token: Optional[str] = None
+    pm_config: Optional[dict] = None
 
 
 # --- Response models use dicts for flexibility (DataFrames serialized as JSON strings) ---

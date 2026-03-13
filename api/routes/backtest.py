@@ -136,6 +136,7 @@ def run_multi_backtest_endpoint(req: MultiBacktestRequest):
             pay_down_margin=req.cashflow.pay_down_margin,
             tax_config=req.tax_config,
             bearer_token=req.bearer_token,
+            pm_config=req.pm_config,
         )
 
         # Serialize results

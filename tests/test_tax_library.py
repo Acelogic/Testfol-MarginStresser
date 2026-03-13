@@ -129,6 +129,42 @@ def test_standard_deduction_mfs():
     assert get_standard_deduction(2025, "Married Filing Separately") == 30000 // 2  # 15000
 
 
+def test_collectible_tax_included():
+    """Collectible gains must produce non-zero tax (Bug 1: was computed but not returned)."""
+    tax = calculate_tax_on_realized_gains(
+        long_term_gain_collectible=100000.0,
+        other_income=50000.0,
+        year=2024,
+        filing_status="Single",
+        method="2024_fixed",
+        use_standard_deduction=False,
+    )
+    # Collectible taxed at min(ordinary_rate, 28%); at $50k stacking ≈ 22% bracket → 22%
+    # $100k * 22% = $22k, plus possible NIIT since MAGI=$150k < $200k → no NIIT
+    assert tax > 0
+    # Should be roughly $22k–$28k range
+    assert 15000 < tax < 35000
+
+
+def test_niit_uses_gross_income():
+    """NIIT MAGI must use pre-deduction gain values (Bug 2: was using post-deduction)."""
+    # $200k LT gain + $100k ordinary → MAGI = $300k; Single threshold = $200k
+    # Excess = $100k; NIIT = min($200k gain, $100k excess) * 3.8% = $3,800
+    tax_with_niit = calculate_tax_on_realized_gains(
+        long_term_gain=200000.0,
+        other_income=100000.0,
+        year=2024,
+        filing_status="Single",
+        method="2024_fixed",
+        use_standard_deduction=False,
+    )
+    # Without NIIT, bracket tax on $200k LT stacked on $100k:
+    # 0% up to $47,025, 15% on $47,025-$200k (all in 15% bracket)
+    bracket_tax = calculate_federal_tax(200000.0, 100000.0, "Single", year=2024)
+    niit = min(200000.0, (100000.0 + 200000.0) - 200000.0) * 0.038  # $3,800
+    assert tax_with_niit == pytest.approx(bracket_tax + niit, rel=1e-6)
+
+
 def test_year_passthrough_default_method():
     """Default method path must use year=2024 brackets when year=2024, not 2025."""
     # 2024 Single 0% threshold = $47,025; 2025 = $49,450

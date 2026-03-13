@@ -377,17 +377,21 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
     lt_tax = 0.0
     stacking_income = current_stack
     
+    # Save originals before mutation (needed for NIIT MAGI calculation)
+    orig_long_term_gain = long_term_gain
+
     if effective_lt_gain > 0:
         long_term_gain = effective_lt_gain
         if method == "historical_max_rate":
             load_capital_gains_rates(excel_path)
             # Fallback to closest year
+            lookup_year = year
             if year not in _CAP_GAINS_RATES:
                  if _CAP_GAINS_RATES:
-                     year = max(_CAP_GAINS_RATES.keys())
+                     lookup_year = max(_CAP_GAINS_RATES.keys())
                  else:
                      return 0.0
-            rate = _CAP_GAINS_RATES.get(year, 0.0)
+            rate = _CAP_GAINS_RATES.get(lookup_year, 0.0)
             lt_tax = long_term_gain * rate
             
         elif method == "historical_smart":
@@ -428,16 +432,16 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
             niit_threshold = 125000
         else:
             niit_threshold = 200000
-        magi = other_income + short_term_gain + long_term_gain + long_term_gain_collectible
+        magi = other_income + short_term_gain + orig_long_term_gain + long_term_gain_collectible
         if magi > niit_threshold:
             excess = magi - niit_threshold
             # NIIT applies to the lesser of (Net Investment Income) or (Excess MAGI)
             # NII = ST Gain + LT Gain + Collectible Gain
-            investment_income = short_term_gain + long_term_gain + long_term_gain_collectible
+            investment_income = short_term_gain + orig_long_term_gain + long_term_gain_collectible
             subject_to_niit = min(investment_income, excess)
             niit = subject_to_niit * 0.038
             
-    return st_tax + lt_tax + niit
+    return st_tax + collectible_tax + lt_tax + niit
 
 def calculate_federal_tax(realized_gain, other_income, filing_status="Single", year=2025):
     """
@@ -544,11 +548,14 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
 
     return total_tax
 
-def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, use_standard_deduction=True):
+def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, use_standard_deduction=True, retirement_income=None, retirement_year=None):
     """
     Calculates tax for a series of P&L (indexed by Year), handling loss carryforwards.
     Accepts either a Series (Total P&L) or a DataFrame (with 'Realized ST P&L' and 'Realized LT P&L').
     Returns a Series of Tax Owed.
+
+    If retirement_income and retirement_year are provided, other_income is replaced
+    with retirement_income for years >= retirement_year.
     """
     tax_owed_series = pd.Series(index=pl_series.index, dtype=float)
     
@@ -560,7 +567,11 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
     sorted_pl = pl_series.sort_index()
     
     for year, row in sorted_pl.iterrows() if isinstance(pl_series, pd.DataFrame) else sorted_pl.items():
-        
+        # Resolve income for this year (retirement income after draw start)
+        _year_income = other_income
+        if retirement_income is not None and retirement_year is not None and year >= retirement_year:
+            _year_income = retirement_income
+
         # Extract ST and LT gains/losses
         if isinstance(pl_series, pd.DataFrame):
             st_pl = row.get("Realized ST P&L", 0.0)
@@ -715,10 +726,10 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
             if deduction_amount > 0:
                 std_ded = 0.0
                 if use_standard_deduction:
-                    std_ded = get_standard_deduction(year, filing_status, income=other_income)
-                
-                base_taxable = max(0, other_income - std_ded)
-                reduced_taxable = max(0, other_income - deduction_amount - std_ded)
+                    std_ded = get_standard_deduction(year, filing_status, income=_year_income)
+
+                base_taxable = max(0, _year_income - std_ded)
+                reduced_taxable = max(0, _year_income - deduction_amount - std_ded)
                 
                 base_ordinary_tax = calculate_historical_tax(year, base_taxable, filing_status)
                 reduced_ordinary_tax = calculate_historical_tax(year, reduced_taxable, filing_status)
@@ -726,10 +737,10 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
         
         tax = calculate_tax_on_realized_gains(
             realized_gain=0, # Not used when st/lt provided
-            other_income=max(0, other_income - deduction_amount), 
-            year=year, 
-            filing_status=filing_status, 
-            method=method, 
+            other_income=max(0, _year_income - deduction_amount),
+            year=year,
+            filing_status=filing_status,
+            method=method,
             excel_path=excel_path,
             short_term_gain=final_st,
             long_term_gain=final_lt_std,
@@ -891,12 +902,15 @@ def calculate_state_tax(year, state_code, filing_status, other_income,
 
 def calculate_state_tax_series_with_carryforward(
     pl_series, other_income, state_code, filing_status="Single",
-    use_standard_deduction=True
+    use_standard_deduction=True, retirement_income=None, retirement_year=None,
 ):
     """
     Calculate state tax for a P&L series with loss carryforward.
     Mirrors calculate_tax_series_with_carryforward() for state taxes.
     Follows federal $3k capital loss deduction limit.
+
+    If retirement_income and retirement_year are provided, other_income is replaced
+    with retirement_income for years >= retirement_year.
     """
     if not state_code or state_code in NO_INCOME_TAX_STATES:
         return pd.Series(0.0, index=pl_series.index)
@@ -915,6 +929,11 @@ def calculate_state_tax_series_with_carryforward(
         has_st_lt = False
 
     for year in sorted(total_pl.index):
+        # Resolve income for this year (retirement income after draw start)
+        _year_income = other_income
+        if retirement_income is not None and retirement_year is not None and year >= retirement_year:
+            _year_income = retirement_income
+
         pl = float(total_pl[year])
 
         # Apply carryforward
@@ -947,7 +966,7 @@ def calculate_state_tax_series_with_carryforward(
             # else: all LT (default)
 
         tax = calculate_state_tax(
-            year, state_code, filing_status, other_income,
+            year, state_code, filing_status, _year_income,
             st_gain, lt_gain, use_standard_deduction
         )
         tax_series[year] = max(0.0, tax)

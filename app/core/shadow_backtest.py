@@ -55,7 +55,7 @@ def parse_ticker(ticker):
         pairs = query.split("&")
         for p in pairs:
             if "=" in p:
-                k, v = p.split("=")
+                k, v = p.split("=", 1)
                 params[k] = v
     else:
         base = ticker
@@ -240,7 +240,7 @@ def _check_drift(positions, allocation, threshold_pct):
     return max_drift > threshold_pct, max_drift, drifter
 
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=0.08):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, loan_repayment=0.0, loan_repayment_freq="Monthly"):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -272,9 +272,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     # PM Buy Block tracking
     pm_blocked_dates = []
     loan_balance = starting_loan
-    daily_rate = margin_rate_annual / 252.0
+    daily_rate = (margin_rate_annual / 100.0) / 252.0
+    _prev_month = None  # for monthly draw detection
+    if draw_monthly > 0:
+        _ds_label = str(draw_start_date) if draw_start_date is not None else "backtest start"
+        logs.append(f"Monthly Draw: ${draw_monthly:,.0f}/mo starting {_ds_label}")
     if pm_buy_block:
-        logs.append(f"PM Buy Block: Enabled (threshold ${pm_buy_block_threshold:,.0f}, loan ${starting_loan:,.0f})")
+        logs.append(f"PM Buy Block: Enabled (threshold ${pm_buy_block_threshold:,.0f}, loan ${starting_loan:,.0f}, rate {margin_rate_annual:.1f}%, draw ${draw_monthly:,.0f}/mo)")
 
     if cashflow > 0:
         logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
@@ -365,8 +369,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         
         # 4. Leverage (L, SW, SP)
         L = float(params.get('L', 1.0))
-        # 4. Leverage (L, SW, SP)
-        L = float(params.get('L', 1.0))
         SW = float(params.get('SW', 1.0))
         # Default SP = 0.0%
         SP = float(params.get('SP', 0.0))
@@ -434,28 +436,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         empty_series = pd.Series(dtype=float)
         empty_series.index = pd.DatetimeIndex([], dtype='datetime64[ns]')
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), logs, empty_series, pd.Series(dtype=float), []
-        
-    sim_start_date = valid_returns.index[0]
-    logs.append(f"First valid data found at: {sim_start_date.date()}")
-    
-    # ... (lines between omitted) ... need to be careful with multi-replace or use separate tool calls if distant.
-    # The first two blocks are close (missing_tickers is near valid_returns check).
-    
-    # The third block is at line 722. I can do the first two in one chunk if they are close.
-    # missing_tickers check ends around line 410?
-    # valid_returns check is around 420.
-    # They are contiguous in the file logic provided the lines I see above match.
-    
-    # Let's check line numbers again from Step 715 output.
-    # missing_tickers check is NOT shown in 715 output, it was replacing loop logic.
-    # But in Step 712 view:
-    # missing_tickers check is implied to be before line 400?
-    # Wait, the view in 712 starts at 350, loop ends, then logic continues.
-    # Actually, let's look at 709 output again.
-    # missing_tickers check is typically right after the loop.
-    
-    # I'll use separate replacement chunks or one big chunk if confidently contiguous.
-    # Let's verify line numbers. I'll read lines 400-430 again to be sure of context.
         
     sim_start_date = valid_returns.index[0]
     logs.append(f"First valid data found at: {sim_start_date.date()}")
@@ -551,9 +531,32 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         portfolio_history_dates.append(date)
         portfolio_history_vals.append(day_port_val)
 
-        # PM loan balance tracking (lightweight, for buy block threshold check)
-        if pm_buy_block and loan_balance > 0:
-            loan_balance *= (1 + daily_rate)
+        # Loan balance tracking (interest, draws, repayments)
+        if pm_buy_block or draw_monthly > 0 or loan_repayment > 0:
+            # Interest accrual
+            if loan_balance > 0:
+                loan_balance *= (1 + daily_rate)
+            # Monthly draw (on month change)
+            cur_month = date.month
+            if draw_monthly > 0 and _prev_month is not None and cur_month != _prev_month:
+                if draw_start_date is None or date.date() >= draw_start_date:
+                    loan_balance += draw_monthly
+                    logs.append(f"  💸 Draw {date.date()}: +${draw_monthly:,.0f} → loan ${loan_balance:,.0f}")
+            # Loan repayment (cashflow used to pay down margin)
+            if loan_repayment > 0 and loan_balance > 0 and i < len(dates) - 1:
+                next_date = dates[i + 1]
+                _repay = False
+                if loan_repayment_freq == "Monthly" and next_date.month != date.month:
+                    _repay = True
+                elif loan_repayment_freq == "Quarterly" and next_date.quarter != date.quarter:
+                    _repay = True
+                elif loan_repayment_freq == "Yearly" and next_date.year != date.year:
+                    _repay = True
+                if _repay:
+                    _pre_repay = loan_balance
+                    loan_balance = max(0, loan_balance - loan_repayment)
+                    logs.append(f"  💰 Repay {date.date()}: -${_pre_repay - loan_balance:,.0f} → loan ${loan_balance:,.0f}")
+            _prev_month = cur_month
 
         # Calculate TWR
         # Return = Current Pre-Flow / Previous Post-Flow
@@ -625,9 +628,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # Update baseline for next day's return calculation
         prev_post_flow_val = day_port_val
             
-        # 3. Check for Rebalance
-        should_rebal = False
-        
         # 3. Check for Rebalance
         should_rebal = False
         
@@ -723,14 +723,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
 
         # No forced rebalance on last day
                 
-        # 4. Execute Rebalance
-        buys_blocked = False
-        if should_rebal and pm_buy_block and loan_balance > 0:
-            estimated_equity = day_port_val - loan_balance
+        # 4. PM Buy Block — skip entire rebalance when equity < threshold
+        if should_rebal and pm_buy_block:
+            estimated_equity = day_port_val - max(loan_balance, 0)
             if estimated_equity < pm_buy_block_threshold:
-                buys_blocked = True
+                should_rebal = False
                 pm_blocked_dates.append(date)
-                logs.append(f"\n  ⛔ PM Buy Block: Equity ${estimated_equity:,.0f} < ${pm_buy_block_threshold:,.0f} — buys skipped")
+                logs.append(f"\n  ⛔ PM Buy Block: Equity ${estimated_equity:,.0f} < ${pm_buy_block_threshold:,.0f} (loan ${loan_balance:,.0f}) — rebalance skipped")
 
         if should_rebal:
             logs.append(f"\n[REBALANCE] {date.date()} | Portfolio Value: ${day_port_val:,.2f}")
@@ -764,10 +763,6 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                 tax_treatment = get_tax_treatment(ticker)
                 
                 if trade_amt > 0: # BUY
-                    if buys_blocked:
-                        logs.append(f"{ticker:<10} {'SKIP':<6} ${trade_amt:,.2f}      PM Buy Block")
-                        continue  # Skip this buy — sells still execute
-
                     total_qty = sum(lot.quantity for lot in tax_lots[ticker])
                     if total_qty > 0:
                         current_price = current_pos / total_qty
@@ -854,7 +849,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                             shares_remaining_to_sell -= sold_qty
                             
                     positions[ticker] += trade_amt # trade_amt is negative
-                    
+
                     logs.append(f"{ticker:<10} {'SELL':<6} ${sell_val:,.2f}      ${st_gain:,.2f}      ${lt_gain:,.2f}")
                     
                     trades.append({
@@ -881,9 +876,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         if is_month_end:
             total_unrealized = 0
             for t in tickers:
-                current_val = positions[t]
+                pos_val = positions[t]
                 total_basis = sum(lot.total_cost_basis for lot in tax_lots[t])
-                total_unrealized += (current_val - total_basis)
+                total_unrealized += (pos_val - total_basis)
                 
             unrealized_pl_by_year.append({
                 "Date": date,

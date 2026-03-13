@@ -45,6 +45,7 @@ def calculate_tax_adjusted_equity(
     loan_series: pd.Series,
     rate_annual: float,
     draw_monthly: float = 0.0,
+    draw_start_date=None,
 ) -> tuple[pd.Series, pd.Series]:
     """
     Simulates the equity curve if taxes AND draws were paid from capital (reducing the base).
@@ -70,6 +71,9 @@ def calculate_tax_adjusted_equity(
         months = base_equity_series.index.month
         month_changes = months != pd.Series(months, index=base_equity_series.index).shift(1)
         month_changes[0] = False
+        if draw_start_date is not None:
+            after_start = base_equity_series.index >= pd.Timestamp(draw_start_date)
+            month_changes = month_changes & after_start
         draws[month_changes] = draw_monthly
 
     taxes = tax_payment_series.reindex(base_equity_series.index, fill_value=0.0)
@@ -177,7 +181,7 @@ def process_rebalancing_data(
                 elif trade_amt < 0: # SELL
                     sell_amt = -trade_amt
                     if curr_val > 0:
-                        fraction_sold = sell_amt / curr_val
+                        fraction_sold = sell_amt / (curr_val + sell_amt)
                         # Cap fraction at 1.0
                         fraction_sold = min(fraction_sold, 1.0)
 
@@ -234,8 +238,10 @@ def generate_stats(series: pd.Series) -> dict:
     if not series.empty:
         yearly = series.resample('YE').last().pct_change()
         if not yearly.empty:
-             best_year = yearly.max() * 100
-             worst_year = yearly.min() * 100
+             yearly = yearly.iloc[1:]  # Drop partial first year
+             if not yearly.empty:
+                 best_year = yearly.max() * 100
+                 worst_year = yearly.min() * 100
 
     # Sortino Ratio
     sortino = 0.0
