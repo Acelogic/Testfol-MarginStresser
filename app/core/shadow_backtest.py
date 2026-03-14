@@ -1,5 +1,6 @@
 import contextlib
 import io
+import logging
 import os
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -9,6 +10,8 @@ import pandas as pd
 import yfinance as yf
 
 from app.common.constants import Freq
+
+log = logging.getLogger("shadow_backtest")
 
 @dataclass
 class TaxLot:
@@ -243,7 +246,7 @@ def _check_drift(positions, allocation, threshold_pct):
     return max_drift > threshold_pct, max_drift, drifter
 
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, loan_repayment=0.0, loan_repayment_freq="Monthly"):
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly"):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -264,6 +267,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
 
     # Initialize logs
     logs = []
+    log.info("Shadow Backtest started: %d tickers, %s to %s", len(tickers), start_date, end_date)
+    log.info("Config: loan=$%,.0f rate=%.2f%% draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
+             starting_loan, margin_rate_annual, draw_monthly, draw_monthly_retirement,
+             draw_start_date, retirement_date, dca_in_retirement)
     logs.append(f"Starting Shadow Backtest for {len(tickers)} tickers.")
     logs.append(f"Timeframe: {start_date} to {end_date}")
     logs.append(f"Rebalance Frequency: {rebalance_freq}")
@@ -277,9 +284,11 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     loan_balance = starting_loan
     daily_rate = (1 + margin_rate_annual / 100.0) ** (1.0 / 252.0) - 1
     _prev_month = None  # for monthly draw detection (set after dates is established)
-    if draw_monthly > 0:
+    if draw_monthly > 0 or draw_monthly_retirement > 0:
         _ds_label = str(draw_start_date) if draw_start_date is not None else "backtest start"
         logs.append(f"Monthly Draw: ${draw_monthly:,.0f}/mo starting {_ds_label}")
+        if draw_monthly_retirement > 0 and retirement_date is not None:
+            logs.append(f"Retirement Draw: ${draw_monthly_retirement:,.0f}/mo starting {retirement_date}")
     if pm_buy_block:
         logs.append(f"PM Buy Block: Enabled (threshold ${pm_buy_block_threshold:,.0f}, loan ${starting_loan:,.0f}, rate {margin_rate_annual:.1f}%, draw ${draw_monthly:,.0f}/mo)")
 
@@ -536,16 +545,23 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         portfolio_history_vals.append(day_port_val)
 
         # Loan balance tracking (interest, draws, repayments)
-        if pm_buy_block or draw_monthly > 0 or loan_repayment > 0:
+        if pm_buy_block or draw_monthly > 0 or draw_monthly_retirement > 0 or loan_repayment > 0:
             # Interest accrual
             if loan_balance > 0:
                 loan_balance *= (1 + daily_rate)
             # Monthly draw (on month change)
             cur_month = date.month
-            if draw_monthly > 0 and _prev_month is not None and cur_month != _prev_month:
+            if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and cur_month != _prev_month:
                 if draw_start_date is None or date.date() >= draw_start_date:
-                    loan_balance += draw_monthly
-                    logs.append(f"  💸 Draw {date.date()}: +${draw_monthly:,.0f} → loan ${loan_balance:,.0f}")
+                    _cur_date = date.date()
+                    if draw_monthly_retirement > 0 and retirement_date is not None and _cur_date >= retirement_date:
+                        _draw_amt = draw_monthly_retirement
+                    else:
+                        _draw_amt = draw_monthly
+                    if _draw_amt > 0:
+                        loan_balance += _draw_amt
+                        _draw_label = "RetDraw" if (retirement_date is not None and _cur_date >= retirement_date) else "Draw"
+                        logs.append(f"  💸 {_draw_label} {_cur_date}: +${_draw_amt:,.0f} → loan ${loan_balance:,.0f}")
             # Loan repayment (cashflow used to pay down margin)
             if loan_repayment > 0 and loan_balance > 0 and i < len(dates) - 1:
                 next_date = dates[i + 1]
@@ -576,7 +592,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
-            if cashflow_freq == Freq.YEARLY:
+            # Stop DCA after draw start date if dca_in_retirement is False
+            if not dca_in_retirement and draw_start_date is not None and date.date() >= draw_start_date:
+                should_inject = False
+            elif cashflow_freq == Freq.YEARLY:
                 if i < len(dates) - 1 and dates[i+1].year != date.year:
                     should_inject = True
             elif cashflow_freq == Freq.QUARTERLY:

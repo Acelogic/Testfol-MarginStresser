@@ -46,6 +46,8 @@ def calculate_tax_adjusted_equity(
     rate_annual: float,
     draw_monthly: float = 0.0,
     draw_start_date=None,
+    draw_monthly_retirement: float = 0.0,
+    retirement_date=None,
 ) -> tuple[pd.Series, pd.Series]:
     """
     Simulates the equity curve if taxes AND draws were paid from capital (reducing the base).
@@ -59,7 +61,7 @@ def calculate_tax_adjusted_equity(
     asset_returns = port_series.pct_change().fillna(0)
 
     # 2. Daily Interest Rate
-    daily_rate = (1 + rate_annual/100)**(1/365.25) - 1
+    daily_rate = (1 + rate_annual/100)**(1/252) - 1
 
     # 3. Create "External Flow" Series (B_t)
     # B_t = Loan_{t-1} * (r_asset - r_loan) - Draws - Taxes
@@ -67,14 +69,21 @@ def calculate_tax_adjusted_equity(
     loan_component = loan_series * (asset_returns - daily_rate)
 
     draws = pd.Series(0.0, index=base_equity_series.index)
-    if draw_monthly > 0:
+    if draw_monthly > 0 or draw_monthly_retirement > 0:
         months = base_equity_series.index.month
         month_changes = months != pd.Series(months, index=base_equity_series.index).shift(1)
         month_changes[0] = False
         if draw_start_date is not None:
             after_start = base_equity_series.index >= pd.Timestamp(draw_start_date)
             month_changes = month_changes & after_start
-        draws[month_changes] = draw_monthly
+        if draw_monthly_retirement > 0 and retirement_date is not None:
+            after_ret = base_equity_series.index >= pd.Timestamp(retirement_date)
+            pre_ret = month_changes & ~after_ret
+            post_ret = month_changes & after_ret
+            draws[pre_ret] = draw_monthly
+            draws[post_ret] = draw_monthly_retirement
+        else:
+            draws[month_changes] = draw_monthly
 
     taxes = tax_payment_series.reindex(base_equity_series.index, fill_value=0.0)
 
@@ -238,9 +247,12 @@ def generate_stats(series: pd.Series) -> dict:
     if not series.empty:
         yearly = series.resample('YE').last().pct_change()
         if not yearly.empty:
-             yearly = yearly.iloc[1:]  # Drop partial first year
-             if len(yearly) > 1:
-                 yearly = yearly.iloc[:-1]  # Drop partial last year
+             yearly = yearly.iloc[1:]  # Drop partial first year (NaN from pct_change)
+             # Drop partial last year only if the series doesn't end near Dec 31
+             if len(yearly) > 1 and not series.empty:
+                 last_day = series.index[-1]
+                 if last_day.month < 12 or last_day.day < 25:
+                     yearly = yearly.iloc[:-1]
              if not yearly.empty:
                  best_year = yearly.max() * 100
                  worst_year = yearly.min() * 100
