@@ -266,7 +266,7 @@ def get_standard_deduction(year, filing_status, income=0):
     """
     # MFS deduction = half of MFJ
     if filing_status == "Married Filing Separately":
-        return get_standard_deduction(year, "Married Filing Jointly", income=income) // 2
+        return get_standard_deduction(year, "Married Filing Jointly", income=income) / 2
 
     # Normalize filing status
     if filing_status not in ["Single", "Married Filing Jointly", "Head of Household"]:
@@ -395,28 +395,32 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
             lt_tax = long_term_gain * rate
             
         elif method == "historical_smart":
-            # For modern years (2024+), use the specific fixed brackets
-            if year >= 2024:
+            # For modern years (2013+, ATRA 0/15/20% system), use the specific fixed brackets
+            if year >= 2013:
                 lt_tax = calculate_federal_tax(long_term_gain, stacking_income, filing_status, year=year)
             else:
-                # Historical Logic (Pre-2024)
+                # Historical Logic (Pre-2013)
                 # 1. Calculate Regular Tax with Inclusion Rate
                 inclusion_rate = get_capital_gains_inclusion_rate(year)
                 taxable_lt_gain = long_term_gain * inclusion_rate
-                
+
                 # Marginal tax on the included gain
                 # Stacked on top of stacking_income
                 total_income_regular = stacking_income + taxable_lt_gain
                 tax_total_regular = calculate_historical_tax(year, total_income_regular, filing_status)
                 tax_base_regular = calculate_historical_tax(year, stacking_income, filing_status)
                 regular_tax_liability = max(0, tax_total_regular - tax_base_regular)
-                
-                # 2. Calculate Alternative Tax (Max Rate Cap)
-                load_capital_gains_rates(excel_path)
-                max_rate = _CAP_GAINS_RATES.get(year, 0.35) 
-                alternative_tax_liability = long_term_gain * max_rate
-                
-                lt_tax = min(regular_tax_liability, alternative_tax_liability)
+
+                # 2. Calculate Alternative Tax (Max Rate Cap) — only for pre-1987 years
+                # For 1987+ with inclusion_rate=1.0, gains are fully included at ordinary rates
+                # and there is no alternative minimum cap on capital gains
+                if year < 1987:
+                    load_capital_gains_rates(excel_path)
+                    max_rate = _CAP_GAINS_RATES.get(year, 0.35)
+                    alternative_tax_liability = long_term_gain * max_rate
+                    lt_tax = min(regular_tax_liability, alternative_tax_liability)
+                else:
+                    lt_tax = regular_tax_liability
     
         else:
             # Default: 2024 Fixed Brackets
@@ -548,14 +552,15 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
 
     return total_tax
 
-def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, use_standard_deduction=True, retirement_income=None, retirement_year=None):
+def calculate_tax_series_with_carryforward(pl_series, other_income, filing_status="Single", method="2024_fixed", excel_path=DEFAULT_CAP_GAINS_EXCEL_PATH, use_standard_deduction=True, retirement_income=None, retirement_year=None, retirement_date=None):
     """
     Calculates tax for a series of P&L (indexed by Year), handling loss carryforwards.
     Accepts either a Series (Total P&L) or a DataFrame (with 'Realized ST P&L' and 'Realized LT P&L').
     Returns a Series of Tax Owed.
 
     If retirement_income and retirement_year are provided, other_income is replaced
-    with retirement_income for years >= retirement_year.
+    with retirement_income for years >= retirement_year. In the retirement year itself,
+    income is prorated based on the retirement_date day-of-year.
     """
     tax_owed_series = pd.Series(index=pl_series.index, dtype=float)
     
@@ -567,10 +572,16 @@ def calculate_tax_series_with_carryforward(pl_series, other_income, filing_statu
     sorted_pl = pl_series.sort_index()
     
     for year, row in sorted_pl.iterrows() if isinstance(pl_series, pd.DataFrame) else sorted_pl.items():
-        # Resolve income for this year (retirement income after draw start)
+        # Resolve income for this year (retirement income after retirement)
         _year_income = other_income
         if retirement_income is not None and retirement_year is not None and year >= retirement_year:
-            _year_income = retirement_income
+            if year == retirement_year and retirement_date is not None:
+                # Prorate: pre-retirement fraction gets other_income, post gets retirement_income
+                _doy = retirement_date.timetuple().tm_yday if hasattr(retirement_date, 'timetuple') else 1
+                _frac_pre = (_doy - 1) / 365.0
+                _year_income = other_income * _frac_pre + retirement_income * (1 - _frac_pre)
+            else:
+                _year_income = retirement_income
 
         # Extract ST and LT gains/losses
         if isinstance(pl_series, pd.DataFrame):
@@ -903,6 +914,7 @@ def calculate_state_tax(year, state_code, filing_status, other_income,
 def calculate_state_tax_series_with_carryforward(
     pl_series, other_income, state_code, filing_status="Single",
     use_standard_deduction=True, retirement_income=None, retirement_year=None,
+    retirement_date=None,
 ):
     """
     Calculate state tax for a P&L series with loss carryforward.
@@ -929,10 +941,15 @@ def calculate_state_tax_series_with_carryforward(
         has_st_lt = False
 
     for year in sorted(total_pl.index):
-        # Resolve income for this year (retirement income after draw start)
+        # Resolve income for this year (retirement income after retirement)
         _year_income = other_income
         if retirement_income is not None and retirement_year is not None and year >= retirement_year:
-            _year_income = retirement_income
+            if year == retirement_year and retirement_date is not None:
+                _doy = retirement_date.timetuple().tm_yday if hasattr(retirement_date, 'timetuple') else 1
+                _frac_pre = (_doy - 1) / 365.0
+                _year_income = other_income * _frac_pre + retirement_income * (1 - _frac_pre)
+            else:
+                _year_income = retirement_income
 
         pl = float(total_pl[year])
 
