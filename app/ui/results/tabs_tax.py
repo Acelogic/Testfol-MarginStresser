@@ -28,6 +28,7 @@ def render_tax_impact_tab(
     repayment_series: pd.Series | None,
     twr_series: pd.Series | None,
     stats: dict,
+    draw_start_date=None,
 ) -> None:
     with tab:
         st.markdown("### Annual Tax Impact Analysis")
@@ -49,6 +50,7 @@ def render_tax_impact_tab(
                 final_adj_series, annual_total_tax, equity_series,
                 loan_series, port_series, rate_annual, draw_monthly,
                 starting_loan, wmaint, pay_tax_cash, repayment_series,
+                draw_start_date=draw_start_date,
             )
         elif not (pay_tax_margin or pay_tax_cash):
             st.warning("Tax Simulation is set to **None (Gross)**. Enable 'Pay from Cash' or 'Pay with Margin' to see tax impact analysis.")
@@ -130,6 +132,7 @@ def _render_tax_impact_chart(
     wmaint: float,
     pay_tax_cash: bool,
     repayment_series: pd.Series | None,
+    draw_start_date=None,
 ) -> None:
     # Annual Ending Balance (Tax Adjusted)
     annual_bal = final_adj_series.resample("YE").last()
@@ -141,13 +144,13 @@ def _render_tax_impact_chart(
     if pay_tax_cash:
         empty_tax = pd.Series(0.0, index=equity_series.index)
         gross_cash_series, _ = calculations.calculate_tax_adjusted_equity(
-            equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly
+            equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date
         )
         market_val_series = gross_cash_series
     else:
         gross_margin_loan, gross_margin_equity, _, _, _ = api.simulate_margin(
             port_series, starting_loan, rate_annual, draw_monthly, wmaint,
-            tax_series=None, repayment_series=repayment_series
+            tax_series=None, repayment_series=repayment_series, draw_start_date=draw_start_date
         )
         market_val_series = gross_margin_equity
 

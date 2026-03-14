@@ -11,13 +11,9 @@ import os
 import re
 
 # Ensure we can import from data/etf_xray/src
-sys.path.append(os.path.join(os.getcwd(), "data/etf_xray/src"))
-try:
-    import etf_holdings_fetcher
-except ImportError:
-    # Handle if run from different CWD
-    sys.path.append(os.path.join(os.path.dirname(__file__), "../../data/etf_xray/src"))
-    import etf_holdings_fetcher
+_project_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../..")
+sys.path.append(os.path.join(_project_root, "data/etf_xray/src"))
+import etf_holdings_fetcher
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +23,7 @@ NAME_TO_TICKER = {}
 try:
     # Updated path after separate module refactor
     # Assets are now in data/ndx_simulation/data/assets
-    assets_dir = os.path.join(os.getcwd(), "data/ndx_simulation/data/assets")
-    
-    # Try alternate location if cwd is different (e.g. running from test suite)
-    if not os.path.exists(assets_dir):
-         assets_dir = os.path.join(os.path.dirname(__file__), "../../data/ndx_simulation/data/assets")
+    assets_dir = os.path.join(_project_root, "data/ndx_simulation/data/assets")
          
     json_path = os.path.join(assets_dir, "company_tickers.json")
     if os.path.exists(json_path):

@@ -67,6 +67,8 @@ def _serialize_result(r: dict) -> BacktestResult:
         sim_range=r.get("sim_range", ""),
         shadow_range=r.get("shadow_range", ""),
         wmaint=r.get("wmaint", 0.25),
+        wmaint_pm=r.get("wmaint_pm", 0.0),
+        pm_blocked_dates=r.get("pm_blocked_dates", []),
     )
 
 
@@ -122,6 +124,7 @@ def run_multi_backtest_endpoint(req: MultiBacktestRequest):
                 "name": p.name,
                 "allocation": p.allocation,
                 "maint_pcts": p.maint_pcts,
+                "pm_maint_pcts": p.pm_maint_pcts,
                 "rebalance": p.rebalance.model_dump(),
             })
 

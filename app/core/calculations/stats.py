@@ -9,7 +9,7 @@ def calculate_cagr(series: pd.Series) -> float:
     start_val = series.iloc[0]
     end_val = series.iloc[-1]
     years = (series.index[-1] - series.index[0]).days / 365.25
-    if years <= 0: return 0.0
+    if years <= 0 or start_val <= 0: return 0.0
     cagr = ((end_val / start_val) ** (1 / years) - 1) * 100
     return cagr
 
@@ -108,7 +108,7 @@ def process_rebalancing_data(
     Process rebalancing events to calculate trade amounts and realized P&L.
     """
     if not rebal_events:
-        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        return pd.DataFrame(), pd.Series(dtype=float), pd.DataFrame()
 
     trades = []
     composition = []
@@ -161,7 +161,7 @@ def process_rebalancing_data(
                 trade_amt = port_val * (trade_pct / 100)
 
                 # Current Value (Post-Rebalance)
-                curr_val = port_val * (target_weight / 100)
+                curr_val = port_val * (target_weight / total_alloc)
 
                 # Record composition snapshot
                 composition.append({
@@ -239,6 +239,8 @@ def generate_stats(series: pd.Series) -> dict:
         yearly = series.resample('YE').last().pct_change()
         if not yearly.empty:
              yearly = yearly.iloc[1:]  # Drop partial first year
+             if len(yearly) > 1:
+                 yearly = yearly.iloc[:-1]  # Drop partial last year
              if not yearly.empty:
                  best_year = yearly.max() * 100
                  worst_year = yearly.min() * 100

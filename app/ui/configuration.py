@@ -220,7 +220,9 @@ def render():
             with st.container():
                 c_name, c_save, c_del = st.columns([6, 1, 1])
                 with c_name:
-                    p["name"] = st.text_input("Portfolio Name", p["name"], key="p_name", label_visibility="collapsed")
+                    if "p_name" not in st.session_state:
+                        st.session_state["p_name"] = p["name"]
+                    p["name"] = st.text_input("Portfolio Name", key="p_name", label_visibility="collapsed")
 
                 with c_save:
                     if st.button("💾", key="p_save", help="Save as new Preset", use_container_width=True):
@@ -345,7 +347,7 @@ def render():
             try:
                 p_alloc_preview, p_maint_preview = api.table_to_dicts(p["alloc_df"])
                 p_total_weight = sum(p_alloc_preview.values())
-                d_maint = config.get('default_maint', 25.0)
+                d_maint = st.session_state.get('default_maint', config.get('default_maint', 25.0))
                 p_wmaint = sum(
                     (wt/100) * (p_maint_preview.get(t.split("?")[0], d_maint)/100)
                     for t, wt in p_alloc_preview.items()

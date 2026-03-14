@@ -29,7 +29,7 @@ def render_debug_tab(
         st.write("Raw API Response (First 5 items):")
         st.write(str(raw_response)[:1000])
 
-        json_str = json.dumps(raw_response, indent=2)
+        json_str = json.dumps(raw_response, indent=2, default=str)
         st.download_button(
             label="Download Raw Response",
             data=json_str,

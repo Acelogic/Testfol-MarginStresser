@@ -945,7 +945,7 @@ def render_ndx_scanner():
     }
 
     # Apply styling for status colors
-    styled_df = filtered_df.style.applymap(
+    styled_df = filtered_df.style.map(
         lambda x: 'color: #ff4b4b' if '🔴' in str(x) else 'color: #21c354',
         subset=['Status']
     )

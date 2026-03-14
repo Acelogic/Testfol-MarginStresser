@@ -30,12 +30,13 @@ def run_monte_carlo(
     
     # --- Mode 2: Custom Parameters (Synthetic) ---
     if custom_mean_annual is not None and custom_vol_annual is not None:
-        # Convert annual to daily
-        daily_mean = custom_mean_annual / 252.0
-        daily_vol = custom_vol_annual / np.sqrt(252.0)
-        
-        # Generate Gaussian noise (IID)
-        sim_returns = np.random.normal(daily_mean, daily_vol, size=(n_days, n_sims))
+        # Convert annual to daily using log-return correction for variance drag
+        daily_log_mean = (np.log(1 + custom_mean_annual) - 0.5 * custom_vol_annual**2) / 252.0
+        daily_log_vol = custom_vol_annual / np.sqrt(252.0)
+
+        # Generate log-normal returns (IID)
+        log_returns = np.random.normal(daily_log_mean, daily_log_vol, size=(n_days, n_sims))
+        sim_returns = np.exp(log_returns) - 1
         
     else:
         # --- Mode 1 & 3: Historical Bootstrap (Filtered or Full) ---

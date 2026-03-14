@@ -81,7 +81,7 @@ def run_single_backtest(
     if total_w > 0:
         for ticker, weight in alloc_map.items():
             m = maint_pcts.get(ticker.split("?")[0], d_maint)
-            current_wmaint += (weight / 100) * (m / 100)
+            current_wmaint += (weight / total_w) * (m / 100)
     else:
         current_wmaint = d_maint / 100.0
 
@@ -438,6 +438,7 @@ def run_multi_backtest(
                         # Re-run shadow backtest aligned
                         try:
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
+                            _pm_cfg_p2 = pm_config or {}
                             new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_ = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
@@ -454,7 +455,15 @@ def run_multi_backtest(
                                 rebalance_month=reb.get("month", 1),
                                 rebalance_day=reb.get("day", 1),
                                 custom_freq=reb.get("freq", "Yearly"),
+                                threshold_pct=r_threshold,
+                                pm_buy_block=_pm_cfg_p2.get("pm_buy_block", False),
+                                pm_buy_block_threshold=_pm_cfg_p2.get("pm_buy_block_threshold", 100000.0),
+                                starting_loan=_pm_cfg_p2.get("starting_loan", 0.0),
+                                margin_rate_annual=_pm_cfg_p2.get("margin_rate_annual", 8.0),
+                                draw_monthly=_pm_cfg_p2.get("draw_monthly", 0.0),
                                 draw_start_date=pm_draw_start_date,
+                                loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
+                                loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
                             )
                             res["trades_df"] = new_trades
                             res["trades"] = new_trades

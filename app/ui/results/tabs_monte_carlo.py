@@ -25,6 +25,7 @@ def render_monte_carlo_tab(
         st.markdown("### 🔮 Monte Carlo Simulation (Historical Bootstrap)")
         st.info("Simulating **10-year future performance** based on your strategy's historical daily volatility. Assumes reinvestment of all returns.")
 
+        mc_results = None
         if daily_rets.empty:
             st.error("No return data available for Monte Carlo.")
             return
@@ -38,8 +39,8 @@ def render_monte_carlo_tab(
         def_start = results.get("start_val", 10000.0)
         sim_start = c_start.number_input("Start Value ($)", value=float(def_start), step=1000.0, key=f"mc_start_{portfolio_name}")
 
-        cf_amt = results.get("cashflow", 0.0)
-        cf_freq = results.get("cashfreq", "None")
+        cf_amt = config.get("cashflow", results.get("cashflow", 0.0))
+        cf_freq = config.get("cashflow_freq", results.get("cashfreq", "None"))
         def_monthly = 0.0
         if cf_freq == 'Monthly': def_monthly = cf_amt
         elif cf_freq == 'Quarterly': def_monthly = cf_amt / 3
@@ -259,9 +260,12 @@ def _render_seasonal_tab(
 
 
 def _log_mc_to_csv(mc_results: dict, n_sims: int) -> None:
+    if not os.environ.get("TESTFOL_DEBUG"):
+        return
     try:
-        os.makedirs("debug_tools", exist_ok=True)
-        log_path = "debug_tools/monte_carlo_scenarios.csv"
+        debug_dir = os.path.join(os.path.dirname(__file__), "../../../debug_tools")
+        os.makedirs(debug_dir, exist_ok=True)
+        log_path = os.path.join(debug_dir, "monte_carlo_scenarios.csv")
 
         paths_df = mc_results["paths"]
         final_vals = paths_df.iloc[-1]

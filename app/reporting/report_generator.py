@@ -54,7 +54,7 @@ def _generate_comparison_section(results_list):
         row = {
             "Portfolio": res.get("name", "Unknown"),
             "CAGR": stats.get("cagr", 0),
-            "Vol": stats.get("vol", 0),
+            "Vol": stats.get("std", stats.get("volatility", stats.get("vol", 0))),
             "Max DD": stats.get("max_drawdown", 0),
             "Sharpe": stats.get("sharpe", 0),
             "End Value": end_val
@@ -73,9 +73,12 @@ def _generate_comparison_section(results_list):
     for _, row in df_compare.iterrows():
         table_html += "<tr>"
         table_html += f"<td><strong>{row['Portfolio']}</strong></td>"
-        table_html += f"<td>{row['CAGR']:.2%}</td>"
-        table_html += f"<td>{row['Vol']:.2%}</td>"
-        table_html += f"<td>{row['Max DD']:.2%}</td>"
+        cagr_val = row['CAGR'] / 100 if abs(row['CAGR']) > 1 else row['CAGR']
+        vol_val = row['Vol'] / 100 if abs(row['Vol']) > 1 else row['Vol']
+        dd_val = row['Max DD'] / 100 if abs(row['Max DD']) > 1 else row['Max DD']
+        table_html += f"<td>{cagr_val:.2%}</td>"
+        table_html += f"<td>{vol_val:.2%}</td>"
+        table_html += f"<td>{dd_val:.2%}</td>"
         table_html += f"<td>{row['Sharpe']:.2f}</td>"
         table_html += f"<td>${row['End Value']:,.2f}</td>"
         table_html += "</tr>"
@@ -226,7 +229,7 @@ def _get_head_template():
         <title>Testfol Backtest Report</title>
         <style>
             body {{ font-family: 'Helvetica', 'Arial', sans-serif; color: #333; line-height: 1.6; margin: 0; padding: 20px; background: #f4f4f9; }}
-            .container {{ max_width: 1000px; margin: 0 auto; background: white; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+            .container {{ max-width: 1000px; margin: 0 auto; background: white; padding: 40px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
             h1 {{ color: #2c3e50; border-bottom: 2px solid #eee; padding-bottom: 10px; margin-top: 40px; }}
             h2 {{ color: #34495e; margin-top: 30px; }}
             .section-divider {{ margin: 50px 0; border: 0; border-top: 2px solid #ccc; }}

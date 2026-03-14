@@ -72,10 +72,35 @@ def render():
                 label_visibility="collapsed",
             )
 
-        with st.expander("API Settings"):
-             bearer_token = st.text_input("Bearer Token (Optional)", type="password", help="Overrides TESTFOL_API_KEY env var if set.")
-             # Store in session state for use by other components (e.g., NDX Scanner)
+        import os
+        from app.services.testfol_auth import get_token as _get_auth_token, login_with_credentials, get_user_email
+        _has_env_auth = bool(os.environ.get("TESTFOL_EMAIL") or os.environ.get("TESTFOL_API_KEY"))
+        _is_logged_in = bool(_get_auth_token())
+        with st.expander("API Settings", expanded=_has_env_auth or _is_logged_in):
+             # Testfol login
+             if not _is_logged_in:
+                 st.markdown("**Testfol Login**")
+                 _tf_email = st.text_input("Email", key="_tf_email", label_visibility="collapsed", placeholder="Email")
+                 _tf_pass = st.text_input("Password", type="password", key="_tf_pass", label_visibility="collapsed", placeholder="Password")
+                 if st.button("Sign In", use_container_width=True):
+                     if _tf_email and _tf_pass:
+                         try:
+                             login_with_credentials(_tf_email, _tf_pass)
+                             st.rerun()
+                         except Exception as e:
+                             st.error(f"Login failed: {e}")
+                     else:
+                         st.warning("Enter email and password")
+                 st.divider()
+
+             bearer_token = st.text_input("Bearer Token (Override)", type="password", help="Manual token — overrides auto-login if set.")
              st.session_state._bearer_token = bearer_token
+             _token = bearer_token or _get_auth_token()
+             if _token:
+                 _email = get_user_email()
+                 st.caption(f"🟢 {_email}" if _email else "🟢 Authenticated (Pro API)")
+             else:
+                 st.caption("🔴 No token — limited to 10 tickers")
         
     return start_date, end_date, bearer_token, run_placeholder
 

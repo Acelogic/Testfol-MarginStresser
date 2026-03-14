@@ -88,8 +88,9 @@ def fetch_backtest(
         "Referer": "https://testfol.io/",
         "Origin": "https://testfol.io"
     }
-    # Check for Bearer Token (Arg > Env)
-    token = kwargs.get('bearer_token') or os.environ.get("TESTFOL_API_KEY")
+    # Check for Bearer Token (Arg > Auto-login > Env)
+    from app.services.testfol_auth import get_token as _get_auth_token
+    token = kwargs.get('bearer_token') or _get_auth_token()
     if token:
         # Sanitize: Remove 'Bearer ' prefix if user pasted it
         if token.startswith("Bearer "):
@@ -319,6 +320,7 @@ def simulate_margin(
         discounted_cashflows = cashflows / cum_rate
         cum_discounted_cashflows = discounted_cashflows.cumsum()
         loan_series = cum_rate * (starting_loan + cum_discounted_cashflows)
+        loan_series = loan_series.clip(lower=0)
 
     loan_series.name = "Loan"
     effective_rate_series.name = "Margin Rate %"

@@ -7,6 +7,7 @@ class RebalanceConfig(BaseModel):
     freq: str = "Yearly"
     month: int = 1
     day: int = 1
+    threshold_pct: float = 5.0
     compare_std: bool = False
 
 
@@ -76,6 +77,7 @@ class BacktestResult(BaseModel):
     shadow_range: str = ""
     wmaint: float = 0.25
     wmaint_pm: float = 0.0
+    pm_blocked_dates: list = Field(default_factory=list)
 
 
 class MultiBacktestResponse(BaseModel):

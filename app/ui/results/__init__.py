@@ -272,8 +272,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # --- Prepare Tax-Adjusted Data for Charts ---
     tax_adj_port_series = final_adj_series + loan_series
 
-    # Retrieve benchmark if available
-    bench_series = results.get("bench_series")
+    # Use clipped bench_series if already set above, otherwise retrieve from results
+    if bench_series is None:
+        bench_series = results.get("bench_series")
     bench_resampled = None
     bench_aligned = None
     if bench_series is not None:
@@ -348,8 +349,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     max_dd = stats.get("max_drawdown", 0.0)
     sharpe = stats.get("sharpe", 0.0)
 
-    # Retrieve Benchmark Stats
-    bench_stats = results.get("bench_stats")
+    # Retrieve Benchmark Stats (use clipped stats if already computed above)
+    if bench_stats is None:
+        bench_stats = results.get("bench_stats")
 
     # Calculate CAGR display value
     cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
@@ -406,8 +408,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
         comp_data = {
             "Metric": ["Ending Value", "CAGR", "Sharpe", "Max Drawdown", "Std Dev"],
-            portfolio_name: [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('volatility',0)*100:.2f}%"],
-            comp_label: [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{active_bench_stats.get('volatility',0)*100:.2f}%"],
+            portfolio_name: [f"${strategy_end_val:,.0f}", f"{cagr_display:.2f}%", f"{sharpe:.2f}", f"{max_dd:.2f}%", f"{stats.get('std', stats.get('volatility',0))*100:.2f}%"],
+            comp_label: [f"${bench_end_val:,.0f}", f"{b_cagr_display:.2f}%", f"{b_sharpe:.2f}", f"{b_dd:.2f}%", f"{active_bench_stats.get('std', active_bench_stats.get('volatility',0))*100:.2f}%"],
             "Diff": [f"${strategy_end_val - bench_end_val:+,.0f}", f"{diff_cagr_display:+.2f}%", f"{diff_sharpe:+.2f}", f"{diff_dd:+.2f}%", ""]
         }
         comp_df = pd.DataFrame(comp_data)
@@ -482,6 +484,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         repayment_series=repayment_series,
         twr_series=results.get("twr_series"),
         stats=stats,
+        draw_start_date=draw_start_date,
     )
 
     # --- Debug Tab ---
@@ -563,6 +566,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         rebal_freq_for_chart = config.get('rebalance', 'Yearly')
 
         if not composition_df.empty:
+            composition_df = composition_df.copy()
             for d in composition_df["Date"].unique():
                 if d in tax_adj_port_series.index:
                     target_total = tax_adj_port_series.loc[d]

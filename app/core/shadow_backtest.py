@@ -1,5 +1,6 @@
 import contextlib
 import io
+import os
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -232,9 +233,11 @@ def _check_drift(positions, allocation, threshold_pct):
     if total_val <= 0:
         return False, 0.0, ""
     max_drift, drifter = 0.0, ""
+    total_target = sum(allocation.values())
     for ticker, target_w in allocation.items():
         current_w = (positions.get(ticker, 0.0) / total_val) * 100.0
-        drift = abs(current_w - target_w)
+        normalized_target = (target_w / total_target) * 100.0
+        drift = abs(current_w - normalized_target)
         if drift > max_drift:
             max_drift, drifter = drift, ticker
     return max_drift > threshold_pct, max_drift, drifter
@@ -272,8 +275,8 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     # PM Buy Block tracking
     pm_blocked_dates = []
     loan_balance = starting_loan
-    daily_rate = (margin_rate_annual / 100.0) / 252.0
-    _prev_month = None  # for monthly draw detection
+    daily_rate = (1 + margin_rate_annual / 100.0) ** (1.0 / 252.0) - 1
+    _prev_month = None  # for monthly draw detection (set after dates is established)
     if draw_monthly > 0:
         _ds_label = str(draw_start_date) if draw_start_date is not None else "backtest start"
         logs.append(f"Monthly Draw: ${draw_monthly:,.0f}/mo starting {_ds_label}")
@@ -515,6 +518,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     last_rebal_month = (0, 0)
     last_rebal_quarter = (0, 0)
     last_rebal_year = -1
+    _prev_month = dates[0].month  # Initialize for monthly draw detection
 
     for i in range(1, len(dates)):
         date = dates[i]
@@ -527,7 +531,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             positions[ticker] *= (1 + r)
             day_port_val += positions[ticker]
             
-        # Record daily value
+        # Record daily value (may be updated below after DCA injection)
         portfolio_history_dates.append(date)
         portfolio_history_vals.append(day_port_val)
 
@@ -621,10 +625,14 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     "Trade Amount": amount,
                     "Realized ST P&L": 0,
                     "Realized LT P&L": 0,
+                    "Realized LT (Collectible)": 0,
                     "Realized P&L": 0,
                     "Price (Est)": current_price
                 })
-        
+
+            # Update recorded portfolio value to include DCA injection
+            portfolio_history_vals[-1] = day_port_val
+
         # Update baseline for next day's return calculation
         prev_post_flow_val = day_port_val
             
@@ -747,7 +755,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             # Calculate Trades
             for ticker in tickers:
                 target_weight = allocation.get(ticker, 0)
-                target_val = day_port_val * (target_weight / 100)
+                target_val = day_port_val * (target_weight / total_alloc)
                 current_pos = positions[ticker]
                 
                 trade_amt = target_val - current_pos
@@ -791,7 +799,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         "Realized LT P&L": 0,
                         "Realized LT (Collectible)": 0,
                         "Realized P&L": 0,
-                        "Price (Est)": current_pos
+                        "Price (Est)": current_price
                     })
                     
                 elif trade_amt < 0: # SELL
@@ -914,8 +922,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     if not trades_df.empty:
         trades_df["Year"] = trades_df["Date"].dt.year
         # Aggregate P&L by Year (Summing ST and LT)
-        pl_by_year = trades_df.groupby("Year")[["Realized ST P&L", "Realized LT P&L"]].sum().sort_index()
+        agg_cols = ["Realized ST P&L", "Realized LT P&L"]
+        if "Realized LT (Collectible)" in trades_df.columns:
+            agg_cols.append("Realized LT (Collectible)")
+        pl_by_year = trades_df.groupby("Year")[agg_cols].sum().sort_index()
         pl_by_year["Realized P&L"] = pl_by_year["Realized ST P&L"] + pl_by_year["Realized LT P&L"]
+        if "Realized LT (Collectible)" in pl_by_year.columns:
+            pl_by_year["Realized P&L"] += pl_by_year["Realized LT (Collectible)"]
     else:
         pl_by_year = pd.DataFrame()
         
@@ -948,14 +961,15 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     else:
         twr_series = pd.Series(dtype=float)
 
-    # Write logs to file
-    try:
-        import os
-        os.makedirs("debug_tools", exist_ok=True)
-        with open("debug_tools/shadow_backtest.log", "w") as f:
-            f.write("\n".join(logs))
-        logs.append(f"Logs written to debug_tools/shadow_backtest.log")
-    except Exception as e:
-        logs.append(f"Failed to write log file: {e}")
+    # Write logs to file (only when TESTFOL_DEBUG is set)
+    if os.environ.get("TESTFOL_DEBUG"):
+        try:
+            debug_dir = os.path.join(os.path.dirname(__file__), "../../debug_tools")
+            os.makedirs(debug_dir, exist_ok=True)
+            with open(os.path.join(debug_dir, "shadow_backtest.log"), "w") as f:
+                f.write("\n".join(logs))
+            logs.append(f"Logs written to debug_tools/shadow_backtest.log")
+        except Exception as e:
+            logs.append(f"Failed to write log file: {e}")
         
     return trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, portfolio_series, twr_series, pm_blocked_dates
