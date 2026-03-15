@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import datetime as dt
+import logging
 
 from app.common import utils
 from app.core import calculations, tax_library
@@ -77,21 +78,30 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     rate_annual = config.get('rate_annual', 8.0)
     draw_monthly = config.get('draw_monthly', 0.0)
+    draw_monthly_retirement = config.get('draw_monthly_retirement', 0.0)
     draw_start_date = config.get('draw_start_date', None)
+    retirement_date = config.get('retirement_date', None)
     retirement_income = config.get('retirement_income', None)
     starting_loan = config.get('starting_loan', 0.0)
+    starting_cash = config.get('starting_cash', 0.0)
+    if starting_cash > 0 and starting_loan == 0:
+        starting_loan = -starting_cash  # Cash is modeled as negative loan
 
-    # Derive retirement year from draw_start_date
+    # Derive retirement year from retirement_date (fallback to draw_start_date)
     _retirement_year = None
-    if retirement_income is not None and draw_start_date is not None:
-        if hasattr(draw_start_date, 'year'):
-            _retirement_year = draw_start_date.year
-        elif isinstance(draw_start_date, str):
-            _retirement_year = int(draw_start_date[:4])
+    _ret_src = retirement_date or draw_start_date
+    if retirement_income is not None and _ret_src is not None:
+        if hasattr(_ret_src, 'year'):
+            _retirement_year = _ret_src.year
+        elif isinstance(_ret_src, str):
+            _retirement_year = int(_ret_src[:4])
 
-    cashflow = config.get('cashflow', 0.0)
-    cashfreq = config.get('cashfreq', "Monthly")
-    pay_down_margin = config.get('pay_down_margin', False)
+    _gcf = config.get('global_cashflow', {})
+    cashflow = _gcf.get('amount', config.get('cashflow', 0.0))
+    cashfreq = _gcf.get('freq', config.get('cashfreq', "Monthly"))
+    pay_down_margin = _gcf.get('pay_down_margin', config.get('pay_down_margin', False))
+    fund_dca_margin = _gcf.get('fund_dca_margin', True)
+    dca_in_retirement = config.get('dca_in_retirement', True)
 
     chart_style = config.get('chart_style', "Classic (Combined)")
     timeframe = config.get('timeframe', "1M")
@@ -114,18 +124,17 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             if _p_cfg.get("name") == _port_name:
                 _adf = _p_cfg.get("alloc_df")
                 if _adf is not None and not _adf.empty and "PM Maint %" in _adf.columns:
-                    _d_maint = config.get("default_maint", 25.0)
                     for _, _r in _adf.iterrows():
                         _pm_v = float(_r.get("PM Maint %", 0))
                         _wt = float(_r.get("Weight %", 0))
-                        _reg_v = float(_r.get("Maint %", _d_maint))
-                        _eff = _pm_v if _pm_v > 0 else _reg_v
-                        _computed_pm += (_wt / 100) * (_eff / 100)
+                        if _pm_v > 0:
+                            _computed_pm += (_wt / 100) * (_pm_v / 100)
                 break
         if _computed_pm > 0:
             wmaint_pm = _computed_pm
         elif wmaint_pm == 0.0:
-            wmaint_pm = wmaint  # final fallback
+            # No PM rates configured — disable PM comparison
+            pm_mode = 'Off'
     pm_blocked_dates = results.get("pm_blocked_dates", [])
 
     # Extract Benchmark (Standard Comparison or Custom)
@@ -158,6 +167,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             use_standard_deduction=use_std_deduction,
             retirement_income=retirement_income,
             retirement_year=_retirement_year,
+            retirement_date=retirement_date,
         )
 
         # State Tax (progressive brackets)
@@ -166,6 +176,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             use_standard_deduction=use_std_deduction,
             retirement_income=retirement_income,
             retirement_year=_retirement_year,
+            retirement_date=retirement_date,
         )
     else:
         # No realized P&L = No Tax
@@ -213,12 +224,47 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
         repayment_series = repayment_vals
 
+    # Build DCA series for margin simulation
+    # fund_dca_margin=True: DCA always adds to loan (margin-funded)
+    # fund_dca_margin=False: DCA only depletes cash, then becomes "new money"
+    dca_series = None
+    if cashflow > 0 and not pay_down_margin and (fund_dca_margin or starting_cash > 0):
+        dates = port_series.index
+        dca_vals = pd.Series(0.0, index=dates)
+        if cashfreq == "Monthly":
+            months = dates.month
+            changes = months != np.roll(months, 1)
+            changes[0] = False
+            dca_vals[changes] = cashflow
+        elif cashfreq == "Quarterly":
+            quarters = dates.quarter
+            changes = quarters != np.roll(quarters, 1)
+            changes[0] = False
+            dca_vals[changes] = cashflow
+        elif cashfreq == "Yearly":
+            years = dates.year
+            changes = years != np.roll(years, 1)
+            changes[0] = False
+            dca_vals[changes] = cashflow
+        # Apply retirement cutoff if DCA should stop at draw_start_date
+        if not dca_in_retirement and draw_start_date is not None:
+            cutoff = pd.Timestamp(draw_start_date)
+            dca_vals[dates >= cutoff] = 0.0
+        dca_series = dca_vals
+
+    # Store DCA sum for margin stats (total DCA funded via margin)
+    config['_dca_series_sum'] = dca_series.sum() if dca_series is not None and fund_dca_margin else 0.0
+
     # Re-run margin sim
     sim_tax_series = tax_payment_series if pay_tax_margin else None
 
+    _log = logging.getLogger("results")
     eff_loan = 0.0 if pay_tax_cash else starting_loan
     eff_rate = 0.0 if pay_tax_cash else rate_annual
     eff_draw = 0.0 if pay_tax_cash else draw_monthly
+    eff_draw_ret = 0.0 if pay_tax_cash else draw_monthly_retirement
+    _log.info("Margin sim inputs: loan=$%,.0f draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s pay_tax_cash=%s",
+              eff_loan, eff_draw, eff_draw_ret, draw_start_date, retirement_date, pay_tax_cash)
 
     loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = api.simulate_margin(
         port_series, eff_loan,
@@ -226,6 +272,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         tax_series=sim_tax_series,
         repayment_series=repayment_series,
         draw_start_date=draw_start_date,
+        draw_monthly_retirement=eff_draw_ret,
+        retirement_date=retirement_date,
+        dca_series=dca_series,
+        fund_dca_margin=fund_dca_margin,
     )
 
     # Compute PM usage series post-hoc (loan is invariant to margin type)
@@ -258,12 +308,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         elif pay_tax_cash:
             if tax_payment_series is not None and tax_payment_series.sum() > 0:
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date
+                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
                 )
             else:
                 empty_tax = pd.Series(0.0, index=equity_series.index)
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date
+                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
                 )
         else: # None (Gross)
             final_adj_series = equity_series
@@ -359,10 +409,11 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # Calculate Tax-Adjusted metrics
     if start_val > 0 and not port_series.empty:
         final_adj_val = final_adj_series.iloc[-1]
+        start_equity = final_adj_series.iloc[0]
         days = (final_adj_series.index[-1] - final_adj_series.index[0]).days
-        if days > 0:
+        if days > 0 and start_equity > 0:
             years = days / 365.25
-            tax_adj_cagr = (final_adj_val / start_val) ** (1 / years) - 1
+            tax_adj_cagr = (final_adj_val / start_equity) ** (1 / years) - 1
         else:
             tax_adj_cagr = 0.0
         tax_adj_sharpe = calculations.calculate_sharpe_ratio(final_adj_series)
@@ -527,8 +578,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         config=config,
         pay_tax_cash=pay_tax_cash,
         draw_monthly=draw_monthly,
+        draw_monthly_retirement=draw_monthly_retirement,
         draw_start_date=draw_start_date,
+        retirement_date=retirement_date,
+        logs=logs,
         final_tax_series=final_tax_series,
+        tax_payment_series=tax_payment_series,
         start_val=start_val,
         rate_annual=rate_annual,
         pm_enabled=pm_enabled,

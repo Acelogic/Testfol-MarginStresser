@@ -9,6 +9,9 @@ import streamlit as st
 
 
 # Regex patterns for log lines produced by shadow_backtest.py
+_RETDRAW_RE = re.compile(
+    r"RetDraw (\d{4}-\d{2}-\d{2}): \+\$([\d,]+(?:\.\d+)?)\s*→\s*loan \$([\d,]+(?:\.\d+)?)"
+)
 _DRAW_RE = re.compile(
     r"Draw (\d{4}-\d{2}-\d{2}): \+\$([\d,]+(?:\.\d+)?)\s*→\s*loan \$([\d,]+(?:\.\d+)?)"
 )
@@ -25,6 +28,15 @@ def _parse_events(logs: list) -> pd.DataFrame:
     """Parse draw/repay log lines into a structured DataFrame."""
     rows: list[dict] = []
     for line in logs or []:
+        m = _RETDRAW_RE.search(line)
+        if m:
+            rows.append({
+                "Date": pd.Timestamp(m.group(1)),
+                "Type": "RetDraw",
+                "Amount": _parse_amount(m.group(2)),
+                "Loan After": _parse_amount(m.group(3)),
+            })
+            continue
         m = _DRAW_RE.search(line)
         if m:
             rows.append({
@@ -72,7 +84,7 @@ def render_withdrawals_tab(
             st.info("No withdrawal events recorded. Make sure the backtest covers the draw start date.")
             return
 
-        draws = events[events["Type"] == "Draw"]
+        draws = events[events["Type"].isin(["Draw", "RetDraw"])]
         repays = events[events["Type"] == "Repayment"]
 
         total_drawn = draws["Amount"].sum()
@@ -112,7 +124,7 @@ def render_withdrawals_tab(
         # ── Loan balance chart ───────────────────────────────────────────
         chart_df = events.copy()
         chart_df["Signed"] = chart_df.apply(
-            lambda r: r["Amount"] if r["Type"] == "Draw" else -r["Amount"], axis=1
+            lambda r: r["Amount"] if r["Type"] in ("Draw", "RetDraw") else -r["Amount"], axis=1
         )
         chart_df["Cumulative Draws"] = chart_df["Signed"].cumsum()
         chart_df = chart_df.set_index("Date")

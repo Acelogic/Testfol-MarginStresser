@@ -5,6 +5,7 @@ import streamlit as st
 import pandas as pd
 
 from app.ui import charts
+from app.ui.results.tabs_withdrawals import _parse_events
 
 
 def render_chart_tab(
@@ -39,11 +40,15 @@ def render_chart_tab(
     config: dict,
     pay_tax_cash: bool,
     draw_monthly: float,
+    draw_monthly_retirement: float,
+    draw_start_date,
+    retirement_date,
+    logs: list | None,
     final_tax_series: pd.Series,
+    tax_payment_series,
     start_val: float,
     rate_annual,
     pm_enabled: bool,
-    draw_start_date=None,
     pm_mode: str = "Off",
     pm_usage_series: pd.Series | None = None,
     wmaint_pm: float = 0.0,
@@ -52,6 +57,11 @@ def render_chart_tab(
 ) -> None:
     with tab:
         chart_subtabs = st.tabs(["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📊 Munger200WMA", "📜 Cheat Sheet"])
+
+        # Parse withdrawal events from logs for chart markers
+        draw_events_df = _parse_events(logs) if logs else pd.DataFrame()
+        draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "Draw", "Date"]) if not draw_events_df.empty else []
+        ret_draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "RetDraw", "Date"]) if not draw_events_df.empty else []
 
         with chart_subtabs[0]:
             if chart_style == "Classic (Combined)":
@@ -66,6 +76,13 @@ def render_chart_tab(
                     pm_usage_series=pm_usage_series if pm_mode != 'Off' else None,
                     pm_mode=pm_mode,
                     pm_blocked_dates=pm_blocked_dates,
+                    draw_start_date=draw_start_date,
+                    draw_monthly=draw_monthly,
+                    draw_monthly_retirement=draw_monthly_retirement,
+                    retirement_date=retirement_date,
+                    draw_dates=draw_dates,
+                    ret_draw_dates=ret_draw_dates,
+                    tax_payment_series=tax_payment_series,
                 )
             else:  # Candlestick
                 charts.render_candlestick_chart(
@@ -83,11 +100,18 @@ def render_chart_tab(
                     effective_rate_series=effective_rate_resampled,
                     pm_usage_series=pm_usage_series if pm_mode != 'Off' else None,
                     pm_mode=pm_mode,
+                    daily_close=port_series,
                 )
 
             if pay_tax_cash:
                 _render_cash_statistics(final_adj_series, final_tax_series, draw_monthly, equity_series, draw_start_date=draw_start_date)
             else:
+                _gcf = config.get('global_cashflow', {})
+                _fund_dca = _gcf.get('fund_dca_margin', True)
+                _pay_down = _gcf.get('pay_down_margin', False)
+                _dca_total = 0.0
+                if _fund_dca and not _pay_down:
+                    _dca_total = config.get('_dca_series_sum', 0.0)
                 _render_margin_statistics(
                     tax_adj_port_series, final_adj_series, loan_series,
                     equity_series, usage_series, equity_pct_series,
@@ -98,6 +122,7 @@ def render_chart_tab(
                     wmaint_pm=wmaint_pm,
                     pm_threshold=pm_threshold,
                     pm_blocked_dates=pm_blocked_dates,
+                    total_dca_margin=_dca_total,
                 )
 
         with chart_subtabs[1]:
@@ -171,6 +196,7 @@ def _render_margin_statistics(
     wmaint_pm: float = 0.0,
     pm_threshold: float = 110000.0,
     pm_blocked_dates: list | None = None,
+    total_dca_margin: float = 0.0,
 ) -> None:
     with st.expander("Detailed Margin Statistics", expanded=True):
         if usage_series.empty:
@@ -196,7 +222,7 @@ def _render_margin_statistics(
         total_tax_paid = final_tax_series.sum() if not final_tax_series.empty else 0.0
         start_loan_val = loan_series.iloc[0]
         final_loan_val = loan_series.iloc[-1]
-        total_interest = (final_loan_val - start_loan_val) - total_draws - total_tax_paid
+        total_interest = (final_loan_val - start_loan_val) - total_draws - total_tax_paid - total_dca_margin
 
         avg_usage = usage_series.mean()
         current_usage = usage_series.iloc[-1]
