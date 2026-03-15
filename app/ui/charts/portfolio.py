@@ -74,9 +74,11 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         # For 'rebased' portfolios: stats were calculated locally from TWR (only option)
         # For non-rebased portfolios: stats are original API stats for that period
         cagr = stats.get('cagr', 0.0)
+        cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
         max_dd = stats.get('max_drawdown', 0.0)
-        
-        label = f"{name} (CAGR: {cagr:.2f}%, DD: {max_dd:.2f}%)"
+        max_dd_display = max_dd * 100 if abs(max_dd) <= 1 else max_dd
+
+        label = f"{name} (CAGR: {cagr_display:.2f}%, DD: {max_dd_display:.2f}%)"
         
         # Rebase to $10k at common start for fair visual comparison
         original_values = series.values
@@ -263,12 +265,14 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             
         st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
 
-@st.cache_data(show_spinner=False)
 def render_classic_chart(port_series, final_adj_series, loan_series,
                         equity_pct_series, usage_series,
                         series_opts, log_scale,
                         bench_series=None, comparison_series=None, effective_rate_series=None,
-                        pm_usage_series=None, pm_mode="Off", pm_blocked_dates=None):
+                        pm_usage_series=None, pm_mode="Off", pm_blocked_dates=None,
+                        draw_start_date=None, draw_monthly=0,
+                        draw_monthly_retirement=0, retirement_date=None,
+                        draw_dates=None, ret_draw_dates=None, tax_payment_series=None):
     """
     Renders the classic line chart with toggleable traces.
     """
@@ -289,11 +293,11 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
         # If paying with margin, final_adj_series is also Net Equity (simulated)
         fig.add_trace(go.Scatter(
             x=final_adj_series.index, y=final_adj_series,
-            name="Net Equity",
+            name="Net Liquidity",
             line=dict(color='#28B463', width=2),
             fill='tozeroy',
             fillcolor='rgba(40, 180, 99, 0.1)',
-            hovertemplate="Net Equity: $%{y:,.0f}<extra></extra>"
+            hovertemplate="Net Liquidity: $%{y:,.0f}<extra></extra>"
         ))
 
     # 3. Margin Loan
@@ -324,11 +328,15 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
         
     # Secondary Axis for Percentages
     if "Margin usage %" in series_opts or "Equity %" in series_opts:
+        y2_max = max(
+            usage_series.max() if not usage_series.empty else 0,
+            equity_pct_series.max() if not equity_pct_series.empty else 0,
+        )
         fig.update_layout(yaxis2=dict(
             title="Percentage (%)",
             overlaying="y",
             side="right",
-            range=[0, max(usage_series.max()*1.2 if not usage_series.empty else 1, 1.5)] # Some headroom
+            range=[0, max(y2_max * 1.2, 1.5)]
         ))
 
     if "Margin usage %" in series_opts:
@@ -361,13 +369,32 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
         ))
 
     # PM buy-blocked rebalance markers
-    if pm_blocked_dates and "Margin usage %" in series_opts:
-        for bd in pm_blocked_dates:
+    if pm_blocked_dates:
+        blocked_ts = pd.to_datetime(pm_blocked_dates)
+        for bd in blocked_ts:
             fig.add_vline(
-                x=bd, line_width=1, line_dash="dot", line_color="#FF6347",
-                annotation_text="Buy Block", annotation_position="top",
-                annotation_font_size=8, annotation_font_color="#FF6347",
+                x=bd, line_width=2, line_dash="dash", line_color="rgba(255, 99, 71, 0.7)",
+                annotation_text="⛔", annotation_position="top right",
+                annotation_font_size=14,
             )
+        # Add scatter markers on the portfolio line at blocked dates
+        if "Portfolio" in series_opts and not port_series.empty:
+            matched_vals = []
+            matched_dates = []
+            for bd in blocked_ts:
+                # Find nearest date in series
+                idx = port_series.index.get_indexer([bd], method="nearest")[0]
+                if 0 <= idx < len(port_series):
+                    matched_dates.append(port_series.index[idx])
+                    matched_vals.append(port_series.iloc[idx])
+            if matched_dates:
+                fig.add_trace(go.Scatter(
+                    x=matched_dates, y=matched_vals,
+                    mode="markers",
+                    name="PM Buy Block",
+                    marker=dict(symbol="x", size=12, color="#FF6347", line=dict(width=2, color="#FF6347")),
+                    hovertemplate="⛔ Rebalance blocked<br>%{x|%Y-%m-%d}<br>Portfolio: $%{y:,.0f}<extra></extra>",
+                ))
 
     # Margin Call Threshold Line (100% Usage)
     if "Margin usage %" in series_opts:
@@ -394,6 +421,102 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             hovertemplate="Rate: %{y:.2%}<extra></extra>" 
         ))
 
+    # Withdrawal vertical lines (thin red, capped at Reg-T usage value)
+    if draw_dates and not usage_series.empty:
+        for dd in draw_dates:
+            idx = usage_series.index.get_indexer([dd], method="nearest")[0]
+            if 0 <= idx < len(usage_series):
+                draw_ts = pd.Timestamp(dd)
+                fig.add_shape(
+                    type="line", x0=draw_ts, x1=draw_ts, y0=0, y1=usage_series.iloc[idx],
+                    xref="x", yref="y2",
+                    line=dict(color="rgba(255,0,0,0.35)", width=1),
+                )
+
+    # Retirement draw vertical lines (orange, capped at Reg-T usage value)
+    if ret_draw_dates and not usage_series.empty:
+        for dd in ret_draw_dates:
+            idx = usage_series.index.get_indexer([dd], method="nearest")[0]
+            if 0 <= idx < len(usage_series):
+                draw_ts = pd.Timestamp(dd)
+                fig.add_shape(
+                    type="line", x0=draw_ts, x1=draw_ts, y0=0, y1=usage_series.iloc[idx],
+                    xref="x", yref="y2",
+                    line=dict(color="rgba(255,165,0,0.45)", width=1),
+                )
+
+    # Tax payment vertical lines (cyan, capped at Reg-T usage value) + hover markers
+    if tax_payment_series is not None and not usage_series.empty:
+        t_dates, t_vals, t_texts = [], [], []
+        for td, tax_amt in tax_payment_series[tax_payment_series > 0].items():
+            idx = usage_series.index.get_indexer([td], method="nearest")[0]
+            if 0 <= idx < len(usage_series):
+                d = usage_series.index[idx]
+                v = usage_series.iloc[idx]
+                tax_ts = pd.Timestamp(td)
+                fig.add_shape(
+                    type="line", x0=tax_ts, x1=tax_ts, y0=0, y1=v,
+                    xref="x", yref="y2",
+                    line=dict(color="rgba(0,255,255,0.5)", width=1),
+                )
+                t_dates.append(d)
+                t_vals.append(v)
+                t_texts.append(f"🏛 Tax Payment<br>{d.strftime('%b %d, %Y')}<br>${tax_amt:,.0f}")
+        if t_dates:
+            fig.add_trace(go.Scatter(
+                x=t_dates, y=t_vals, mode="markers", yaxis="y2",
+                name="Tax Payment", showlegend=False,
+                marker=dict(size=1, opacity=0),
+                hovertemplate="%{text}<extra></extra>",
+                text=t_texts,
+            ))
+
+    # Withdrawal start date vertical line (only if within chart range)
+    _chart_start = port_series.index[0] if not port_series.empty else None
+    _chart_end = port_series.index[-1] if not port_series.empty else None
+    _effective_draw_start = draw_start_date if draw_start_date is not None else (_chart_start if draw_monthly else None)
+    if _effective_draw_start is not None and _chart_start is not None:
+        draw_ts = pd.Timestamp(_effective_draw_start)
+        if _chart_start <= draw_ts <= _chart_end:
+            date_label = draw_ts.strftime("%b %d, %Y")
+            amt_label = f"${draw_monthly:,.0f}/mo" if draw_monthly else ""
+            annotation = f"Withdrawals Start<br>{date_label}"
+            if amt_label:
+                annotation += f"<br>{amt_label}"
+            fig.add_shape(
+                type="line", x0=draw_ts, x1=draw_ts, y0=0, y1=1,
+                xref="x", yref="paper",
+                line=dict(color="red", width=2),
+            )
+            fig.add_annotation(
+                x=draw_ts, y=1, xref="x", yref="paper",
+                text=annotation, showarrow=False,
+                font=dict(color="red", size=11),
+                xanchor="left", xshift=6, yshift=10,
+            )
+
+    # Retirement date vertical line (only if within chart range)
+    if retirement_date is not None and draw_monthly_retirement > 0 and _chart_start is not None:
+        ret_ts = pd.Timestamp(retirement_date)
+        if not (_chart_start <= ret_ts <= _chart_end):
+            ret_ts = None
+    else:
+        ret_ts = None
+    if ret_ts is not None:
+        ret_label = ret_ts.strftime("%b %d, %Y")
+        ret_annotation = f"Retirement<br>{ret_label}<br>${draw_monthly_retirement:,.0f}/mo"
+        fig.add_shape(
+            type="line", x0=ret_ts, x1=ret_ts, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(color="#00BFFF", width=2),
+        )
+        fig.add_annotation(
+            x=ret_ts, y=1, xref="x", yref="paper",
+            text=ret_annotation, showarrow=False,
+            font=dict(color="#00BFFF", size=11),
+            xanchor="left", xshift=6, yshift=10,
+        )
+
     fig.update_layout(
         template="plotly_dark",
         title="Portfolio History",
@@ -408,7 +531,6 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
     
     st.plotly_chart(fig, use_container_width=True)
 
-@st.cache_data(show_spinner=False)
 def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None, comparison_series=None, start_val=10000, rate_annual=8.0):
     """Render dashboard-style separate charts"""
     
@@ -437,21 +559,17 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
     st.markdown("### Portfolio Value Over Time")
     fig1 = go.Figure()
     
-    # Calculate leveraged portfolio (simulated with margin)
-    leveraged_mult = 1 / (start_val / 100) if start_val < 100 else 1
-    leveraged_port = port * leveraged_mult
-    
-    fig1.add_trace(go.Scatter(
-        x=port.index, y=leveraged_port,
-        name=f"Margin Portfolio ({leveraged_mult:.1f}x Leveraged)",
-        line=dict(color="#4A90E2", width=2),
-        hovertemplate="Leveraged: $%{y:,.0f}<extra></extra>"
-    ))
     fig1.add_trace(go.Scatter(
         x=port.index, y=port,
-        name="Margin Portfolio (Unleveraged)",
+        name="Margin Portfolio",
         line=dict(color="#1DB954", width=2),
-        hovertemplate="Unleveraged: $%{y:,.0f}<extra></extra>"
+        hovertemplate="Portfolio: $%{y:,.0f}<extra></extra>"
+    ))
+    fig1.add_trace(go.Scatter(
+        x=equity.index, y=equity,
+        name="Equity (Net of Loan)",
+        line=dict(color="#4A90E2", width=2),
+        hovertemplate="Equity: $%{y:,.0f}<extra></extra>"
     ))
 
     # Add Benchmark Trace if available (Moved to end)

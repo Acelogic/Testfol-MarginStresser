@@ -117,7 +117,10 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
             def style_barchart(row):
                 idx = row.name
                 styles = []
-                
+
+                if curr_idx == -1:
+                    return [""] * len(row)
+
                 # Determine Active Colors based on Row Position
                 if idx < curr_idx: # Resistance
                     bg_active = c_res_bg
@@ -474,7 +477,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         std_dev_main = np.nanstd(z_combined_main * 100)
         scale_main = 2 * std_dev_main if not np.isnan(std_dev_main) else 10
         std_dev_yearly = np.nanstd(z_combined_yearly * 100)
-        scale_yearly = 1.0 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        scale_yearly = 2.0 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
         
         hover_main = []
