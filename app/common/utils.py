@@ -88,12 +88,8 @@ def resample_data(series: pd.Series, timeframe: str, method="ohlc") -> pd.DataFr
     rule = rule_map.get(timeframe, "ME")
 
     if method == "ohlc":
-        ohlc = series.resample(rule).agg({
-            "Open": "first",
-            "High": "max",
-            "Low": "min",
-            "Close": "last"
-        })
+        ohlc = series.resample(rule).ohlc()
+        ohlc.columns = ["Open", "High", "Low", "Close"]
         return ohlc.dropna()
     elif method == "max":
         return series.resample(rule).max().dropna()

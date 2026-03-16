@@ -81,7 +81,7 @@ def render():
 
         # --- Render Global Section ---
         st.markdown("##### 💰 Global Capital & Cashflow")
-        gc1, gc2, gc3, gc4, gc5 = st.columns([2, 2, 2, 1.5, 1.5])
+        gc1, gc2, gc3, gc4, gc5, gc6 = st.columns([2, 2, 2, 1.5, 1.5, 1.5])
         with gc1:
             st.session_state.global_cashflow["start_val"] = utils.num_input("Start Value ($)", "g_start", st.session_state.global_cashflow["start_val"], 1000.0)
         with gc2:
@@ -94,6 +94,9 @@ def render():
         with gc5:
              st.markdown("<br>", unsafe_allow_html=True)
              st.session_state.global_cashflow["pay_down_margin"] = st.checkbox("Pay Down Margin", st.session_state.global_cashflow["pay_down_margin"], key="g_paydown")
+        with gc6:
+             st.markdown("<br>", unsafe_allow_html=True)
+             st.session_state.global_cashflow["fund_dca_margin"] = st.checkbox("Fund DCA w/ Margin", st.session_state.global_cashflow.get("fund_dca_margin", True), key="g_fund_margin")
 
         st.divider()
 
@@ -397,6 +400,7 @@ def render():
             "Tax Payment Simulation",
             ["None (Gross)", "Pay from Cash", "Pay with Margin"],
             index=0,
+            key="tax_sim_mode",
             horizontal=True, # Make it horizontal to save space at top
             help="**None (Gross)**: Show raw pre-tax returns.\n**Pay from Cash**: Simulate selling shares to pay taxes (reduces equity).\n**Pay with Margin**: Simulate borrowing to pay taxes (increases loan)."
         )
@@ -457,21 +461,86 @@ def render():
                 on_change=utils.sync_loan,
                 disabled=margin_disabled
             )
-            
+
+            # Starting Cash (mutually exclusive with starting loan)
+            if config['starting_loan'] == 0.0 and not margin_disabled:
+                config['starting_cash'] = utils.num_input(
+                    "Starting Cash ($)", "starting_cash", 0.0, 100.0,
+                )
+            else:
+                config['starting_cash'] = 0.0
+
             # Calculate leverage for display (handle zero division)
-            curr_start_val = config.get('global_cashflow', {}).get('start_val', 10000.0)
+            curr_start_val = st.session_state.get('global_cashflow', {}).get('start_val', 10000.0)
             if config['starting_loan'] < curr_start_val:
                 current_lev = curr_start_val / (curr_start_val - config['starting_loan'])
                 st.caption(f"Current Leverage: **{current_lev:.2f}x**")
             else:
                 st.caption("Current Leverage: **∞x**")
-            
+
+            st.divider()
+            st.markdown("##### Withdrawal & Retirement")
+            config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
+            if config['draw_monthly'] > 0:
+                config['draw_start_date'] = st.date_input(
+                    "Draw Start Date",
+                    value=None,
+                    key="draw_start_date",
+                    min_value=pd.Timestamp("2000-01-01").date(),
+                    max_value=pd.Timestamp("2060-12-31").date(),
+                    help="Date when pre-retirement draws begin. Defaults to backtest start if not set.",
+                )
+                if config['draw_start_date'] is not None:
+                    _dc1, _dc2 = st.columns(2)
+                    with _dc1:
+                        config['draw_monthly_retirement'] = utils.num_input(
+                            "Retirement Draw ($)", "draw_monthly_retirement", 0.0, 100.0,
+                        )
+                    with _dc2:
+                        if config['draw_monthly_retirement'] > 0:
+                            config['retirement_date'] = st.date_input(
+                                "Retirement Date",
+                                value=None,
+                                key="retirement_date",
+                                min_value=pd.Timestamp("2000-01-01").date(),
+                                max_value=pd.Timestamp("2060-12-31").date(),
+                                help="Date when draw switches to Retirement Draw amount.",
+                            )
+                        else:
+                            config['retirement_date'] = None
+                else:
+                    config['draw_monthly_retirement'] = 0.0
+                    config['retirement_date'] = None
+                _rc1, _rc2 = st.columns(2)
+                with _rc1:
+                    config['dca_in_retirement'] = st.checkbox(
+                        "Continue DCA in Retirement",
+                        value=False,
+                        key="dca_in_retirement",
+                        help="If unchecked, DCA contributions stop at the draw start date.",
+                    )
+                with _rc2:
+                    config['retirement_income'] = utils.num_input(
+                        "Retirement Income ($)", "retirement_income", 0.0, 5000.0,
+                    )
+                st.caption("Annual non-portfolio income after retirement date (replaces Annual Income for tax brackets).")
+            else:
+                config['draw_start_date'] = None
+                config['draw_monthly_retirement'] = 0.0
+                config['retirement_date'] = None
+                config['dca_in_retirement'] = True
+                config['retirement_income'] = None
+
+            st.divider()
+            config['default_maint'] = utils.num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
+
         with c2:
             st.markdown("##### Rates & Maintenance")
 
             
-            margin_mode = st.selectbox("Margin Rate Model", ["Fixed", "Variable (Fed + Spread)", "Tiered (Blended)"], 
+            margin_mode = st.selectbox("Margin Rate Model", ["Fixed", "Variable (Fed + Spread)", "Tiered (Blended)"],
                                       index=2,
+                                      key="margin_rate_model",
                                       help="**Fixed**: Constant annual rate.\n**Variable**: Fed Funds Rate (Daily) + User Spread.\n**Tiered**: Blended rate based on loan size (Base + Tiered Spread).",
                                       disabled=margin_disabled)
             
@@ -528,24 +597,8 @@ def render():
             
             config['rate_annual'] = margin_config
             
-            config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
-            if config['draw_monthly'] > 0:
-                config['draw_start_date'] = st.date_input(
-                    "Draw Start Date",
-                    value=None,
-                    key="draw_start_date",
-                    help="Date when monthly draws begin. Defaults to backtest start if not set.",
-                )
-                config['retirement_income'] = utils.num_input(
-                    "Retirement Income ($)", "retirement_income", 0.0, 5000.0,
-                )
-                st.caption("Annual non-portfolio income after draw start date (replaces Annual Income for tax brackets).")
-            else:
-                config['draw_start_date'] = None
-                config['retirement_income'] = None
-            config['default_maint'] = utils.num_input("Default Maint %", "default_maint", 25.0, 1.0, disabled=margin_disabled)
-            
             # Portfolio Margin Controls
+            st.divider()
             st.markdown("##### Portfolio Margin (PM)")
             pm_mode = st.selectbox(
                 "PM Comparison Mode",

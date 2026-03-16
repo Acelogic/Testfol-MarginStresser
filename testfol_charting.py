@@ -19,7 +19,7 @@ logging.basicConfig(
 )
 from app.ui import render_sidebar, render_config, render_results, asset_explorer, charts
 
-BACKEND_URL = "http://localhost:8000"
+BACKEND_URL = "http://localhost:8100"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Backend Detection
@@ -30,7 +30,7 @@ def _backend_available():
     """Check if FastAPI backend is reachable (cached 30s)."""
     try:
         r = requests.get(f"{BACKEND_URL}/api/health", timeout=1)
-        return r.ok
+        return r.ok and r.json().get("status") == "ok"
     except Exception:
         return False
 
@@ -126,7 +126,8 @@ def _build_payload(config, start_date, end_date, bearer_token):
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
             pm_val = float(row.get("PM Maint %", 0))
-            pm_maint_pcts[ticker] = pm_val if pm_val > 0 else maint_pcts[ticker]
+            if pm_val > 0:
+                pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
         api_portfolios.append({
@@ -163,12 +164,17 @@ def _build_payload(config, start_date, end_date, bearer_token):
     pm_config = {
         "pm_buy_block": config.get("pm_buy_block", False),
         "pm_buy_block_threshold": config.get("pm_buy_block_threshold", 100000.0),
-        "starting_loan": config.get("starting_loan", 0.0),
+        "starting_loan": config.get("starting_loan", 0.0) - config.get("starting_cash", 0.0),
         "draw_monthly": config.get("draw_monthly", 0.0),
+        "draw_monthly_retirement": config.get("draw_monthly_retirement", 0.0),
         "draw_start_date": str(_draw_start) if _draw_start is not None else None,
+        "retirement_date": str(config["retirement_date"]) if config.get("retirement_date") else None,
+        "dca_in_retirement": config.get("dca_in_retirement", True),
         "margin_rate_annual": _approx_rate,
         "cashflow_for_loan": gcf.get("amount", 0.0),
         "cashflow_freq": gcf.get("freq", "Monthly"),
+        "fund_dca_margin": gcf.get("fund_dca_margin", True),
+        "retirement_income": config.get("retirement_income", None),
     }
 
     payload = {
@@ -255,7 +261,8 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
             ticker = row["Ticker"].split("?")[0]
             maint_pcts[ticker] = float(row.get("Maint %", d_maint))
             pm_val = float(row.get("PM Maint %", 0))
-            pm_maint_pcts[ticker] = pm_val if pm_val > 0 else maint_pcts[ticker]
+            if pm_val > 0:
+                pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
         portfolios_plain.append({
@@ -296,12 +303,17 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
     pm_config = {
         "pm_buy_block": config.get("pm_buy_block", False),
         "pm_buy_block_threshold": config.get("pm_buy_block_threshold", 100000.0),
-        "starting_loan": config.get("starting_loan", 0.0),
+        "starting_loan": config.get("starting_loan", 0.0) - config.get("starting_cash", 0.0),
         "draw_monthly": config.get("draw_monthly", 0.0),
+        "draw_monthly_retirement": config.get("draw_monthly_retirement", 0.0),
         "draw_start_date": config.get("draw_start_date", None),
+        "retirement_date": config.get("retirement_date", None),
+        "dca_in_retirement": config.get("dca_in_retirement", True),
         "margin_rate_annual": _approx_rate,
         "cashflow_for_loan": gcf.get("amount", 0.0),
         "cashflow_freq": gcf.get("freq", "Monthly"),
+        "fund_dca_margin": gcf.get("fund_dca_margin", True),
+        "retirement_income": config.get("retirement_income", None),
     }
 
     results_list, bench_series_list = run_multi_backtest(

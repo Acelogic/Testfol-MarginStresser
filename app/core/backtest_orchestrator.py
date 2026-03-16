@@ -91,13 +91,16 @@ def run_single_backtest(
         for ticker, weight in alloc_map.items():
             m_pm = pm_maint_pcts.get(ticker.split("?")[0], 0.0)
             if m_pm > 0:
-                current_wmaint_pm += (weight / 100) * (m_pm / 100)
+                current_wmaint_pm += (weight / total_w) * (m_pm / 100)
 
     # PM buy block config
     _pm_cfg = pm_config or {}
     pm_buy_block = _pm_cfg.get("pm_buy_block", False)
     pm_buy_block_threshold = _pm_cfg.get("pm_buy_block_threshold", 100000.0)
     pm_draw_monthly = _pm_cfg.get("draw_monthly", 0.0)
+    pm_draw_monthly_retirement = _pm_cfg.get("draw_monthly_retirement", 0.0)
+    pm_dca_in_retirement = _pm_cfg.get("dca_in_retirement", True)
+    _raw_retirement_date = _pm_cfg.get("retirement_date", None)
     _raw_draw_start = _pm_cfg.get("draw_start_date", None)
     # Clamp draw_start_date to backtest range
     _bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
@@ -111,9 +114,23 @@ def run_single_backtest(
         pm_draw_start_date = min(pm_draw_start_date, _bt_end)
     else:
         pm_draw_start_date = _bt_start
+    # Clamp retirement_date to backtest range
+    if _raw_retirement_date is not None:
+        if isinstance(_raw_retirement_date, str):
+            _raw_retirement_date = pd.Timestamp(_raw_retirement_date).date()
+        elif isinstance(_raw_retirement_date, datetime.datetime):
+            _raw_retirement_date = _raw_retirement_date.date()
+        pm_retirement_date = max(_raw_retirement_date, _bt_start)
+        pm_retirement_date = min(pm_retirement_date, _bt_end)
+    else:
+        pm_retirement_date = None
     pm_margin_rate = _pm_cfg.get("margin_rate_annual", 8.0)
     pm_cf_for_loan = _pm_cfg.get("cashflow_for_loan", 0.0)
     pm_cf_freq = _pm_cfg.get("cashflow_freq", "Monthly")
+
+    _orch_log = logging.getLogger("orchestrator")
+    _orch_log.info("Orchestrator draw config: draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
+                   pm_draw_monthly, pm_draw_monthly_retirement, pm_draw_start_date, pm_retirement_date, pm_dca_in_retirement)
 
     # Rebalance
     reb = rebalance
@@ -214,6 +231,9 @@ def run_single_backtest(
                 margin_rate_annual=pm_margin_rate,
                 draw_monthly=pm_draw_monthly,
                 draw_start_date=pm_draw_start_date,
+                draw_monthly_retirement=pm_draw_monthly_retirement,
+                retirement_date=pm_retirement_date,
+                dca_in_retirement=pm_dca_in_retirement,
                 loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
                 loan_repayment_freq=pm_cf_freq,
             )
@@ -248,6 +268,9 @@ def run_single_backtest(
             margin_rate_annual=pm_margin_rate,
             draw_monthly=pm_draw_monthly,
             draw_start_date=pm_draw_start_date,
+            draw_monthly_retirement=pm_draw_monthly_retirement,
+            retirement_date=pm_retirement_date,
+            dca_in_retirement=pm_dca_in_retirement,
             loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
             loan_repayment_freq=pm_cf_freq,
         )
@@ -392,6 +415,17 @@ def run_multi_backtest(
         pm_draw_start_date = min(pm_draw_start_date, _p2_bt_end)
     else:
         pm_draw_start_date = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+    # Resolve retirement_date for Pass 2
+    _p2_raw_ret = _p2_cfg.get("retirement_date", None)
+    if _p2_raw_ret is not None:
+        if isinstance(_p2_raw_ret, str):
+            _p2_raw_ret = pd.Timestamp(_p2_raw_ret).date()
+        elif isinstance(_p2_raw_ret, datetime.datetime):
+            _p2_raw_ret = _p2_raw_ret.date()
+        pm_retirement_date = _p2_raw_ret
+    else:
+        pm_retirement_date = None
+    pm_draw_monthly_retirement = _p2_cfg.get("draw_monthly_retirement", 0.0)
 
     if common_start:
         for i, res in enumerate(results_list):
@@ -462,6 +496,9 @@ def run_multi_backtest(
                                 margin_rate_annual=_pm_cfg_p2.get("margin_rate_annual", 8.0),
                                 draw_monthly=_pm_cfg_p2.get("draw_monthly", 0.0),
                                 draw_start_date=pm_draw_start_date,
+                                draw_monthly_retirement=_pm_cfg_p2.get("draw_monthly_retirement", 0.0),
+                                retirement_date=pm_retirement_date,
+                                dca_in_retirement=_pm_cfg_p2.get("dca_in_retirement", True),
                                 loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                                 loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
                             )
@@ -547,6 +584,9 @@ def run_multi_backtest(
                                 margin_rate_annual=_pm_cfg2.get("margin_rate_annual", 8.0),
                                 draw_monthly=_pm_cfg2.get("draw_monthly", 0.0),
                                 draw_start_date=pm_draw_start_date,
+                                draw_monthly_retirement=_pm_cfg2.get("draw_monthly_retirement", 0.0),
+                                retirement_date=pm_retirement_date,
+                                dca_in_retirement=_pm_cfg2.get("dca_in_retirement", True),
                                 loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                                 loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
                             )
