@@ -8,7 +8,8 @@ def _prepare_candlestick_data(ohlc_df, equity_series, loan_series,  # noqa: ARG0
                                usage_series, equity_pct_series,
                                bench_series, comparison_series,
                                effective_rate_series=None,
-                               pm_usage_series=None):
+                               pm_usage_series=None,
+                               daily_close=None):
     """Compute SMAs and format DataFrames for lightweight-charts. Cached."""
     _ = equity_series, loan_series  # unused but part of cache key from caller
     # OHLC in lightweight-charts format (lowercase + 'time' column)
@@ -20,11 +21,12 @@ def _prepare_candlestick_data(ohlc_df, equity_series, loan_series,  # noqa: ARG0
         'close': ohlc_df['Close'].values,
     })
 
-    # SMAs
-    close = ohlc_df['Close']
-    sma_20 = close.rolling(window=min(20, len(ohlc_df))).mean().dropna()
-    sma_50 = close.rolling(window=min(50, len(ohlc_df))).mean().dropna()
-    sma_200 = close.rolling(window=min(200, len(ohlc_df))).mean().dropna()
+    # SMAs — compute on DAILY data, then resample to candle timeframe
+    # This ensures SMA 200 = 200 trading days regardless of candlestick timeframe
+    sma_source = daily_close if daily_close is not None else ohlc_df['Close']
+    sma_20 = sma_source.rolling(window=min(20, len(sma_source))).mean().dropna()
+    sma_50 = sma_source.rolling(window=min(50, len(sma_source))).mean().dropna()
+    sma_200 = sma_source.rolling(window=min(200, len(sma_source))).mean().dropna()
 
     # Align all overlay series to candle timestamps so lines connect properly
     candle_idx = ohlc_df.index
@@ -169,7 +171,8 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
                               show_volume=True, bench_series=None,
                               comparison_series=None,
                               effective_rate_series=None,
-                              pm_usage_series=None, pm_mode="Off"):
+                              pm_usage_series=None, pm_mode="Off",
+                              daily_close=None):
     title_map = {
         "1D": "Daily", "1W": "Weekly", "1M": "Monthly",
         "3M": "Quarterly", "1Y": "Yearly",
@@ -207,6 +210,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
         bench_series, comparison_series,
         effective_rate_series,
         pm_usage_series=pm_usage_series,
+        daily_close=daily_close,
     )
 
     # ── Chart with synced margin indicator pane ────────────────────────
