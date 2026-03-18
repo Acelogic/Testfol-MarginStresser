@@ -16,7 +16,7 @@ app = FastAPI(title="Testfol Backend", version="1.0.0")
 # CORS — allow Streamlit on :8501
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:8501"],
+    allow_origins=["http://localhost:8501", "http://localhost:8100"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

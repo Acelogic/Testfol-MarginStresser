@@ -36,11 +36,11 @@ def main():
 
     # Start FastAPI
     api_proc = subprocess.Popen(
-        [sys.executable, "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"],
+        [sys.executable, "-m", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8100", "--reload"],
         cwd=root,
     )
     procs.append(api_proc)
-    print("FastAPI started on http://localhost:8000")
+    print("FastAPI started on http://localhost:8100")
 
     # Start Streamlit
     st_proc = subprocess.Popen(

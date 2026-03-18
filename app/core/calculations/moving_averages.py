@@ -127,7 +127,7 @@ def analyze_ma(
         recovery_days = None
         recovery_date = pd.NaT
         bottom_to_recovery_pct = None
-        start_price = series.loc[s_date]
+        start_price = series.asof(s_date)
 
         # Calculate Bottom to Recovery % (actual rally from bottom to starting price / breakeven)
         # This is the inverse of the drawdown - a 30% drop requires a 42.9% rally to recover
@@ -359,11 +359,11 @@ def analyze_wma(
         if pd.isna(e_date):
             now = weekly_series.index[-1]
             # Duration in weeks
-            duration_weeks = len(weekly_series[s_date:now])
+            duration_weeks = max(1, len(weekly_series[s_date:now]) - 1)
             calc_end = weekly_series.index[-1]
             status = "Ongoing"
         else:
-            duration_weeks = len(weekly_series[s_date:e_date])
+            duration_weeks = max(1, len(weekly_series[s_date:e_date]) - 1)
             calc_end = e_date
             status = "Recovered"
 
@@ -391,7 +391,7 @@ def analyze_wma(
         recovery_weeks = None
         recovery_date = pd.NaT
         bottom_to_recovery_pct = None
-        start_price = weekly_series.loc[s_date]
+        start_price = weekly_series.asof(s_date)
 
         # Calculate Bottom to Recovery %
         if pd.notna(bottom_date) and not sub_series.empty:
@@ -412,7 +412,7 @@ def analyze_wma(
 
             if recovered_mask.any():
                 recovery_date = recovered_mask.idxmax()
-                recovery_weeks = len(weekly_series[s_date:recovery_date])
+                recovery_weeks = max(1, len(weekly_series[s_date:recovery_date]) - 1)
 
         # Calculate True Recovery Weeks (weeks until BOTH price >= start AND price > WMA)
         true_recovery_weeks = None
@@ -428,7 +428,7 @@ def analyze_wma(
                     true_recovery_mask = (aligned_prices >= start_price) & (aligned_prices > aligned_wma)
                     if true_recovery_mask.any():
                         true_recovery_date = true_recovery_mask.idxmax()
-                        true_recovery_weeks = len(weekly_series[s_date:true_recovery_date])
+                        true_recovery_weeks = max(1, len(weekly_series[s_date:true_recovery_date]) - 1)
 
         # Calculate Subsequent Peak (Only if Recovered)
         weeks_to_ath = None
@@ -462,14 +462,14 @@ def analyze_wma(
                     ath_reached = post_recovery[post_recovery >= previous_ath]
                     if not ath_reached.empty:
                         ath_date = ath_reached.index[0]
-                        weeks_to_ath = len(weekly_series[e_date:ath_date])
+                        weeks_to_ath = max(1, len(weekly_series[e_date:ath_date]) - 1)
 
                 if i == len(merged_events) - 1:
                     status = "Recovered (Current)"
 
                 # Calculate Weeks from Bottom to Peak
                 if pd.notna(bottom_date) and pd.notna(peak_date):
-                    weeks_bottom_to_peak = len(weekly_series[bottom_date:peak_date])
+                    weeks_bottom_to_peak = max(1, len(weekly_series[bottom_date:peak_date]) - 1)
             else:
                 peak_pct = 0.0
                 bottom_to_peak_pct = None
@@ -479,9 +479,9 @@ def analyze_wma(
                 bottom_price = weekly_series.loc[bottom_date]
                 current_price = weekly_series.iloc[-1]
                 bottom_to_peak_pct = ((current_price / bottom_price) - 1) * 100
-                weeks_bottom_to_peak = len(weekly_series[bottom_date:])
+                weeks_bottom_to_peak = max(1, len(weekly_series[bottom_date:]) - 1)
                 peak_pct = None
-                recovery_weeks = len(weekly_series[s_date:])
+                recovery_weeks = max(1, len(weekly_series[s_date:]) - 1)
 
         # Convert weeks to approximate days for display compatibility
         duration_days = duration_weeks * 7
@@ -503,7 +503,7 @@ def analyze_wma(
             "Weeks to ATH": weeks_to_ath,
             "Recovery Date": recovery_date,
             "Recovery Weeks": recovery_weeks,
-            "Post-WMA Rally Weeks": len(weekly_series[e_date:peak_date]) if pd.notna(peak_date) and pd.notna(e_date) else None,
+            "Post-WMA Rally Weeks": max(1, len(weekly_series[e_date:peak_date]) - 1) if pd.notna(peak_date) and pd.notna(e_date) else None,
             "Status": status,
             "Entry WMA": entry_wma,
             "Exit WMA": exit_wma,
