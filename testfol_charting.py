@@ -405,6 +405,8 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
             if results_list is not None:
                 st.session_state.results_list = results_list
                 st.session_state.bench_series_list = bench_series_list or []
+            else:
+                st.warning("Backtest returned no results. Check your portfolio configuration and date range.")
 
         except requests.exceptions.ConnectionError:
             # API was detected but went down mid-request — retry in-process
@@ -448,5 +450,8 @@ if "results_list" in st.session_state and st.session_state.results_list:
     common_start = max(start_dates) if start_dates else None
 
     res = results_list[active_idx]
+    # Attach benchmark to individual result for per-portfolio comparison
+    if bench_series_list and active_idx < len(bench_series_list):
+        res["bench_series"] = bench_series_list[active_idx]
     st.markdown(f"### 📋 {res['name']} Details")
     render_results(res, config, portfolio_name=res['name'], clip_start_date=common_start)

@@ -72,7 +72,7 @@ def render_chart_tab(
                     series_opts, log_scale,
                     bench_series=bench_resampled,
                     comparison_series=comp_resampled,
-                    effective_rate_series=effective_rate_series,
+                    effective_rate_series=effective_rate_resampled,
                     pm_usage_series=pm_usage_series if pm_mode != 'Off' else None,
                     pm_mode=pm_mode,
                     pm_blocked_dates=pm_blocked_dates,
@@ -206,8 +206,8 @@ def _render_margin_statistics(
         max_usage_val = usage_series.max()
         equity_at_max = equity_series.loc[max_usage_idx]
 
-        min_equity_idx = equity_series.idxmin()
-        min_equity_val = equity_series.min()
+        min_equity_idx = final_adj_series.idxmin()
+        min_equity_val = final_adj_series.min()
 
         total_draws = 0.0
         if draw_monthly > 0 and not equity_series.empty:
@@ -234,7 +234,7 @@ def _render_margin_statistics(
 
         # Row 1: Current Status
         c1, c2, c3 = st.columns(3)
-        c1.metric("Final Equity", f"${equity_series.iloc[-1]:,.2f}")
+        c1.metric("Final Equity", f"${final_adj_series.iloc[-1]:,.2f}")
         c2.metric("Final Loan", f"${loan_series.iloc[-1]:,.2f}")
         c3.metric("Final Usage", f"{usage_series.iloc[-1]*100:.2f}%")
 
@@ -249,7 +249,7 @@ def _render_margin_statistics(
         c5.metric(
             "Avail. to Withdraw",
             f"${avail_withdraw:,.2f}",
-            help="Excess Borrowing Power"
+            help="Additional amount that can be drawn before reaching maintenance threshold"
         )
         c6.metric(
             "Max Margin Usage",

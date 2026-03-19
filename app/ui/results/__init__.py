@@ -87,14 +87,13 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     if starting_cash > 0 and starting_loan == 0:
         starting_loan = -starting_cash  # Cash is modeled as negative loan
 
-    # Derive retirement year from retirement_date (fallback to draw_start_date)
+    # Derive retirement year from retirement_date only (not draw_start_date)
     _retirement_year = None
-    _ret_src = retirement_date or draw_start_date
-    if retirement_income is not None and _ret_src is not None:
-        if hasattr(_ret_src, 'year'):
-            _retirement_year = _ret_src.year
-        elif isinstance(_ret_src, str):
-            _retirement_year = int(_ret_src[:4])
+    if retirement_income is not None and retirement_income > 0 and retirement_date is not None:
+        if hasattr(retirement_date, 'year'):
+            _retirement_year = retirement_date.year
+        elif isinstance(retirement_date, str):
+            _retirement_year = int(retirement_date[:4])
 
     _gcf = config.get('global_cashflow', {})
     cashflow = _gcf.get('amount', config.get('cashflow', 0.0))
@@ -187,7 +186,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     # Create Payment Series (Unconditional for Sharpe Calc)
     tax_payment_series = pd.Series(0.0, index=port_series.index)
-    annual_total_tax = fed_tax_series + state_tax_series
+    annual_total_tax = fed_tax_series.add(state_tax_series, fill_value=0.0)
 
     for year, amount in annual_total_tax.items():
         if amount > 0:
@@ -208,18 +207,18 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
         if cashfreq == "Monthly":
                 months = dates.month
-                changes = months != np.roll(months, 1)
-                changes[0] = False
+                changes = months != np.roll(months, -1)
+                changes[-1] = False
                 repayment_vals[changes] = cashflow
         elif cashfreq == "Quarterly":
                 quarters = dates.quarter
-                changes = quarters != np.roll(quarters, 1)
-                changes[0] = False
+                changes = quarters != np.roll(quarters, -1)
+                changes[-1] = False
                 repayment_vals[changes] = cashflow
         elif cashfreq == "Yearly":
                 years = dates.year
-                changes = years != np.roll(years, 1)
-                changes[0] = False
+                changes = years != np.roll(years, -1)
+                changes[-1] = False
                 repayment_vals[changes] = cashflow
 
         repayment_series = repayment_vals
@@ -233,23 +232,25 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         dca_vals = pd.Series(0.0, index=dates)
         if cashfreq == "Monthly":
             months = dates.month
-            changes = months != np.roll(months, 1)
-            changes[0] = False
+            changes = months != np.roll(months, -1)
+            changes[-1] = False
             dca_vals[changes] = cashflow
         elif cashfreq == "Quarterly":
             quarters = dates.quarter
-            changes = quarters != np.roll(quarters, 1)
-            changes[0] = False
+            changes = quarters != np.roll(quarters, -1)
+            changes[-1] = False
             dca_vals[changes] = cashflow
         elif cashfreq == "Yearly":
             years = dates.year
-            changes = years != np.roll(years, 1)
-            changes[0] = False
+            changes = years != np.roll(years, -1)
+            changes[-1] = False
             dca_vals[changes] = cashflow
-        # Apply retirement cutoff if DCA should stop at draw_start_date
-        if not dca_in_retirement and draw_start_date is not None:
-            cutoff = pd.Timestamp(draw_start_date)
-            dca_vals[dates >= cutoff] = 0.0
+        # Apply retirement cutoff — stop DCA at draw_start_date or retirement_date
+        if not dca_in_retirement:
+            _dca_cutoff = draw_start_date or retirement_date
+            if _dca_cutoff is not None:
+                cutoff = pd.Timestamp(_dca_cutoff)
+                dca_vals[dates >= cutoff] = 0.0
         dca_series = dca_vals
 
     # Store DCA sum for margin stats (total DCA funded via margin)

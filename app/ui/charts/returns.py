@@ -505,8 +505,16 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(2), x=month_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
         fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
-        fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(2), x=month_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+        # Compute tighter color scale for the average row
+        avg_monthly_vals = z_combined_main[-1:] * 100
+        avg_abs_max = np.nanmax(np.abs(avg_monthly_vals))
+        scale_avg_main = max(avg_abs_max * 1.2, 0.5) if not np.isnan(avg_abs_max) else scale_main
+        avg_yearly_val = z_combined_yearly[-1:] * 100
+        avg_yearly_abs = np.nanmax(np.abs(avg_yearly_val))
+        scale_avg_yearly = max(avg_yearly_abs * 1.2, 0.5) if not np.isnan(avg_yearly_abs) else scale_yearly
+
+        fig.add_trace(go.Heatmap(z=avg_monthly_vals.round(2), x=month_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_main, zmax=scale_avg_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
+        fig.add_trace(go.Heatmap(z=avg_yearly_val.round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_yearly, zmax=scale_avg_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
 
         fig.update_layout(title="Monthly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)

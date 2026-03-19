@@ -399,7 +399,7 @@ def render():
         tax_sim_mode = st.radio(
             "Tax Payment Simulation",
             ["None (Gross)", "Pay from Cash", "Pay with Margin"],
-            index=0,
+            index=2,
             key="tax_sim_mode",
             horizontal=True, # Make it horizontal to save space at top
             help="**None (Gross)**: Show raw pre-tax returns.\n**Pay from Cash**: Simulate selling shares to pay taxes (reduces equity).\n**Pay with Margin**: Simulate borrowing to pay taxes (increases loan)."
@@ -480,44 +480,53 @@ def render():
 
             st.divider()
             st.markdown("##### Withdrawal & Retirement")
-            config['draw_monthly'] = utils.num_input("Monthly Draw ($)", "draw_monthly", 0.0, 100.0)
-            if config['draw_monthly'] > 0:
-                config['draw_start_date'] = st.date_input(
-                    "Draw Start Date",
-                    value=None,
-                    key="draw_start_date",
-                    min_value=pd.Timestamp("2000-01-01").date(),
-                    max_value=pd.Timestamp("2060-12-31").date(),
-                    help="Date when pre-retirement draws begin. Defaults to backtest start if not set.",
-                )
-                if config['draw_start_date'] is not None:
-                    _dc1, _dc2 = st.columns(2)
-                    with _dc1:
-                        config['draw_monthly_retirement'] = utils.num_input(
-                            "Retirement Draw ($)", "draw_monthly_retirement", 0.0, 100.0,
-                        )
-                    with _dc2:
-                        if config['draw_monthly_retirement'] > 0:
-                            config['retirement_date'] = st.date_input(
-                                "Retirement Date",
-                                value=None,
-                                key="retirement_date",
-                                min_value=pd.Timestamp("2000-01-01").date(),
-                                max_value=pd.Timestamp("2060-12-31").date(),
-                                help="Date when draw switches to Retirement Draw amount.",
-                            )
-                        else:
-                            config['retirement_date'] = None
+
+            # Pre-retirement draws
+            _wd1, _wd2 = st.columns(2)
+            with _wd1:
+                config['draw_monthly'] = utils.num_input("Pre-Retirement Draw ($)", "draw_monthly", 0.0, 100.0)
+            with _wd2:
+                if config['draw_monthly'] > 0:
+                    config['draw_start_date'] = st.date_input(
+                        "Draw Start Date",
+                        value=None,
+                        key="draw_start_date",
+                        min_value=pd.Timestamp("2000-01-01").date(),
+                        max_value=pd.Timestamp("2060-12-31").date(),
+                        help="Date when pre-retirement draws begin. Defaults to backtest start if not set.",
+                    )
                 else:
-                    config['draw_monthly_retirement'] = 0.0
+                    config['draw_start_date'] = None
+
+            # Retirement draws (independent of pre-retirement)
+            _rd1, _rd2 = st.columns(2)
+            with _rd1:
+                config['draw_monthly_retirement'] = utils.num_input(
+                    "Retirement Draw ($)", "draw_monthly_retirement", 0.0, 100.0,
+                )
+            with _rd2:
+                if config['draw_monthly_retirement'] > 0:
+                    config['retirement_date'] = st.date_input(
+                        "Retirement Date",
+                        value=None,
+                        key="retirement_date",
+                        min_value=pd.Timestamp("2000-01-01").date(),
+                        max_value=pd.Timestamp("2060-12-31").date(),
+                        help="Date when retirement draws begin (replaces pre-retirement draw if set).",
+                    )
+                else:
                     config['retirement_date'] = None
+
+            # Retirement options (show when any draw is configured)
+            _has_any_draw = config['draw_monthly'] > 0 or config['draw_monthly_retirement'] > 0
+            if _has_any_draw:
                 _rc1, _rc2 = st.columns(2)
                 with _rc1:
                     config['dca_in_retirement'] = st.checkbox(
                         "Continue DCA in Retirement",
                         value=False,
                         key="dca_in_retirement",
-                        help="If unchecked, DCA contributions stop at the draw start date.",
+                        help="If unchecked, DCA contributions stop at the draw/retirement start date.",
                     )
                 with _rc2:
                     config['retirement_income'] = utils.num_input(
@@ -525,9 +534,6 @@ def render():
                     )
                 st.caption("Annual non-portfolio income after retirement date (replaces Annual Income for tax brackets).")
             else:
-                config['draw_start_date'] = None
-                config['draw_monthly_retirement'] = 0.0
-                config['retirement_date'] = None
                 config['dca_in_retirement'] = True
                 config['retirement_income'] = None
 

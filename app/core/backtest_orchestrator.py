@@ -282,7 +282,8 @@ def run_single_backtest(
             pm_blocked_dates = []
 
         if not port_series.empty:
-            stats = calculations.generate_stats(twr_series if twr_series is not None else port_series)
+            _stats_series = twr_series if (twr_series is not None and not twr_series.empty) else port_series
+            stats = calculations.generate_stats(_stats_series)
 
     return {
         "name": name,
@@ -403,18 +404,18 @@ def run_multi_backtest(
 
     # Resolve draw_start_date for Pass 2 re-runs
     _p2_cfg = pm_config or {}
+    _p2_bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+    _p2_bt_end = pd.Timestamp(end_date).date() if isinstance(end_date, str) else end_date
     _p2_raw_draw_start = _p2_cfg.get("draw_start_date", None)
     if _p2_raw_draw_start is not None:
         if isinstance(_p2_raw_draw_start, str):
             _p2_raw_draw_start = pd.Timestamp(_p2_raw_draw_start).date()
         elif isinstance(_p2_raw_draw_start, datetime.datetime):
             _p2_raw_draw_start = _p2_raw_draw_start.date()
-        _p2_bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
-        _p2_bt_end = pd.Timestamp(end_date).date() if isinstance(end_date, str) else end_date
         pm_draw_start_date = max(_p2_raw_draw_start, _p2_bt_start)
         pm_draw_start_date = min(pm_draw_start_date, _p2_bt_end)
     else:
-        pm_draw_start_date = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
+        pm_draw_start_date = _p2_bt_start
     # Resolve retirement_date for Pass 2
     _p2_raw_ret = _p2_cfg.get("retirement_date", None)
     if _p2_raw_ret is not None:
@@ -422,7 +423,10 @@ def run_multi_backtest(
             _p2_raw_ret = pd.Timestamp(_p2_raw_ret).date()
         elif isinstance(_p2_raw_ret, datetime.datetime):
             _p2_raw_ret = _p2_raw_ret.date()
-        pm_retirement_date = _p2_raw_ret
+        # Clamp retirement_date to [common_start, end_date] for Pass-2
+        _p2_cs = common_start.date() if hasattr(common_start, 'date') else common_start
+        pm_retirement_date = max(_p2_raw_ret, _p2_cs) if _p2_cs else _p2_raw_ret
+        pm_retirement_date = min(pm_retirement_date, _p2_bt_end)
     else:
         pm_retirement_date = None
     pm_draw_monthly_retirement = _p2_cfg.get("draw_monthly_retirement", 0.0)
@@ -473,7 +477,7 @@ def run_multi_backtest(
                         try:
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
                             _pm_cfg_p2 = pm_config or {}
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_ = shadow_fn(
+                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_p2_rest = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
                                 start_date=common_start.strftime("%Y-%m-%d"),
@@ -510,6 +514,8 @@ def run_multi_backtest(
                             res["unrealized_pl_df"] = new_unrealized
                             res["logs"] = new_logs
                             res["twr_series"] = new_twr
+                            if _p2_rest:
+                                res["pm_blocked_dates"] = list(_p2_rest[0]) if _p2_rest[0] else []
                             # Rebuild API TWR from re-fetched response
                             new_extra = res.get("raw_response")
                             if new_extra and "daily_returns" in new_extra:
@@ -560,7 +566,7 @@ def run_multi_backtest(
                             )
                             shadow_cf = 0.0 if pay_down_margin else cashflow_amount
                             _pm_cfg2 = pm_config or {}
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_ = shadow_fn(
+                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_p2_rest2 = shadow_fn(
                                 allocation=alloc_map,
                                 start_val=global_start_val,
                                 start_date=common_start.strftime("%Y-%m-%d"),
@@ -598,6 +604,8 @@ def run_multi_backtest(
                             res["unrealized_pl_df"] = new_unrealized
                             res["logs"] = new_logs
                             res["twr_series"] = new_twr
+                            if _p2_rest2:
+                                res["pm_blocked_dates"] = list(_p2_rest2[0]) if _p2_rest2[0] else []
                             res["shadow_range"] = f"{common_start.date()} to {end_date}"
                             # Use port_series (includes cashflows) for chart,
                             # TWR (strips cashflows) for stats

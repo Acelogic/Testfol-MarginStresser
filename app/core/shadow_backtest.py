@@ -549,9 +549,10 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             # Interest accrual
             if loan_balance > 0:
                 loan_balance *= (1 + daily_rate)
-            # Monthly draw (on month change)
+            # Monthly draw (on last trading day of month, matching simulate_margin)
             cur_month = date.month
-            if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and cur_month != _prev_month:
+            _is_last_day_of_month = (i < len(dates) - 1 and dates[i + 1].month != date.month)
+            if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and _is_last_day_of_month:
                 if draw_start_date is None or date.date() >= draw_start_date:
                     _cur_date = date.date()
                     if draw_monthly_retirement > 0 and retirement_date is not None and _cur_date >= retirement_date:
@@ -592,8 +593,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
-            # Stop DCA after draw start date if dca_in_retirement is False
-            if not dca_in_retirement and draw_start_date is not None and date.date() >= draw_start_date:
+            # Stop DCA at draw_start_date or retirement_date if dca_in_retirement is False
+            _dca_cutoff_date = draw_start_date or retirement_date
+            if not dca_in_retirement and _dca_cutoff_date is not None and date.date() >= _dca_cutoff_date:
                 should_inject = False
             elif cashflow_freq == Freq.YEARLY:
                 if i < len(dates) - 1 and dates[i+1].year != date.year:
@@ -763,15 +765,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             logs.append(f"{'Ticker':<10} {'Action':<6} {'Amount':<12} {'ST Gain':<12} {'LT Gain':<12}")
             logs.append("-" * 75)
             
-            # Record Pre-Rebalance Composition
-            for ticker in tickers:
-                composition.append({
-                    "Date": date,
-                    "Ticker": ticker,
-                    "Value": positions[ticker]
-                })
-                
-            # Calculate Trades
+            # Calculate Trades (composition recorded after trades complete)
             for ticker in tickers:
                 target_weight = allocation.get(ticker, 0)
                 target_val = day_port_val * (target_weight / total_alloc)
@@ -891,7 +885,15 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     })
 
             logs.append("-" * 75)
-            
+
+            # Record Post-Rebalance Composition (after trades, reflects target weights)
+            for ticker in tickers:
+                composition.append({
+                    "Date": date,
+                    "Ticker": ticker,
+                    "Value": positions[ticker]
+                })
+
         # 5. Record Month-End Unrealized P&L
         is_month_end = False
         if i < len(dates) - 1:

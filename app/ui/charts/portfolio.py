@@ -81,7 +81,6 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         label = f"{name} (CAGR: {cagr_display:.2f}%, DD: {max_dd_display:.2f}%)"
         
         # Rebase to $10k at common start for fair visual comparison
-        original_values = series.values
         plot_values = series.values
         if not series.empty and series.iloc[0] != 0:
             plot_values = (series.values / series.iloc[0]) * rebase_target
@@ -92,7 +91,6 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             mode='lines', 
             name=label,
             line=dict(color=color, width=2),
-            customdata=original_values,  # Store actual values for reference
             hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
         ))
 
@@ -100,31 +98,29 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
     if benchmarks:
         for i, bench in enumerate(benchmarks):
             if bench is None or bench.empty: continue
-            
+
             # Clip to common start date
             if common_start:
                 bench = bench[bench.index >= common_start]
                 if bench.empty: continue
-            
+
             b_name = bench.name if hasattr(bench, 'name') and bench.name else f"Benchmark {i+1}"
             b_stats = calculations.generate_stats(bench)
             b_cagr = b_stats.get('cagr', 0.0)
             b_mdd = b_stats.get('max_drawdown', 0.0)
             b_label = f"{b_name} (CAGR: {b_cagr:.2f}%, DD: {b_mdd:.2f}%)"
-            
+
             # Rebase to $10k
-            b_original = bench.values
             b_plot = bench.values
             if not bench.empty and bench.iloc[0] != 0:
                 b_plot = (bench.values / bench.iloc[0]) * rebase_target
-            
+
             fig.add_trace(go.Scatter(
                 x=bench.index,
                 y=b_plot,
                 mode='lines',
                 name=b_label,
                 line=dict(color='#BDC3C7', width=1.5, dash='dash'),
-                customdata=b_original,
                 hovertemplate="<b>%{fullData.name}</b>: $%{y:,.0f}<extra></extra>"
             ))
             
@@ -135,7 +131,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
         yaxis_title="Portfolio Value ($)",
         yaxis_type="log" if log_scale else "linear",
         yaxis_tickprefix="$",
-        yaxis_tickformat="s", # Uses SI prefixes (k, M, G)
+        yaxis_tickformat=",.0f",
         height=500,
         hovermode="x unified",
         legend=dict(
@@ -315,15 +311,15 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             x=bench_series.index, y=bench_series,
             name=bench_series.name or "Benchmark",
             line=dict(color='#F1C40F', width=1.5, dash='dash'),
-            hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", bench_series.name or "Benchmark")
+            hovertemplate=f"{bench_series.name or 'Benchmark'}: $%{{y:,.0f}}<extra></extra>"
         ))
-        
+
     if comparison_series is not None and not comparison_series.empty:
         fig.add_trace(go.Scatter(
             x=comparison_series.index, y=comparison_series,
             name=comparison_series.name or "Comparison",
             line=dict(color='#9B59B6', width=1.5, dash='dash'),
-            hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", comparison_series.name or "Comparison")
+            hovertemplate=f"{comparison_series.name or 'Comparison'}: $%{{y:,.0f}}<extra></extra>"
         ))
         
     # Secondary Axis for Percentages
@@ -421,7 +417,7 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             hovertemplate="Rate: %{y:.2%}<extra></extra>" 
         ))
 
-    # Withdrawal vertical lines (thin red, capped at Reg-T usage value)
+    # Withdrawal vertical lines (thin red, capped at Reg-T usage curve)
     if draw_dates and not usage_series.empty:
         for dd in draw_dates:
             idx = usage_series.index.get_indexer([dd], method="nearest")[0]
@@ -433,7 +429,7 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
                     line=dict(color="rgba(255,0,0,0.35)", width=1),
                 )
 
-    # Retirement draw vertical lines (orange, capped at Reg-T usage value)
+    # Retirement draw vertical lines (orange, capped at Reg-T usage curve)
     if ret_draw_dates and not usage_series.empty:
         for dd in ret_draw_dates:
             idx = usage_series.index.get_indexer([dd], method="nearest")[0]
@@ -477,7 +473,10 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
     _effective_draw_start = draw_start_date if draw_start_date is not None else (_chart_start if draw_monthly else None)
     if _effective_draw_start is not None and _chart_start is not None:
         draw_ts = pd.Timestamp(_effective_draw_start)
-        if _chart_start <= draw_ts <= _chart_end:
+        # Snap to nearest chart date if draw_ts falls on a non-trading day
+        if draw_ts < _chart_start:
+            draw_ts = _chart_start  # Clamp to first trading day
+        if draw_ts <= _chart_end:
             date_label = draw_ts.strftime("%b %d, %Y")
             amt_label = f"${draw_monthly:,.0f}/mo" if draw_monthly else ""
             annotation = f"Withdrawals Start<br>{date_label}"
@@ -498,7 +497,10 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
     # Retirement date vertical line (only if within chart range)
     if retirement_date is not None and draw_monthly_retirement > 0 and _chart_start is not None:
         ret_ts = pd.Timestamp(retirement_date)
-        if not (_chart_start <= ret_ts <= _chart_end):
+        # Snap to nearest chart date if on a non-trading day
+        if ret_ts < _chart_start:
+            ret_ts = _chart_start
+        if not (ret_ts <= _chart_end):
             ret_ts = None
     else:
         ret_ts = None
@@ -517,11 +519,19 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
             xanchor="left", xshift=6, yshift=10,
         )
 
+    # Pad x-axis left if a vertical marker sits at the chart start
+    _x_range_start = None
+    if _effective_draw_start is not None and _chart_start is not None:
+        _draw_ts_check = pd.Timestamp(_effective_draw_start)
+        if _draw_ts_check <= _chart_start:
+            _x_range_start = _chart_start - pd.Timedelta(days=15)
+
     fig.update_layout(
         template="plotly_dark",
         title="Portfolio History",
         xaxis_title="Date",
         xaxis_hoverformat="%b %d, %Y",
+        xaxis_range=[_x_range_start, None] if _x_range_start else None,
         yaxis_title="Value ($)",
         yaxis_type="log" if log_scale else "linear",
         height=600,
@@ -579,9 +589,9 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
              x=bench_series.index, y=bench_series,
              name=bench_name,
              line=dict(color="#FFD700", width=2, dash="dash"),
-             hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", bench_name)
+             hovertemplate=f"{bench_name}: $%{{y:,.0f}}<extra></extra>"
          ))
-         
+
     # Add Comparison Trace if available
     if comparison_series is not None:
          comp_name = comparison_series.name if hasattr(comparison_series, 'name') and comparison_series.name else "Standard Rebalance"
@@ -589,7 +599,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
              x=comparison_series.index, y=comparison_series,
              name=comp_name,
              line=dict(color="#00FFFF", width=2, dash="dot"),
-             hovertemplate="%{link_text}: $%{y:,.0f}<extra></extra>".replace("%{link_text}", comp_name)
+             hovertemplate=f"{comp_name}: $%{{y:,.0f}}<extra></extra>"
          ))
     
     fig1.update_layout(

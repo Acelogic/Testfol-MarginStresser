@@ -209,8 +209,8 @@ def simulate_margin(
     # Add Monthly Draws (pre-retirement and retirement)
     if draw_monthly > 0 or draw_monthly_retirement > 0:
         months = port.index.month.values
-        month_changes = months != np.roll(months, 1)
-        month_changes[0] = False # Explicitly ignore first day
+        month_changes = months != np.roll(months, -1)
+        month_changes[-1] = False  # Last day has no next day to compare
         if draw_start_date is not None:
             after_start = np.array(port.index >= pd.Timestamp(draw_start_date))
             month_changes = month_changes & after_start
@@ -220,6 +220,9 @@ def simulate_margin(
             post_ret = month_changes & after_ret
             cashflows.values[pre_ret] += draw_monthly
             cashflows.values[post_ret] += draw_monthly_retirement
+        elif draw_monthly_retirement > 0 and retirement_date is None:
+            # retirement_date not set — use retirement draw for all periods
+            cashflows.values[month_changes] += draw_monthly_retirement
         else:
             cashflows.values[month_changes] += draw_monthly
 
@@ -342,7 +345,7 @@ def simulate_margin(
     if use_vectorized:
         # Vectorized formula assumes constant interest rate — doesn't handle
         # zero-interest on negative balances. Use iterative fallback if starting with cash.
-        if starting_loan < 0 or _dca_vals is not None:
+        if starting_loan < 0 or _dca_vals is not None or repayment_series is not None:
             # Iterative: handles zero-interest on negative balances + DCA cash depletion
             loan_vals = np.zeros(len(port))
             current_loan = starting_loan
