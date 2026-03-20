@@ -155,8 +155,11 @@ def backtest():
         
         if is_annual_recon or not current_constituents:
             # Reconstitution or First Run: Strict 47% Selection
+            # Methodology: "cannot exceed the 47% threshold"
+            # Include stocks until adding the next one would push cumulative
+            # weight OVER 47%. Always include at least 1 stock.
             for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum < config.MEGA2_TARGET_THRESHOLD: # Include stock that crosses threshold ("at least 47%")
+                if curr_sum + w <= config.MEGA2_TARGET_THRESHOLD or not standard_tickers:
                     if mapped:
                         standard_tickers.append(ticks)
                     curr_sum += w
@@ -245,40 +248,39 @@ def backtest():
 
 
         if not is_min_security_triggered:
-            # Normal: Equal Re-weight and 30% Cap
+            # Normal: Re-weight by NDX weight and 30% Cap
             final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA2_SINGLE_STOCK_CAP, total_target=1.0)
         else:
-            # Minimum Security Rule Active
-            # 
-            # Official spec says: Standards get 99%, Fillers get 1%
-            # BUT: When 3 stocks hit 30% cap, they can only hold 90% max
-            # 
-            # Pragmatic interpretation (matches QBIG reality - 0.23% tracking):
-            # - Apply 30% cap to standards
-            # - Whatever standards CAN'T hold (due to caps) flows to fillers
-            # - This ensures 100% investment (matching real ETF behavior)
-            #
+            # Minimum Security Rule Active (per methodology page 3):
+            # 1. Standards get 99% of total weight (with 30% cap)
+            # 2. Fillers collectively get remaining 1%, equally distributed
+            # Fall back to cap-constrained split only when 99% is mathematically
+            # impossible (e.g. 3 stocks × 30% cap = 90% max).
             standard_subset = mega_subset[mega_subset['Ticker'].isin(standard_tickers)]
             filler_subset = mega_subset[~mega_subset['Ticker'].isin(standard_tickers)]
-            
+
             w_standard = pd.Series(dtype=float)
             w_filler = pd.Series(dtype=float)
-            
-            # Standards: Apply 30% cap, targeting 99% but accepting less if caps prevent it
+
             if not standard_subset.empty:
                 n_standards = len(standard_subset)
                 max_possible = n_standards * config.MEGA2_SINGLE_STOCK_CAP
-                standard_target = min(0.99, max_possible)
-                
+
+                # Attempt 99/1 split per spec; fall back if caps prevent it
+                if max_possible >= 0.99:
+                    standard_target = 0.99
+                else:
+                    standard_target = max_possible
+
                 w_standard = apply_caps(
-                    standard_subset.set_index('Ticker')['Weight'], 
-                    config.MEGA2_SINGLE_STOCK_CAP, 
+                    standard_subset.set_index('Ticker')['Weight'],
+                    config.MEGA2_SINGLE_STOCK_CAP,
                     total_target=standard_target
                 )
-            
+
             # Fillers: Get whatever remains to reach 100%
             filler_budget = 1.0 - w_standard.sum()
-            
+
             if not filler_subset.empty and filler_budget > 0:
                 filler_count = len(filler_subset)
                 w_filler = pd.Series(filler_budget / filler_count, index=filler_subset['Ticker'])
@@ -429,12 +431,12 @@ def backtest():
                     w_standard = pd.Series(dtype=float)
                     w_filler = pd.Series(dtype=float)
                     
-                    # Apply Logic
+                    # Apply Logic (99/1 split per methodology)
                     if not standard_subset.empty:
                         n_standards = len(standard_subset)
                         max_possible = n_standards * config.MEGA2_SINGLE_STOCK_CAP
-                        standard_target = min(0.99, max_possible)
-                        
+                        standard_target = 0.99 if max_possible >= 0.99 else max_possible
+
                         w_standard = apply_caps(
                             standard_subset.set_index('Ticker')['Weight'], 
                             config.MEGA2_SINGLE_STOCK_CAP, 

@@ -111,44 +111,57 @@ def get_unique_tickers(mapping):
 
 
 
+def _third_friday(year, month):
+    """Return the 3rd Friday of the given month/year."""
+    c = calendar.Calendar(firstweekday=calendar.SUNDAY)
+    monthcal = c.monthdatescalendar(year, month)
+    fridays = [day for week in monthcal for day in week
+               if day.weekday() == calendar.FRIDAY and day.month == month]
+    return fridays[2] if len(fridays) >= 3 else fridays[-1]
+
+
 def get_rebalance_dates(start_year=2000, end_year=2025):
     """
-    Returns the 3rd Friday of Mar, Jun, Sep, Dec for each year.
+    Returns (effective_date, reference_date) pairs for each quarterly rebalance.
+
+    Per Nasdaq methodology:
+      - Reference date: Last trading day of Feb/May/Aug/Nov (weights determined here)
+      - Effective date: First trading day following 3rd Friday of Mar/Jun/Sep/Dec
     """
-    dates = []
-    # Generate dates up to recent future
+    pairs = []
+    # Reference months map to effective months: Feb→Mar, May→Jun, Aug→Sep, Nov→Dec
+    ref_eff_months = [(2, 3), (5, 6), (8, 9), (11, 12)]
+
     current_year = start_year
-    target_months = [3, 6, 9, 12]
-    
-    while current_year <= end_year + 1: # Go a bit further to catch upcoming
-        for month in target_months:
-            if current_year > end_year and month > 3: break # Limit
-            
-            # Find 3rd Friday
-            c = calendar.Calendar(firstweekday=calendar.SUNDAY)
-            monthcal = c.monthdatescalendar(current_year, month)
-            fridays = [day for week in monthcal for day in week if day.weekday() == calendar.FRIDAY and day.month == month]
-            
-            if len(fridays) >= 3:
-                date_3rd_fri = fridays[2]
-                dates.append(pd.Timestamp(date_3rd_fri) + pd.offsets.BDay(1))
+    while current_year <= end_year + 1:
+        for ref_month, eff_month in ref_eff_months:
+            if current_year > end_year and eff_month > 3:
+                break
+
+            # Effective date: first business day after 3rd Friday of eff_month
+            date_3rd_fri = _third_friday(current_year, eff_month)
+            effective_date = pd.Timestamp(date_3rd_fri) + pd.offsets.BDay(1)
+
+            # Reference date: last business day of ref_month
+            ref_year = current_year
+            # BMonthEnd(0) from day 1 gives the last business day of that month
+            reference_date = pd.Timestamp(year=ref_year, month=ref_month, day=1) + pd.offsets.BMonthEnd(0)
+
+            pairs.append((effective_date, reference_date))
         current_year += 1
-        
-    # Filter to not exceed now + 90 days too much
+
+    # Filter to not exceed now + 90 days
     limit = pd.Timestamp.now() + pd.Timedelta(days=90)
-    dates = [d for d in dates if d <= limit]
-    
-    # --- EDGE CASE FIX ---
-    # The data source (nasdaq_components.csv) starts on 2000-06-30.
-    # The nearest "3rd Friday" before that was June 16, 2000.
-    # Because our logic looks for Data <= RebalanceDate, the June 16th date finds nothing.
-    # We must manually inject 2000-06-30 as a "special" rebalance date to kickstart the simulation.
-    start_override = pd.Timestamp("2000-06-30")
-    if start_override not in dates:
-        dates.append(start_override)
-        dates.sort()
-        
-    return dates
+    pairs = [(e, r) for e, r in pairs if e <= limit]
+
+    # Edge case: data starts 2000-06-30, inject bootstrap date
+    start_override_eff = pd.Timestamp("2000-06-30")
+    start_override_ref = pd.Timestamp("2000-05-31") - pd.offsets.BDay(0)
+    if not any(e == start_override_eff for e, _ in pairs):
+        pairs.append((start_override_eff, start_override_ref))
+        pairs.sort(key=lambda x: x[0])
+
+    return pairs
 
 def reconstruct():
     df, mapping = load_data()
@@ -168,43 +181,37 @@ def reconstruct():
     prices = prices.ffill()
     ndx_parser.process_files()
     
-    quarters = get_rebalance_dates()
+    rebalance_pairs = get_rebalance_dates()
     final_rows = []
-    
+
     # Proxy Returns
     if PROXY_TICKER in prices.columns:
         proxy_prices = prices[PROXY_TICKER]
     else:
         proxy_prices = pd.Series(1.0, index=prices.index)
 
-    print(f"Reconstructing weights for {len(quarters)} quarters...")
-    
-    for q_date in quarters:
+    print(f"Reconstructing weights for {len(rebalance_pairs)} quarters...")
+
+    for effective_date, reference_date in rebalance_pairs:
+        # Use effective_date for filing lookback and weight projection.
+        # Theoretically, Nasdaq uses reference_date (end of prior month) for
+        # weight determination, but since our filings are quarterly SEC data
+        # (not live index weights), projecting to the effective date gives us
+        # better weight approximation by using more recent filing data.
+        q_date = effective_date
+
         # 1. Find latest preceding filing
-        # mask = df['Date'] <= q_date
-        # But we want the latest AVAILABLE filing. 
-        # A filing dated 2000-06-30 is available ON 2000-06-30? Yes.
-        
-        # 1. Find latest preceding filing
-        # Must be within reasonable window (e.g. 400 days) to avoid zombie filings from delisted cos,
-        # but allow for Annual-only filing cadence in the dataset.
+        # Must be within reasonable window (e.g. 400 days) to avoid zombie filings
         lookback_window = pd.Timedelta(days=400)
         valid_filings = df[(df['Date'] <= q_date) & (df['Date'] >= q_date - lookback_window)]
-        
+
         if valid_filings.empty:
             continue
-            
-        if valid_filings.empty:
-            continue
-            
-        # Fix: Take latest filing for EACH ticker, not just the single max date for the whole group.
-        # "Ticker" is not yet in the DF, so use "Company".
-        # Sort by Date descending to keep the latest.
+
+        # Take latest filing for EACH company
         filing_data = valid_filings.sort_values('Date', ascending=False).drop_duplicates('Company', keep='first').copy()
-        
-        # 2. Project Value
-        # We need to project each holding from its Specific Filing Date to the Quarter End Date.
-        
+
+        # 2. Project Value from filing date to effective date
         idx_quarter = prices.index.get_indexer([q_date], method='pad')[0]
         if idx_quarter == -1:
             continue
@@ -310,114 +317,128 @@ def reconstruct():
     # ---------------------------------------------------------
     
     def apply_ndx_capping(group, is_annual=False):
-        # Working with Series
+        """Apply NDX capping rules per Methodology_NDX.pdf.
+
+        Quarterly constraints (checked FIRST — if both satisfied, no adjustment):
+          - No company weight may exceed 24%
+          - Aggregate weight of companies > 4.5% may not exceed 48%
+
+        Quarterly Stage 1: If any weight > 24%, cap all at 20%
+        Quarterly Stage 2: If aggregate(>4.5%) > 48%, set aggregate to 40%
+
+        Annual Stage 1: If any weight > 15%, cap all at 14%
+        Annual Stage 2: If top-5 aggregate > 40%, set to 38.5%; cap outside-top-5
+                        at min(4.4%, weight of 5th largest)
+        """
         w = group['Weight'].values.copy()
         tickers = group['Ticker'].values.copy()
-        
-        # We need to preserve mapping to return series
         w_series = pd.Series(w, index=tickers)
-        
-        # Iterative solver (Methodology says "process is repeated until... meet constraints")
-        for _ in range(20): 
-            # Normalize first
+
+        # Normalize
+        if w_series.sum() > 0:
             w_series = w_series / w_series.sum()
-            
-            if not is_annual:
-                # --- QUARTERLY RULES ---
-                
-                # Stage 1
-                max_w = w_series.max()
-                if max_w > 0.24:
-                    excess = w_series[w_series > 0.20] # Target is 20%
-                    if not excess.empty:
-                        surplus = (excess - 0.20).sum()
+
+        if not is_annual:
+            # --- QUARTERLY RULES ---
+            # "If neither constraint is violated, no further adjustments are made"
+            if w_series.max() <= 0.24 and w_series[w_series > 0.045].sum() <= 0.48:
+                return pd.DataFrame({'Ticker': w_series.index, 'CappedWeight': w_series.values})
+
+            for _ in range(20):
+                w_series = w_series / w_series.sum()
+
+                # Stage 1: Trigger at 24%, cap at 20%
+                if w_series.max() > 0.24:
+                    over = w_series[w_series > 0.20]
+                    if not over.empty:
+                        surplus = (over - 0.20).sum()
                         w_series[w_series > 0.20] = 0.20
-                        
-                        # Redistribute to proportional to others
-                        others = w_series[w_series <= 0.20]
+                        others = w_series[w_series < 0.20]
                         if not others.empty:
-                             w_series[w_series <= 0.20] = others + (surplus * others / others.sum())
-                
-                # Stage 2
-                large_caps = w_series[w_series > 0.045]
-                agg_weight = large_caps.sum()
-                
-                if agg_weight > 0.48:
-                    # Target aggregate is 40%
-                    scale_factor = 0.40 / agg_weight
-                    w_series[w_series > 0.045] = w_series[w_series > 0.045] * scale_factor
-                    
-                    surplus = agg_weight - 0.40
-                    small_caps = w_series[w_series <= 0.045]
-                    if not small_caps.empty:
-                        w_series[w_series <= 0.045] = small_caps + (surplus * small_caps / small_caps.sum())
-                
-                # Check constraints
-                valid_stage1 = w_series.max() <= 0.24
-                valid_stage2 = w_series[w_series > 0.045].sum() <= 0.48
-                
-                if valid_stage1 and valid_stage2:
+                            w_series[others.index] = others + (surplus * others / others.sum())
+
+                # Stage 2: Aggregate(>4.5%) must not exceed 48%, target 40%
+                above = w_series[w_series > 0.045]
+                if above.sum() > 0.48:
+                    target_agg = 0.40
+                    scale = target_agg / above.sum()
+                    scaled_above = above * scale
+                    surplus = above.sum() - target_agg
+
+                    # Some stocks may have dropped below 4.5% after scaling
+                    w_series[above.index] = scaled_above
+                    below = w_series[w_series <= 0.045]
+                    if not below.empty:
+                        w_series[below.index] = below + (surplus * below / below.sum())
+
+                # Check convergence
+                if w_series.max() <= 0.2401 and w_series[w_series > 0.045].sum() <= 0.4801:
                     break
-            
-            else:
-                # --- ANNUAL RULES (December) ---
-                
-                # Stage 1: Cap > 15% -> 14%
+
+        else:
+            # --- ANNUAL RULES (December) ---
+            # Check if adjustments needed at all
+            w_sorted = w_series.sort_values(ascending=False)
+            needs_stage1 = w_series.max() > 0.15
+            needs_stage2 = w_sorted.iloc[:5].sum() > 0.40 if len(w_sorted) >= 5 else False
+
+            if not needs_stage1 and not needs_stage2:
+                return pd.DataFrame({'Ticker': w_series.index, 'CappedWeight': w_series.values})
+
+            for _ in range(20):
+                w_series = w_series / w_series.sum()
+
+                # Stage 1: Trigger at 15%, cap at 14%
                 if w_series.max() > 0.15:
-                    excess = w_series[w_series > 0.14]
-                    if not excess.empty:
-                        surplus = (excess - 0.14).sum()
+                    over = w_series[w_series > 0.14]
+                    if not over.empty:
+                        surplus = (over - 0.14).sum()
                         w_series[w_series > 0.14] = 0.14
-                        
                         others = w_series[w_series <= 0.14]
                         if not others.empty:
-                             w_series[w_series <= 0.14] = others + (surplus * others / others.sum())
+                            w_series[others.index] = others + (surplus * others / others.sum())
 
-                # Stage 2: Top 5 Aggregate > 40% -> 38.5%
+                # Stage 2: Top-5 aggregate > 40% → set to 38.5%
                 w_sorted = w_series.sort_values(ascending=False)
-                top5_tickers = w_sorted.iloc[:5].index
-                top5_sum = w_series[top5_tickers].sum()
-                
-                if top5_sum > 0.40:
-                    scale_factor = 0.385 / top5_sum
-                    w_series[top5_tickers] = w_series[top5_tickers] * scale_factor
-                    
-                    surplus = top5_sum - 0.385
-                    
-                    # Distribute surplus to non-Top5
-                    others_tickers = w_series.index.difference(top5_tickers)
-                    others = w_series[others_tickers]
-                    if not others.empty:
-                        w_series[others_tickers] = others + (surplus * others / others.sum())
+                if len(w_sorted) >= 5:
+                    top5_tickers = w_sorted.iloc[:5].index
+                    top5_sum = w_series[top5_tickers].sum()
 
-                    # Constraint: 5th largest cap limit for others
-                    # Re-evaluate 5th largest after scaling
-                    w_curr_sorted = w_series.sort_values(ascending=False)
-                    fifth_val = w_curr_sorted.iloc[4]
-                    cap_val = min(0.044, fifth_val)
-                    
-                    outside_tickers = w_curr_sorted.iloc[5:].index
-                    outside_excess = w_series[outside_tickers][w_series[outside_tickers] > cap_val]
-                    
-                    if not outside_excess.empty:
-                        surplus_2 = (outside_excess - cap_val).sum()
-                        w_series[outside_excess.index] = cap_val
-                        
-                        # Redistribute to remaining unrestricted
-                        unrestricted_tickers = w_series.index.difference(top5_tickers).difference(outside_excess.index)
-                        if not unrestricted_tickers.empty:
-                             w_series[unrestricted_tickers] = w_series[unrestricted_tickers] + (surplus_2 * w_series[unrestricted_tickers] / w_series[unrestricted_tickers].sum())
+                    if top5_sum > 0.40:
+                        scale = 0.385 / top5_sum
+                        w_series[top5_tickers] = w_series[top5_tickers] * scale
+                        surplus = top5_sum - 0.385
 
-                # Loop Check
-                # If Max <= 15% and Top5 <= 40%, we correspond to the 'Use Initial Weights' logic of stage 1/2
-                # Strictly speaking, we should check if we violated anything.
-                # But since we force caps, iterating should converge.
-                w_sorted = w_series.sort_values(ascending=False)
-                if (w_sorted.iloc[0] <= 0.1501
-                        and w_sorted.iloc[:5].sum() <= 0.4001
-                        and (w_sorted.iloc[5:] <= 0.0441).all()):
+                        # Distribute surplus to non-top-5
+                        others_idx = w_series.index.difference(top5_tickers)
+                        others = w_series[others_idx]
+                        if not others.empty:
+                            w_series[others_idx] = others + (surplus * others / others.sum())
+
+                        # Cap outside-top-5 at min(4.4%, weight of 5th largest)
+                        w_resort = w_series.sort_values(ascending=False)
+                        fifth_val = w_resort.iloc[4]
+                        cap_val = min(0.044, fifth_val)
+
+                        outside_idx = w_resort.iloc[5:].index
+                        outside_over = w_series[outside_idx][w_series[outside_idx] > cap_val]
+
+                        if not outside_over.empty:
+                            surplus2 = (outside_over - cap_val).sum()
+                            w_series[outside_over.index] = cap_val
+                            # Redistribute to uncapped outside-top-5 stocks
+                            uncapped = w_series[outside_idx][w_series[outside_idx] < cap_val]
+                            if not uncapped.empty:
+                                w_series[uncapped.index] = uncapped + (surplus2 * uncapped / uncapped.sum())
+
+                # Check convergence
+                w_check = w_series.sort_values(ascending=False)
+                stage1_ok = w_check.iloc[0] <= 0.1501
+                stage2_ok = (len(w_check) < 5) or (w_check.iloc[:5].sum() <= 0.4001)
+                outside_ok = (len(w_check) < 6) or (w_check.iloc[5:] <= 0.0441).all()
+                if stage1_ok and stage2_ok and outside_ok:
                     break
-        
+
         return pd.DataFrame({'Ticker': w_series.index, 'CappedWeight': w_series.values})
 
     print("Applying NDX capping rules (Quarterly: 24%/4.5% | Annual: 14%/38.5%)...")

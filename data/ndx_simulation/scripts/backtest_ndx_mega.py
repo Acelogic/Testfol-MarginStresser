@@ -150,12 +150,15 @@ def backtest():
             # Annual Reconstitution or First Run: Strict 47% Selection
             
             # Using MEGA1 constants
+            # Methodology: "cannot exceed the 47% threshold"
+            # Include stocks until adding the next one would push cumulative
+            # weight OVER 47%. Always include at least 1 stock.
             curr_sum = 0.0
             for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum < config.MEGA1_TARGET_THRESHOLD: # Include stock that crosses threshold ("at least 47%")
+                if curr_sum + w <= config.MEGA1_TARGET_THRESHOLD or not selected_tickers:
                     if mapped:
                         selected_tickers.append(ticks)
-                    # We count the weight towards the threshold regardless of mapping
+                    # Count weight towards threshold regardless of mapping
                     curr_sum += w
                 else:
                     break

@@ -477,6 +477,10 @@ def validate_against_real_indexes():
                 "common": common, "fred_id": fred_id, "tag": tag}
 
     # Each entry: (label, sim_file, price_return_fred, total_return_fred)
+    # NOTE: Our simulation uses yfinance auto_adjust=True (dividend-adjusted prices)
+    # so it computes TOTAL RETURN. The primary comparison should be vs the
+    # Total Return index; Price Return comparison will show a systematic gap
+    # equal to the dividend yield.
     comparisons = [
         ("NDX Mega 1.0", "NDXMEGASIM", "NASDAQNDXMEGA", "NASDAQNDXMEGAT"),
         ("NDX Mega 2.0", "NDXMEGA2SIM", "NASDAQNDXMEGA2", "NASDAQNDXMEGA2T"),
@@ -491,13 +495,13 @@ def validate_against_real_indexes():
         sim_df = pd.read_csv(sim_path, parse_dates=[0], index_col=0)
         sim_series = sim_df.iloc[:, 0]
 
-        print(f"\n--- {label} ---")
+        print(f"\n--- {label} (sim = Total Return via adjusted prices) ---")
 
-        # Compare against price return
-        result_price = compare_pair(label, sim_series, fred_price, "Price Return")
-
-        # Compare against total return
+        # Compare against TOTAL RETURN first (primary — matches our simulation type)
         result_total = compare_pair(label, sim_series, fred_total, "Total Return")
+
+        # Compare against PRICE RETURN (secondary — expect systematic positive gap from dividends)
+        result_price = compare_pair(label, sim_series, fred_price, "Price Return")
 
         # Chart for each available comparison
         for result in [result_price, result_total]:
@@ -526,9 +530,9 @@ def validate_against_real_indexes():
             plt.savefig(out_img, dpi=300, bbox_inches='tight')
             print(f"  Chart saved to {out_img}")
 
-        # --- Fix 3: Per-Quarter Attribution Diagnostic ---
-        # Use price return comparison (longer history) if available, else total return
-        result = result_price or result_total
+        # --- Per-Quarter Attribution Diagnostic ---
+        # Use total return comparison (matches our simulation type) if available
+        result = result_total or result_price
         if result is None:
             continue
 
