@@ -314,8 +314,8 @@ def main():
         usage_pct=0.232, pm_usage_pct=0.175, rate_pct=5.28,
     )
 
-    r_nigged = reverse_verify(
-        "NDXMEGASPLIT Nigged",
+    r_enhanced = reverse_verify(
+        "NDXMEGASPLIT Enhanced",
         port_val=904370, equity_val=638402, loan_val=265968,
         usage_pct=0.511, pm_usage_pct=0.386, rate_pct=4.97,
     )
@@ -325,15 +325,15 @@ def main():
     print(f"  CROSS-PORTFOLIO: SOLVED wmaint COMPARISON")
     print(f"{'='*80}")
     print(f"  Base wmaint:         {r_base['wmaint']:.4f} ({r_base['wmaint']*100:.2f}%)")
-    print(f"  Nigged wmaint:       {r_nigged['wmaint']:.4f} ({r_nigged['wmaint']*100:.2f}%)")
-    print(f"  Difference:          {abs(r_base['wmaint'] - r_nigged['wmaint']):.6f}")
-    if abs(r_base['wmaint'] - r_nigged['wmaint']) < 0.01:
+    print(f"  Enhanced wmaint:       {r_enhanced['wmaint']:.4f} ({r_enhanced['wmaint']*100:.2f}%)")
+    print(f"  Difference:          {abs(r_base['wmaint'] - r_enhanced['wmaint']):.6f}")
+    if abs(r_base['wmaint'] - r_enhanced['wmaint']) < 0.01:
         print(f"  => Both portfolios use the SAME wmaint (as expected if same tickers)")
     else:
         print(f"  => DIFFERENT wmaint values! Different Maint % per ticker in allocation?")
 
     print(f"\n  Base wmaint_pm:      {r_base['wmaint_pm']:.4f} ({r_base['wmaint_pm']*100:.2f}%)")
-    print(f"  Nigged wmaint_pm:    {r_nigged['wmaint_pm']:.4f} ({r_nigged['wmaint_pm']*100:.2f}%)")
+    print(f"  Enhanced wmaint_pm:    {r_enhanced['wmaint_pm']:.4f} ({r_enhanced['wmaint_pm']*100:.2f}%)")
 
     # Back-solve required annual tax payments
     print(f"\n{'='*80}")
@@ -343,32 +343,32 @@ def main():
     n_years = 7  # 2016..2022
 
     base_annual_tax, base_factor = backsol_required_taxes(56278, n_years, 5.28)
-    nigged_annual_tax, nigged_factor = backsol_required_taxes(265968, n_years, 4.97)
+    enhanced_annual_tax, enhanced_factor = backsol_required_taxes(265968, n_years, 4.97)
 
     print(f"\n  Base (loan=$56,278, rate=5.28%):")
     print(f"    Compounding factor sum: {base_factor:.2f}")
     print(f"    Required avg annual tax: ${base_annual_tax:,.0f}")
     print(f"    Over 7 years total: ${base_annual_tax * n_years:,.0f}")
 
-    print(f"\n  Nigged (loan=$265,968, rate=4.97%):")
-    print(f"    Compounding factor sum: {nigged_factor:.2f}")
-    print(f"    Required avg annual tax: ${nigged_annual_tax:,.0f}")
-    print(f"    Over 7 years total: ${nigged_annual_tax * n_years:,.0f}")
+    print(f"\n  Enhanced (loan=$265,968, rate=4.97%):")
+    print(f"    Compounding factor sum: {enhanced_factor:.2f}")
+    print(f"    Required avg annual tax: ${enhanced_annual_tax:,.0f}")
+    print(f"    Over 7 years total: ${enhanced_annual_tax * n_years:,.0f}")
 
-    ratio_tax_needed = nigged_annual_tax / base_annual_tax if base_annual_tax > 0 else float('inf')
-    ratio_port = r_nigged['port_val'] / r_base['port_val']
+    ratio_tax_needed = enhanced_annual_tax / base_annual_tax if base_annual_tax > 0 else float('inf')
+    ratio_port = r_enhanced['port_val'] / r_base['port_val']
 
-    print(f"\n  Tax ratio needed (Nigged/Base): {ratio_tax_needed:.2f}x")
-    print(f"  Portfolio ratio (Nigged/Base):  {ratio_port:.2f}x")
+    print(f"\n  Tax ratio needed (Enhanced/Base): {ratio_tax_needed:.2f}x")
+    print(f"  Portfolio ratio (Enhanced/Base):  {ratio_port:.2f}x")
 
     if ratio_tax_needed > ratio_port * 2:
-        print(f"\n  ⚠ SUSPICIOUS: Nigged needs {ratio_tax_needed:.1f}x the annual tax")
+        print(f"\n  ⚠ SUSPICIOUS: Enhanced needs {ratio_tax_needed:.1f}x the annual tax")
         print(f"    but only has {ratio_port:.1f}x the portfolio value.")
         print(f"    Possible explanations:")
-        print(f"      a) Nigged has higher turnover (more rebalancing trades)")
-        print(f"      b) Nigged has deeper gains (lower cost basis relative to current value)")
-        print(f"      c) Nigged's gains push into higher tax brackets (progressive)")
-        print(f"      d) BUG: Tax computation overcounts gains for Nigged")
+        print(f"      a) Enhanced has higher turnover (more rebalancing trades)")
+        print(f"      b) Enhanced has deeper gains (lower cost basis relative to current value)")
+        print(f"      c) Enhanced's gains push into higher tax brackets (progressive)")
+        print(f"      d) BUG: Tax computation overcounts gains for Enhanced")
         print(f"\n    TO INVESTIGATE: Check the Rebalancing tab → Tax Analysis for both portfolios.")
         print(f"    Compare year-by-year Realized P&L and tax amounts.")
     else:
@@ -403,18 +403,18 @@ def main():
 
     # Calibrate the P&L to produce the OBSERVED loan amounts.
     # Base needs ~$6.2k/year average tax → need ~$30k avg annual realized gains
-    # Nigged needs ~$29k/year avg tax → need ~$140k avg annual realized gains
+    # Enhanced needs ~$29k/year avg tax → need ~$140k avg annual realized gains
     # For a portfolio going from $10k to $421k, 15% turnover * 85% gain = ~12.75% of value
-    # For the nigged going to $904k, similar.
+    # For the enhanced going to $904k, similar.
     # Let's calibrate turnover to match.
 
     port_base = make_portfolio_series(10000, 0.65, "2016-01-04", "2022-11-07")
-    port_nigged = make_portfolio_series(10000, 0.83, "2016-01-04", "2022-11-07")
+    port_enhanced = make_portfolio_series(10000, 0.83, "2016-01-04", "2022-11-07")
 
     # Higher gain_pct = lower cost basis relative to current value (more unrealized gains)
-    # Try turnover=30%, gain=85% for base; turnover=30%, gain=90% for nigged
+    # Try turnover=30%, gain=85% for base; turnover=30%, gain=90% for enhanced
     pl_base = make_pl_by_year(port_base, annual_turnover_pct=0.30, gain_pct=0.85)
-    pl_nigged = make_pl_by_year(port_nigged, annual_turnover_pct=0.30, gain_pct=0.90)
+    pl_enhanced = make_pl_by_year(port_enhanced, annual_turnover_pct=0.30, gain_pct=0.90)
 
     verify_portfolio(
         "NDXMEGASPLIT (Base) [calibrated]", port_base, pl_base, rate_config, wmaint,
@@ -422,7 +422,7 @@ def main():
     )
 
     verify_portfolio(
-        "NDXMEGASPLIT Nigged [calibrated]", port_nigged, pl_nigged, rate_config, wmaint,
+        "NDXMEGASPLIT Enhanced [calibrated]", port_enhanced, pl_enhanced, rate_config, wmaint,
         other_income, filing_status, tax_method, state_code,
     )
 

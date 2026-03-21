@@ -29,7 +29,7 @@ BASE_ALLOC = {
 BASE_MAINT = {"NDXMEGASIM": 50.0, "GLDSIM": 25.0, "VXUSSIM": 25.0, "QQQSIM": 75.0}
 BASE_REBAL = {"mode": "Custom", "freq": "Yearly", "month": 1, "day": 1}
 
-NIGGED_ALLOC = {
+ENHANCED_ALLOC = {
     "NDXMEGASIM?L=2": 30.0,
     "GLDSIM": 20.0,
     "VXUSSIM": 15.0,
@@ -43,12 +43,12 @@ NIGGED_ALLOC = {
     "GOOG?L=2": 3.75,
     "TSLA?L=2": 3.75,
 }
-NIGGED_MAINT = {
+ENHANCED_MAINT = {
     "NDXMEGASIM": 50.0, "GLDSIM": 25.0, "VXUSSIM": 25.0, "QQQSIM": 75.0,
     "AAPL": 50.0, "MSFT": 50.0, "AVGO": 50.0, "AMZN": 50.0,
     "META": 50.0, "NVDA": 50.0, "GOOG": 50.0, "TSLA": 50.0,
 }
-NIGGED_REBAL = {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1}
+ENHANCED_REBAL = {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config
@@ -267,19 +267,19 @@ def run_and_trace(name, alloc, maint_pcts, rebal_cfg):
 
 def main():
     print("=" * 80)
-    print("  ACTUAL BACKTEST: NDXMEGASPLIT vs NDXMEGASPLIT Nigged")
+    print("  ACTUAL BACKTEST: NDXMEGASPLIT vs NDXMEGASPLIT Enhanced")
     print("  Running real shadow backtests with real price data")
     print("=" * 80)
 
     r_base = run_and_trace("NDXMEGASPLIT (Base)", BASE_ALLOC, BASE_MAINT, BASE_REBAL)
-    r_nigged = run_and_trace("NDXMEGASPLIT Nigged", NIGGED_ALLOC, NIGGED_MAINT, NIGGED_REBAL)
+    r_enhanced = run_and_trace("NDXMEGASPLIT Enhanced", ENHANCED_ALLOC, ENHANCED_MAINT, ENHANCED_REBAL)
 
-    if r_base and r_nigged:
+    if r_base and r_enhanced:
         print(f"\n\n{'#'*80}")
-        print(f"  COMPARISON: BASE vs NIGGED on Nov 7, 2022")
+        print(f"  COMPARISON: BASE vs ENHANCED on Nov 7, 2022")
         print(f"{'#'*80}")
 
-        print(f"\n  {'Metric':<25} {'Base':>15} {'Nigged':>15} {'Ratio':>10}")
+        print(f"\n  {'Metric':<25} {'Base':>15} {'Enhanced':>15} {'Ratio':>10}")
         print(f"  {'─'*65}")
         for key, label in [
             ("port_nov7", "Portfolio"),
@@ -289,26 +289,26 @@ def main():
             ("tax_by_nov7", "Tax by Nov 7"),
         ]:
             b = r_base[key]
-            n = r_nigged[key]
+            n = r_enhanced[key]
             ratio = n / b if b != 0 else float('inf')
             print(f"  {label:<25} ${b:>13,.2f} ${n:>13,.2f} {ratio:>9.2f}x")
 
-        print(f"  {'Usage (Reg-T)':<25} {r_base['usage_nov7']:>14.2%} {r_nigged['usage_nov7']:>14.2%} {r_nigged['usage_nov7']/r_base['usage_nov7']:>9.2f}x")
-        print(f"  {'wmaint':<25} {r_base['wmaint']:>14.4f} {r_nigged['wmaint']:>14.4f}")
+        print(f"  {'Usage (Reg-T)':<25} {r_base['usage_nov7']:>14.2%} {r_enhanced['usage_nov7']:>14.2%} {r_enhanced['usage_nov7']/r_base['usage_nov7']:>9.2f}x")
+        print(f"  {'wmaint':<25} {r_base['wmaint']:>14.4f} {r_enhanced['wmaint']:>14.4f}")
 
         # Detailed P&L comparison
         print(f"\n  {'─'*80}")
         print(f"  Year-by-Year Realized P&L Comparison:")
-        print(f"  {'Year':<6} {'Base P&L':>14} {'Nigged P&L':>14} {'Ratio':>8} {'Base Sold':>14} {'Nigged Sold':>14}")
+        print(f"  {'Year':<6} {'Base P&L':>14} {'Enhanced P&L':>14} {'Ratio':>8} {'Base Sold':>14} {'Enhanced Sold':>14}")
         print(f"  {'─'*80}")
 
         pl_b = r_base["pl_by_year"]
-        pl_n = r_nigged["pl_by_year"]
+        pl_n = r_enhanced["pl_by_year"]
         all_years = sorted(set(pl_b.index) | set(pl_n.index))
 
         # Get trade volumes
         trades_b = r_base["trades_df"]
-        trades_n = r_nigged["trades_df"]
+        trades_n = r_enhanced["trades_df"]
         if "Year" not in trades_b.columns and not trades_b.empty:
             trades_b["Year"] = trades_b["Date"].dt.year
         if "Year" not in trades_n.columns and not trades_n.empty:
@@ -324,9 +324,9 @@ def main():
 
             print(f"  {y:<6} ${bp:>12,.2f} ${np_:>12,.2f} {ratio:>7.2f}x ${bs:>12,.2f} ${ns:>12,.2f}")
 
-        # Per-ticker P&L for Nigged (which ticker drives the most gains?)
+        # Per-ticker P&L for Enhanced (which ticker drives the most gains?)
         print(f"\n  {'─'*80}")
-        print(f"  Nigged: Realized P&L by TICKER (cumulative):")
+        print(f"  Enhanced: Realized P&L by TICKER (cumulative):")
         if not trades_n.empty:
             ticker_pl = trades_n.groupby("Ticker")[["Realized ST P&L", "Realized LT P&L"]].sum()
             ticker_pl["Total"] = ticker_pl["Realized ST P&L"] + ticker_pl["Realized LT P&L"]
