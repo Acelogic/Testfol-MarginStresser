@@ -272,7 +272,7 @@ def generate_stats(series: pd.Series) -> dict:
     ulcer_index = float(np.sqrt(np.mean(dd_pct ** 2)))
 
     # Calmar Ratio: CAGR / |Max DD|
-    calmar = abs(cagr / mdd) if mdd != 0 else 0.0
+    calmar = cagr / abs(mdd) if mdd != 0 else 0.0
 
     # Average Drawdown
     below = dd_pct[dd_pct < 0]
