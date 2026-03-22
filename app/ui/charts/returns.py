@@ -7,6 +7,18 @@ from plotly.subplots import make_subplots
 from app.common.utils import color_return
 from app.core import calculations
 
+
+def _resample_returns(series, rule):
+    """Resample series and compute period returns, including the first period."""
+    resampled = series.resample(rule).last()
+    ret = resampled.pct_change()
+    # First period has no prior — compute return from actual series start
+    if len(resampled) > 0 and not ret.empty:
+        first_val = series.iloc[0]
+        if first_val != 0:
+            ret.iloc[0] = (resampled.iloc[0] / first_val) - 1
+    return ret.dropna()
+
 def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=None):
     # Determine target series and name
     target_series = port_series
@@ -198,9 +210,9 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
 
 def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None):
     daily_ret = port_series.pct_change().dropna()
-    monthly_ret = port_series.resample("ME").last().pct_change().dropna()
-    quarterly_ret = port_series.resample("QE").last().pct_change().dropna()
-    annual_ret = port_series.resample("YE").last().pct_change().dropna()
+    monthly_ret = _resample_returns(port_series, "ME")
+    quarterly_ret = _resample_returns(port_series, "QE")
+    annual_ret = _resample_returns(port_series, "YE")
 
     # --- DISTRIBUTION HELPER ---
     def render_distribution(ret_series, period_label, freq_label):
@@ -269,17 +281,17 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         if series.empty: return
         
         # 1. Prepare Data (Same as Monthly View)
-        m_ret = series.resample("ME").last().pct_change().dropna()
+        m_ret = _resample_returns(series, "ME")
         df_monthly = m_ret.to_frame(name="Return")
         df_monthly["Year"] = df_monthly.index.year
         df_monthly["Month"] = df_monthly.index.month
-        
+
         pivot = df_monthly.pivot(index="Year", columns="Month", values="Return")
         for i in range(1, 13):
             if i not in pivot.columns: pivot[i] = float("nan")
         pivot = pivot.sort_index(ascending=True)
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        
+
         # 2. Add Yearly Return Column
         yearly_col = []
         years = pivot.index
@@ -287,7 +299,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             row = pivot.loc[y]
             ret = (1 + row.fillna(0)).prod() - 1
             yearly_col.append(ret)
-        
+
         # Add Yearly column to pivot for display/calculation
         display_pivot = pivot.copy()
         display_pivot.columns = month_names
@@ -338,7 +350,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         # Combine unique_id with suffix for truly unique keys
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
-        quarterly_ret = series.resample("QE").last().pct_change().dropna()
+        quarterly_ret = _resample_returns(series, "QE")
 
         
         q_ret = quarterly_ret.to_frame(name="Return")
@@ -443,7 +455,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         # Combine unique_id with suffix for truly unique keys
         full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
         if series.empty: return
-        m_ret = series.resample("ME").last().pct_change().dropna()
+        m_ret = _resample_returns(series, "ME")
 
         
         df_monthly = m_ret.to_frame(name="Return")

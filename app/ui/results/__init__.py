@@ -264,7 +264,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     eff_rate = 0.0 if pay_tax_cash else rate_annual
     eff_draw = 0.0 if pay_tax_cash else draw_monthly
     eff_draw_ret = 0.0 if pay_tax_cash else draw_monthly_retirement
-    _log.info("Margin sim inputs: loan=$%,.0f draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s pay_tax_cash=%s",
+    _log.info("Margin sim inputs: loan=$%.0f draw=$%.0f/mo ret_draw=$%.0f/mo draw_start=%s ret_date=%s pay_tax_cash=%s",
               eff_loan, eff_draw, eff_draw_ret, draw_start_date, retirement_date, pay_tax_cash)
 
     loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = api.simulate_margin(

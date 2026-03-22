@@ -200,7 +200,7 @@ def simulate_margin(
     Simulates margin loan and calculates equity/usage metrics.
     """
     _log = logging.getLogger("margin_sim")
-    _log.info("simulate_margin: loan=$%,.0f draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s maint=%.1f%%",
+    _log.info("simulate_margin: loan=$%.0f draw=$%.0f/mo ret_draw=$%.0f/mo draw_start=%s ret_date=%s maint=%.1f%%",
               starting_loan, draw_monthly, draw_monthly_retirement, draw_start_date, retirement_date, maint_pct * 100)
     # 1. Create Cashflow Series (Draws + Taxes)
     # Initialize with zeros

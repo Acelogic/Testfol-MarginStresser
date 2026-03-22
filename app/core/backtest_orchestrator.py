@@ -129,7 +129,7 @@ def run_single_backtest(
     pm_cf_freq = _pm_cfg.get("cashflow_freq", "Monthly")
 
     _orch_log = logging.getLogger("orchestrator")
-    _orch_log.info("Orchestrator draw config: draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
+    _orch_log.info("Orchestrator draw config: draw=$%.0f/mo ret_draw=$%.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
                    pm_draw_monthly, pm_draw_monthly_retirement, pm_draw_start_date, pm_retirement_date, pm_dca_in_retirement)
 
     # Rebalance
