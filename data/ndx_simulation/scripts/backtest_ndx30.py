@@ -157,9 +157,20 @@ def backtest():
                     print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5) — no previous portfolio, skipping")
                     continue
 
-        # NDX30: Take top 30 mapped tickers by NDX weight
-        mapped = q_weights[q_weights['IsMapped'] == True]
-        selected_tickers = mapped.head(config.NDX30_NUM_CONSTITUENTS)['Ticker'].tolist()
+        # NDX30: Take top 30 COMPANIES by NDX weight
+        # Per methodology: dual-class shares count as one company.
+        # Select 30 companies, include all their individual securities.
+        dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
+        mapped = q_weights[q_weights['IsMapped'] == True].copy()
+        mapped['Company'] = mapped['Ticker'].map(lambda t: dc.get(t, t))
+
+        company_weights = mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
+        company_tickers = mapped.groupby('Company')['Ticker'].apply(list).to_dict()
+
+        top_companies = company_weights.head(config.NDX30_NUM_CONSTITUENTS).index.tolist()
+        selected_tickers = []
+        for comp in top_companies:
+            selected_tickers.extend(company_tickers.get(comp, []))
 
         if not selected_tickers:
             print(f"Warning: No selection for {start_dt}")

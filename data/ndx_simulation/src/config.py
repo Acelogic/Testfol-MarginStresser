@@ -42,6 +42,23 @@ NDX30_HARD_CAP = 0.225          # 22.5% individual cap
 NDX30_SOFT_CAP = 0.045          # 4.5% threshold for aggregate constraint
 NDX30_AGG_LIMIT = 0.48          # Sum of weights > 4.5% cannot exceed 48%
 
+# --- Dual-Class Share Groups ---
+# Nasdaq methodology: "the market capitalization of each company is the
+# combined market capitalization of all eligible share classes."
+# For SELECTION purposes (47% threshold), these tickers are treated as
+# one company. For WEIGHTING, individual securities are kept.
+# Maps secondary ticker → primary ticker (canonical).
+DUAL_CLASS_GROUPS = {
+    'GOOG':  'GOOGL',   # Alphabet Class C → Class A
+    'FOXA':  'FOX',     # Fox Corp Class A → Class B
+    'LBTYA': 'LBTYK',   # Liberty Global Class A → Series C
+    'LBTYK': 'LBTYK',   # Identity (canonical)
+    'DISCA': 'DISCK',   # Discovery Class A → Class C
+    'DISCK': 'DISCK',   # Identity (canonical)
+    'NWSA':  'NWS',     # News Corp Class A → Class B
+    'NWS':   'NWS',     # Identity (canonical)
+}
+
 # --- Validation Settings ---
 WEIGHT_TOLERANCE = 0.01        # Allow 1% deviation (handling fillers etc)
 MAX_CAP_ITERATIONS = 20        # Increase from 10 to ensure convergence

@@ -307,13 +307,10 @@ def reconstruct():
     # ---------------------------------------------------------
     # APPLY NDX CAPPING RULES (Methodology_NDX.pdf)
     # To ensure the "Reconstructed" weights represent the Index at Rebalance.
-    # 
-    # Stage 1:
-    # If any weight > 24%, cap all > 24 to 20%.
     #
-    # Stage 2:
-    # If Sum(weights > 4.5%) > 48%:
-    #   Cap Aggregate to 40%.
+    # Quarterly: Trigger at 24%/48%, cap at 20%/40% (iterative)
+    # Annual (Dec): Trigger at 15%/top5>40%, cap at 14%/38.5%
+    #               + outside-top-5 capped at min(4.4%, 5th largest)
     # ---------------------------------------------------------
     
     def apply_ndx_capping(group, is_annual=False):
@@ -416,11 +413,13 @@ def reconstruct():
                             w_series[others_idx] = others + (surplus * others / others.sum())
 
                         # Cap outside-top-5 at min(4.4%, weight of 5th largest)
-                        w_resort = w_series.sort_values(ascending=False)
-                        fifth_val = w_resort.iloc[4]
+                        # Use the ORIGINAL top5_tickers (pre-redistribution sort)
+                        # to determine "outside" — redistribution can push others
+                        # above original top-5 members, but that doesn't reclassify them.
+                        fifth_val = w_series[top5_tickers].min()  # 5th largest of original top-5
                         cap_val = min(0.044, fifth_val)
 
-                        outside_idx = w_resort.iloc[5:].index
+                        outside_idx = w_series.index.difference(top5_tickers)
                         outside_over = w_series[outside_idx][w_series[outside_idx] > cap_val]
 
                         if not outside_over.empty:
@@ -435,7 +434,13 @@ def reconstruct():
                 w_check = w_series.sort_values(ascending=False)
                 stage1_ok = w_check.iloc[0] <= 0.1501
                 stage2_ok = (len(w_check) < 5) or (w_check.iloc[:5].sum() <= 0.4001)
-                outside_ok = (len(w_check) < 6) or (w_check.iloc[5:] <= 0.0441).all()
+                # Outside-top-5 cap: use actual min(4.4%, 5th-largest) + tolerance
+                if len(w_check) >= 5:
+                    fifth = w_check.iloc[4]
+                    outside_cap = min(0.044, fifth) + 0.001
+                    outside_ok = (len(w_check) < 6) or (w_check.iloc[5:] <= outside_cap).all()
+                else:
+                    outside_ok = True
                 if stage1_ok and stage2_ok and outside_ok:
                     break
 

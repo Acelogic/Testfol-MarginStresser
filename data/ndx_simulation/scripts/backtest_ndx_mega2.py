@@ -154,15 +154,20 @@ def backtest():
         curr_sum = 0.0
         
         if is_annual_recon or not current_constituents:
-            # Reconstitution or First Run: Strict 47% Selection
-            # Methodology: "cannot exceed the 47% threshold"
-            # Include stocks until adding the next one would push cumulative
-            # weight OVER 47%. Always include at least 1 stock.
-            for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum + w <= config.MEGA2_TARGET_THRESHOLD or not standard_tickers:
-                    if mapped:
-                        standard_tickers.append(ticks)
-                    curr_sum += w
+            # Reconstitution or First Run: 47% Selection
+            # Per methodology: combine dual-class shares for company-level selection.
+            dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
+            q_mapped = q_weights[q_weights['IsMapped'] == True].copy()
+            q_mapped['Company'] = q_mapped['Ticker'].map(lambda t: dc.get(t, t))
+
+            company_weights = q_mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
+            company_tickers = q_mapped.groupby('Company')['Ticker'].apply(list).to_dict()
+
+            for company, cw in company_weights.items():
+                if curr_sum < config.MEGA2_TARGET_THRESHOLD:
+                    for t in company_tickers.get(company, []):
+                        standard_tickers.append(t)
+                    curr_sum += cw
                 else:
                     break
         else:

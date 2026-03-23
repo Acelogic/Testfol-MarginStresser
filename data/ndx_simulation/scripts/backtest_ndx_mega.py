@@ -147,25 +147,39 @@ def backtest():
         selected_tickers = []
         
         if is_annual_recon or not current_constituents:
-            # Annual Reconstitution or First Run: Strict 47% Selection
-            
-            # Using MEGA1 constants
-            # Methodology: "cannot exceed the 47% threshold"
-            # Include stocks until adding the next one would push cumulative
-            # weight OVER 47%. Always include at least 1 stock.
+            # Annual Reconstitution or First Run: 47% Selection
+            #
+            # Per methodology: "the market capitalization of each company is the
+            # combined market capitalization of all eligible share classes."
+            # So we rank by COMPANY weight (combining dual-class shares like
+            # GOOG+GOOGL), but include ALL individual securities when selected.
+
+            # Build company-level view for selection
+            dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
+            q_mapped = q_weights[q_weights['IsMapped'] == True].copy()
+            q_mapped['Company'] = q_mapped['Ticker'].map(lambda t: dc.get(t, t))
+
+            # Company weights = sum of all share classes
+            company_weights = q_mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
+            # Also include unmapped weight in the cumulative threshold
+            unmapped_weight = q_weights[q_weights['IsMapped'] == False]['Weight'].sum()
+
+            # Tickers belonging to each company
+            company_tickers = q_mapped.groupby('Company')['Ticker'].apply(list).to_dict()
+
             curr_sum = 0.0
-            for ticks, w, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['IsMapped']):
-                if curr_sum + w <= config.MEGA1_TARGET_THRESHOLD or not selected_tickers:
-                    if mapped:
-                        selected_tickers.append(ticks)
-                    # Count weight towards threshold regardless of mapping
-                    curr_sum += w
+            selected_companies = []
+            for company, cw in company_weights.items():
+                if curr_sum < config.MEGA1_TARGET_THRESHOLD:
+                    selected_companies.append(company)
+                    for t in company_tickers.get(company, []):
+                        selected_tickers.append(t)
+                    curr_sum += cw
                 else:
                     break
-            
+
             # Fallback
             if not selected_tickers and not q_weights.empty:
-                 # Try to find the first mapped ticker
                  first_mapped = q_weights[q_weights['IsMapped'] == True]
                  if not first_mapped.empty:
                      selected_tickers.append(first_mapped.iloc[0]['Ticker'])
