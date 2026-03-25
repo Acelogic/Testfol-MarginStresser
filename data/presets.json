@@ -154,7 +154,7 @@
         "name": "NDX Mega 1.0 (Sim)",
         "allocation": [
             {
-                "Ticker": "NDXMEGASIM?L=2",
+                "Ticker": "NDXMEGASIM",
                 "Weight %": 100,
                 "Maint %": 25,
                 "PM Maint %": 0.0
@@ -163,8 +163,8 @@
         "rebalance": {
             "mode": "Custom",
             "freq": "Yearly",
-            "month_str": "Jan",
-            "day": 15
+            "day": 15,
+            "month_str": "Jan"
         }
     },
     {
@@ -320,7 +320,9 @@
         ],
         "rebalance": {
             "mode": "Standard",
-            "freq": "Yearly"
+            "freq": "Quarterly",
+            "day": 1,
+            "month_str": "Jan"
         }
     },
     {
@@ -510,6 +512,141 @@
                 "Weight %": 12.5,
                 "Maint %": 75.0,
                 "PM Maint %": 0.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "QQQ Only",
+        "allocation": [
+            {
+                "Ticker": "QQQ",
+                "Weight %": 100.0,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDXMEGASPLIT (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2&E=0.95",
+                "Weight %": 60.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "VXUSSIM?E=0.05",
+                "Weight %": 15.0,
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3&E=0.88",
+                "Weight %": 5.0,
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDXMEGASPLIT Enhanced (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2&E=0.95",
+                "Weight %": 30.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "VXUSSIM?E=0.05",
+                "Weight %": 15.0,
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3&E=0.88",
+                "Weight %": 5.0,
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "AAPL?L=2&E=0.97",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "MSFT?L=2&E=0.98",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "AVGO?L=2&E=1.04",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "AMZN?L=2&E=0.99",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "META?L=2&E=1.02",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "NVDA?L=2&E=0.97",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GOOG?L=2&E=0.96",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "TSLA?L=2&E=0.95",
+                "Weight %": 3.75,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
