@@ -30,14 +30,14 @@ def render():
         # --- initialize state ---
         if "portfolios" not in st.session_state:
             _default_alloc = pd.DataFrame([
-                {"Ticker": "NDXMEGASIM?L=2", "Weight %": 60.0, "Maint %": 50.0, "PM Maint %": 30.0},
-                {"Ticker": "GLDSIM", "Weight %": 20.0, "Maint %": 25.0, "PM Maint %": 15.0},
-                {"Ticker": "VXUSSIM", "Weight %": 15.0, "Maint %": 25.0, "PM Maint %": 9.0},
-                {"Ticker": "QQQSIM?L=3", "Weight %": 5.0, "Maint %": 75.0, "PM Maint %": 30.0}
+                {"Ticker": "NDXMEGASIM?L=2&E=0.95", "Weight %": 60.0, "Maint %": 50.0, "PM Maint %": 30.0},
+                {"Ticker": "GLDSIM?E=0.40", "Weight %": 20.0, "Maint %": 25.0, "PM Maint %": 15.0},
+                {"Ticker": "VXUSSIM?E=0.05", "Weight %": 15.0, "Maint %": 25.0, "PM Maint %": 9.0},
+                {"Ticker": "QQQSIM?L=3&E=0.88", "Weight %": 5.0, "Maint %": 75.0, "PM Maint %": 30.0}
             ])
             st.session_state.portfolios = [{
                 "id": "p1",
-                "name": "NDXMEGASPLIT",
+                "name": "NDXMEGASPLIT (w/ ERs)",
                 "alloc_df": _default_alloc,
                 "rebalance": {
                     "mode": "Custom", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0
@@ -132,7 +132,10 @@ def render():
             if os.path.exists(preset_path):
                 with open(preset_path, "r") as f:
                     presets = json.load(f)
-                preset_names = [p["name"] for p in presets]
+                # Sort: NDX presets first, then alphabetical
+                ndx_presets = sorted([p["name"] for p in presets if p["name"].upper().startswith("NDX")])
+                other_presets = sorted([p["name"] for p in presets if not p["name"].upper().startswith("NDX")])
+                preset_names = ndx_presets + other_presets
 
             with c_tool2:
                 selected_preset = st.selectbox(
