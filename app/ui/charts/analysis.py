@@ -72,18 +72,24 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax
     m3.metric("Effective Tax Rate", f"{effective_tax_rate*100:.1f}%", help="Total Tax / Total Realized Gains")
     
     # 4. Tax Breakdown Chart
-    st.subheader("Tax Liability by Year")
-    
+    method_label = {
+        "historical_smart": "Historical Smart",
+        "historical_max": "Historical Max Rate",
+        "2025_fixed": "2025 Fixed",
+        "2024_fixed": "2024 Fixed",
+    }.get(tax_method, tax_method)
+    st.subheader(f"Tax Liability by Year — {method_label}")
+
     tax_df = pd.DataFrame({
         "Federal Tax": fed_tax_series,
         "State Tax": state_tax_series
     })
-    
+
     fig = px.bar(
-        tax_df, 
-        x=tax_df.index, 
+        tax_df,
+        x=tax_df.index,
         y=["Federal Tax", "State Tax"],
-        title="Annual Tax Liability",
+        title=f"Annual Tax Liability ({method_label})",
         labels={"value": "Tax Amount ($)", "index": "Year", "variable": "Type"},
         color_discrete_map={"Federal Tax": "#EF553B", "State Tax": "#636EFA"}
     )

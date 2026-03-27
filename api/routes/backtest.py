@@ -63,6 +63,7 @@ def _serialize_result(r: dict) -> BacktestResult:
         logs=r.get("logs", []),
         raw_response=r.get("raw_response", {}),
         is_local=r.get("is_local", False),
+        api_failover=r.get("api_failover", False),
         start_val=r.get("start_val", 10000.0),
         sim_range=r.get("sim_range", ""),
         shadow_range=r.get("shadow_range", ""),

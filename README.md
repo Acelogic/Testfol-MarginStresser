@@ -8,7 +8,7 @@ A powerful Streamlit-based GUI application for backtesting portfolio strategies 
 
 This tool allows you to simulate leveraged portfolio performance over historical periods (1885–Present), tracking margin debt, equity levels, and tax liabilities with extreme precision. Unlike simple CAGR calculators, this project simulates the **daily mechanical interactions** between portfolio volatility, margin interest, monthly withdrawals, and the tax code.
 
-**Powered by [testfol.io](https://testfol.io)** - The application uses the Testfol API for high-quality historical total return data and uses a local "Shadow Engine" for advanced tax accounting.
+**Powered by [testfol.io](https://testfol.io)** with **Polygon.io** and **yfinance** fallback — The application uses the Testfol API for high-quality historical total return data and a local "Shadow Engine" for advanced tax accounting. If Testfol is unavailable, the app automatically falls back to Polygon.io or yfinance for price data and runs backtests locally.
 
 ## Key Features
 
@@ -39,14 +39,20 @@ graph TB
 
     subgraph Engines
         ME[Macro Engine<br>testfol_api.py]
+        BO[Orchestrator<br>backtest_orchestrator.py]
         DS[Data Service<br>data_service.py]
         SE[Shadow Engine<br>shadow_backtest.py]
         MS[Margin Simulator<br>calculations.py]
     end
 
+    subgraph Price Providers
+        PP[Provider Chain<br>price_providers.py]
+        PG[Polygon.io]
+        YF[yfinance]
+    end
+
     subgraph Data Sources
         TF[testfol.io API]
-        YF[yfinance]
         CSV[NDXMEGASIM.csv<br>NDXMEGA2SIM.csv]
     end
 
@@ -56,24 +62,29 @@ graph TB
         MC[Monte Carlo]
     end
 
-    ST --> ME --> TF
-    ST --> DS --> SE
-    DS --> YF
+    ST --> BO --> ME --> TF
+    BO --> DS --> SE
+    DS --> PP
+    PP --> PG
+    PP --> YF
     DS --> CSV
     SE --> TX
     ME --> MS
     MS --> CH
     SE --> MC
+    BO -.->|failover| SE
 ```
 
 ### Engine Responsibilities
 
 | Engine | Location | Purpose |
 |--------|----------|---------|
+| **Orchestrator** | `app/core/backtest_orchestrator.py` | Routes backtests to API or local engine. Automatic failover if Testfol API is unavailable. |
 | **Macro Engine** | `app/services/testfol_api.py` | Fetches total return series from testfol.io. Acts as "Market Truth" source. |
-| **Data Service** | `app/services/data_service.py` | Handles complex data sourcing: 1) `*SIM` tickers force Testfol API for extended history. 2) `NDXMEGASIM` splicing (Local CSV + Live). 3) Real-time prices via yfinance. |
+| **Price Providers** | `app/services/price_providers.py` | Unified price data abstraction. Chain: Polygon.io → yfinance with per-ticker fallback. |
+| **Data Service** | `app/services/data_service.py` | Handles complex data sourcing: `*SIM` tickers, `NDXMEGASIM` splicing (Local CSV + Live), standard tickers via provider chain. |
 | **Shadow Engine** | `app/core/shadow_backtest.py` | Reconstructs portfolio trade-by-trade. Tracks every tax lot (date, cost basis, quantity). Calculates ST vs LT gains. |
-| **Margin Simulator** | `app/services/testfol_api.py` | Applies margin loan logical models (Fixed, Variable, Tiered). Calculates daily interest, equity %, and margin calls. |
+| **Margin Simulator** | `app/services/testfol_api.py` | Applies margin loan models (Fixed, Variable, Tiered). Calculates daily interest, equity %, and margin calls. |
 
 
 
@@ -187,6 +198,11 @@ The tool now includes a professional **Monte Carlo Simulation** suite to stress-
 2.  **Run**:
     ```bash
     streamlit run testfol_charting.py
+    ```
+3.  **Configure** (optional):
+    ```bash
+    # For Polygon.io price data (optional, falls back to yfinance if not set)
+    export POLYGON_API_KEY=your_key_here
     ```
 
 ## Data Generation

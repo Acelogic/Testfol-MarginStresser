@@ -13,6 +13,7 @@ import datetime
 import logging
 
 import pandas as pd
+import requests
 
 from app.common.constants import Freq, RebalMode, Tickers
 from app.core import calculations
@@ -162,85 +163,94 @@ def run_single_backtest(
     logs: list = []
     prices_df = pd.DataFrame()
     pm_blocked_dates: list = []
+    api_failover = False
 
     if not use_local_engine:
-        # --- API Path ---
-        rebal_offset = calc_rebal_offset(reb, r_freq)
-
-        port_series, stats_api, extra_data = fetch_fn(
-            start_date=start_date,
-            end_date=end_date,
-            start_val=max(1.0, start_val),
-            cashflow=bt_cashflow,
-            cashfreq=cashflow_freq,
-            rolling=60,
-            invest_div=invest_div,
-            rebalance=r_freq,
-            rebalance_offset=rebal_offset,
-            allocation=alloc_map,
-            return_raw=False,
-            include_raw=True,
-            bearer_token=bearer_token,
-        )
-        stats = stats_api
-        logger.debug(f"API: Tickers={list(alloc_map.keys())} | API Stats CAGR={stats.get('cagr')}")
-
-        # Extract TWR Series from API
-        api_twr_series = None
-        if extra_data and "daily_returns" in extra_data:
-            d_rets = extra_data["daily_returns"]
-            if d_rets:
-                try:
-                    df_rets = pd.DataFrame(d_rets, columns=["Date", "Pct", "Val"])
-                    df_rets["Date"] = pd.to_datetime(df_rets["Date"])
-                    df_rets = df_rets.set_index("Date").sort_index()
-                    df_rets["Factor"] = 1 + (df_rets["Pct"] / 100.0)
-                    api_twr_series = df_rets["Factor"].cumprod()
-                    api_twr_series.name = "TWR (API)"
-                except Exception as e:
-                    logger.warning(f"Failed to build API TWR: {e}")
-
-        # Fetch component prices for cheat sheet
+        # --- API Path (with automatic failover to local engine) ---
         try:
-            prices_df = fetch_component_data(list(alloc_map.keys()), start_date, end_date)
-        except Exception as e:
-            logger.warning(f"Failed to fetch component prices: {e}")
-            prices_df = pd.DataFrame()
+            rebal_offset = calc_rebal_offset(reb, r_freq)
 
-        # Run shadow backtest (tax tracking)
-        if not port_series.empty:
-            trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series, *_ = shadow_fn(
-                allocation=alloc_map,
-                start_val=start_val,
+            port_series, stats_api, extra_data = fetch_fn(
                 start_date=start_date,
                 end_date=end_date,
-                api_port_series=port_series,
-                rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
-                cashflow=shadow_cashflow,
-                cashflow_freq=cashflow_freq,
-                invest_dividends=invest_div,
-                pay_down_margin=pay_down_margin,
-                tax_config=tax_config,
-                custom_rebal_config=reb if r_mode == "Custom" else {},
-                rebalance_month=reb.get("month", 1),
-                rebalance_day=reb.get("day", 1),
-                custom_freq=reb.get("freq", "Yearly"),
-                pm_buy_block=pm_buy_block,
-                pm_buy_block_threshold=pm_buy_block_threshold,
-                starting_loan=_pm_cfg.get("starting_loan", 0.0),
-                margin_rate_annual=pm_margin_rate,
-                draw_monthly=pm_draw_monthly,
-                draw_start_date=pm_draw_start_date,
-                draw_monthly_retirement=pm_draw_monthly_retirement,
-                retirement_date=pm_retirement_date,
-                dca_in_retirement=pm_dca_in_retirement,
-                loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
-                loan_repayment_freq=pm_cf_freq,
+                start_val=max(1.0, start_val),
+                cashflow=bt_cashflow,
+                cashfreq=cashflow_freq,
+                rolling=60,
+                invest_div=invest_div,
+                rebalance=r_freq,
+                rebalance_offset=rebal_offset,
+                allocation=alloc_map,
+                return_raw=False,
+                include_raw=True,
+                bearer_token=bearer_token,
             )
-            if api_twr_series is not None:
-                twr_series = api_twr_series
-    else:
-        # --- Pure Local Path (NDXMEGASIM) ---
+            stats = stats_api
+            logger.debug(f"API: Tickers={list(alloc_map.keys())} | API Stats CAGR={stats.get('cagr')}")
+
+            # Extract TWR Series from API
+            api_twr_series = None
+            if extra_data and "daily_returns" in extra_data:
+                d_rets = extra_data["daily_returns"]
+                if d_rets:
+                    try:
+                        df_rets = pd.DataFrame(d_rets, columns=["Date", "Pct", "Val"])
+                        df_rets["Date"] = pd.to_datetime(df_rets["Date"])
+                        df_rets = df_rets.set_index("Date").sort_index()
+                        df_rets["Factor"] = 1 + (df_rets["Pct"] / 100.0)
+                        api_twr_series = df_rets["Factor"].cumprod()
+                        api_twr_series.name = "TWR (API)"
+                    except Exception as e:
+                        logger.warning(f"Failed to build API TWR: {e}")
+
+            # Fetch component prices for cheat sheet
+            try:
+                prices_df = fetch_component_data(list(alloc_map.keys()), start_date, end_date)
+            except Exception as e:
+                logger.warning(f"Failed to fetch component prices: {e}")
+                prices_df = pd.DataFrame()
+
+            # Run shadow backtest (tax tracking)
+            if not port_series.empty:
+                trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, _, twr_series, *_ = shadow_fn(
+                    allocation=alloc_map,
+                    start_val=start_val,
+                    start_date=start_date,
+                    end_date=end_date,
+                    api_port_series=port_series,
+                    rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
+                    cashflow=shadow_cashflow,
+                    cashflow_freq=cashflow_freq,
+                    invest_dividends=invest_div,
+                    pay_down_margin=pay_down_margin,
+                    tax_config=tax_config,
+                    custom_rebal_config=reb if r_mode == "Custom" else {},
+                    rebalance_month=reb.get("month", 1),
+                    rebalance_day=reb.get("day", 1),
+                    custom_freq=reb.get("freq", "Yearly"),
+                    pm_buy_block=pm_buy_block,
+                    pm_buy_block_threshold=pm_buy_block_threshold,
+                    starting_loan=_pm_cfg.get("starting_loan", 0.0),
+                    margin_rate_annual=pm_margin_rate,
+                    draw_monthly=pm_draw_monthly,
+                    draw_start_date=pm_draw_start_date,
+                    draw_monthly_retirement=pm_draw_monthly_retirement,
+                    retirement_date=pm_retirement_date,
+                    dca_in_retirement=pm_dca_in_retirement,
+                    loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
+                    loan_repayment_freq=pm_cf_freq,
+                )
+                if api_twr_series is not None:
+                    twr_series = api_twr_series
+        except (requests.exceptions.ConnectionError,
+                requests.exceptions.Timeout,
+                requests.exceptions.HTTPError) as e:
+            logger.warning(f"Testfol API unavailable ({e}), falling back to local engine")
+            use_local_engine = True
+            api_failover = True
+
+    if use_local_engine:
+        # --- Pure Local Path (NDXMEGASIM, threshold rebalancing, or API failover) ---
         tickers = list(alloc_map.keys())
         prices_df = fetch_component_data(tickers, start_date, end_date)
 
@@ -293,6 +303,7 @@ def run_single_backtest(
         "twr_series": twr_series,
         "daily_returns_df": df_rets,
         "is_local": use_local_engine,
+        "api_failover": api_failover,
         "trades": trades_df,
         "trades_df": trades_df,
         "pl_by_year": pl_by_year,

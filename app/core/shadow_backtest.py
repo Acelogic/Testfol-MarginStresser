@@ -7,7 +7,6 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
-import yfinance as yf
 
 from app.common.constants import Freq
 
@@ -193,41 +192,31 @@ def get_tax_treatment(ticker):
         return "Equity"
 
 def fetch_prices(tickers, start_date, end_date, invest_dividends=True):
-    """Fetches adjusted close prices for unique base tickers."""
+    """Fetches adjusted close prices for unique base tickers via provider chain."""
+    from app.services.price_providers import get_price_provider
+
     unique_bases = set()
     for t in tickers:
         base, _ = parse_ticker(t)
         unique_bases.add(base)
-    
-    # Download data
-    # Capture stdout/stderr to get yfinance logs
+
     f = io.StringIO()
-    
-    # Log the "payload" (parameters)
-    print(f"DEBUG: yf.download parameters:", file=f)
+    print(f"DEBUG: fetch_prices via provider chain", file=f)
     print(f"  Tickers: {list(unique_bases)}", file=f)
     print(f"  Start: {start_date}", file=f)
     print(f"  End: {end_date}", file=f)
-    print(f"  Progress: True", file=f)
     print("-" * 20, file=f)
-    
-    with contextlib.redirect_stdout(f), contextlib.redirect_stderr(f):
-        data = yf.download(list(unique_bases), start=start_date, end=end_date, progress=True, timeout=30)
-    
+
+    provider = get_price_provider()
+    prices = provider.fetch_prices(
+        list(unique_bases), str(start_date), str(end_date), adjusted=invest_dividends,
+    )
+
     output = f.getvalue()
-    
-    if invest_dividends and "Adj Close" in data:
-        prices = data["Adj Close"]
-    elif "Close" in data:
-        prices = data["Close"]
-    elif "Adj Close" in data:
-        prices = data["Adj Close"]
-    else:
-        prices = data
-        
+
     if isinstance(prices, pd.Series):
         prices = prices.to_frame()
-        
+
     return prices, output
 
 def _check_drift(positions, allocation, threshold_pct):

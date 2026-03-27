@@ -8,6 +8,44 @@ import datetime as dt
 from app.common.utils import color_return
 from app.core import tax_library, calculations
 
+# 20 colors ordered so that adjacent entries have maximum perceptual contrast.
+# Alternates between warm/cool and light/dark to avoid neighbor confusion
+# even with 13+ tickers stacked or overlaid.
+_DISTINCT_COLORS = [
+    "#636EFA",  # blue
+    "#EF553B",  # red
+    "#00CC96",  # teal
+    "#FFA15A",  # orange
+    "#AB63FA",  # purple
+    "#FECB52",  # yellow
+    "#19D3F3",  # cyan
+    "#C4451C",  # rust
+    "#B6E880",  # lime
+    "#FF6692",  # hot pink
+    "#325A9B",  # navy
+    "#86CE00",  # chartreuse
+    "#FF97FF",  # magenta
+    "#85660D",  # brown
+    "#1CFFCE",  # aquamarine
+    "#FEAF16",  # amber
+    "#782AB6",  # violet
+    "#F8A19F",  # salmon
+    "#1CBE4F",  # emerald
+    "#DEA0FD",  # lavender
+]
+
+
+def _build_color_map(tickers: list[str]) -> dict[str, str]:
+    """Assign a distinct color to each ticker, consistent across charts."""
+    return {t: _DISTINCT_COLORS[i % len(_DISTINCT_COLORS)] for i, t in enumerate(tickers)}
+
+
+def _hex_to_rgba(hex_color: str, alpha: float = 0.55) -> str:
+    """Convert '#RRGGBB' to 'rgba(R,G,B,alpha)'."""
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
 def render_rebalance_sankey(trades_df, view_freq="Yearly", unique_id=None):
     if trades_df.empty:
         return
@@ -149,11 +187,16 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
 
     df = df.sort_values(["Date Label", "Value"], ascending=[True, True])
     
+    # Build consistent color map for tickers
+    unique_tickers = sorted(df["Ticker"].unique())
+    cmap = _build_color_map(unique_tickers)
+
     fig = px.bar(
-        df, 
-        y="Date Label", 
-        x="Value", 
-        color="Ticker", 
+        df,
+        y="Date Label",
+        x="Value",
+        color="Ticker",
+        color_discrete_map=cmap,
         title=f"Portfolio Value by Asset (Pre-Rebalance, {view_freq})",
         text_auto="$.2s",
         orientation='h',
@@ -199,24 +242,55 @@ def render_portfolio_allocation(
     composition_df: pd.DataFrame,
     start_val: float,
     unique_id: str = "",
+    port_series: pd.Series | None = None,
 ):
     """Render a 100% stacked area chart showing portfolio allocation drift over time."""
     if component_prices.empty or not allocation:
         return
 
     # Map full tickers (e.g. AAPL?L=2) to base tickers used in component_prices columns
+    # Also extract leverage and expense ratio modifiers per base ticker
     weights: dict[str, float] = {}
+    leverage: dict[str, float] = {}
+    expense_ratio: dict[str, float] = {}
     for full_tk, weight in allocation.items():
         base = full_tk.split("?")[0]
         weights[base] = weights.get(base, 0) + weight
+        # Parse modifiers
+        if "?" in full_tk:
+            query = full_tk.split("?", 1)[1]
+            for pair in query.split("&"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    try:
+                        if k.upper() == "L":
+                            leverage[base] = float(v)
+                        elif k.upper() in ("E", "D"):
+                            expense_ratio[base] = float(v)
+                    except ValueError:
+                        pass
 
     available = [t for t in weights if t in component_prices.columns]
     if not available:
         return
 
-    prices = component_prices[available].dropna(how="all").ffill().dropna(how="any")
-    if prices.empty or len(prices) < 2:
+    raw_prices = component_prices[available].dropna(how="all").ffill().dropna(how="any")
+    if raw_prices.empty or len(raw_prices) < 2:
         return
+
+    # Apply leverage and expense ratio to daily returns to get modified prices
+    daily_returns = raw_prices.pct_change()
+    modified_returns = daily_returns.copy()
+    for t in available:
+        lev = leverage.get(t, 1.0)
+        er = expense_ratio.get(t, 0.0)
+        daily_er = (er / 100.0) / 252.0 if er > 0 else 0.0
+        if lev != 1.0 or daily_er > 0:
+            modified_returns[t] = daily_returns[t] * lev - daily_er
+
+    # Reconstruct modified price series from returns
+    prices = (1 + modified_returns).cumprod() * raw_prices.iloc[0]
+    prices.iloc[0] = raw_prices.iloc[0]  # anchor first row
 
     total_weight = sum(weights[t] for t in available)
     if total_weight <= 0:
@@ -277,8 +351,89 @@ def render_portfolio_allocation(
     # Remove any duplicate indices (shouldn't happen but safety)
     positions = positions[~positions.index.duplicated(keep="first")]
 
-    # Convert to percentages
     row_totals = positions.sum(axis=1)
+
+    # Scale positions to match actual gross portfolio value (port_series).
+    # The position tracking from component_prices approximates leveraged growth,
+    # but may diverge from the actual backtest due to data source differences,
+    # dividend handling, etc.  Scaling preserves the relative allocation
+    # proportions while anchoring the total to the real portfolio value.
+    if port_series is not None and not port_series.empty:
+        aligned_port = port_series.reindex(positions.index).ffill().bfill()
+        scale = aligned_port / row_totals.replace(0, np.nan)
+        scale = scale.fillna(1.0)
+        for t in available:
+            positions[t] = positions[t] * scale
+        row_totals = positions.sum(axis=1)
+
+    # Build consistent color map for all charts below (sorted to match composition bar chart)
+    cmap = _build_color_map(sorted(available))
+
+    # --- Component Performance Chart (line chart showing each position's actual value) ---
+    st.subheader("Component Performance")
+
+    fig_lines = go.Figure()
+
+    # Total portfolio line (market value = sum of component positions)
+    fig_lines.add_trace(go.Scatter(
+        x=row_totals.index,
+        y=row_totals,
+        name="Total Portfolio",
+        mode="lines",
+        line=dict(width=2.5, color="white", dash="dot"),
+        hovertemplate="Total: $%{y:,.0f}<extra></extra>",
+    ))
+
+    for t in available:
+        fig_lines.add_trace(go.Scatter(
+            x=positions.index,
+            y=positions[t],
+            name=t,
+            mode="lines",
+            line=dict(width=1.5, color=cmap[t]),
+            hovertemplate=f"{t}: $%{{y:,.0f}}<extra></extra>",
+        ))
+
+    # Rebalance markers with labels
+    for rd in seg_starts[1:]:
+        rd_ms = int(pd.Timestamp(rd).timestamp() * 1000)
+        fig_lines.add_shape(
+            type="line",
+            x0=rd_ms, x1=rd_ms, y0=0, y1=1,
+            xref="x", yref="paper",
+            line=dict(dash="dot", color="rgba(255,255,255,0.25)", width=1),
+        )
+        fig_lines.add_annotation(
+            x=rd_ms, y=1,
+            xref="x", yref="paper",
+            text="Rebal",
+            showarrow=False,
+            font=dict(size=8, color="rgba(255,255,255,0.5)"),
+            textangle=-90,
+            yanchor="bottom",
+        )
+
+    key_suffix = f"_{unique_id}" if unique_id else ""
+    fig_lines.update_layout(
+        yaxis=dict(
+            title="Position Value ($)",
+            type="log",
+            tickprefix="$",
+            tickformat=",",
+            gridcolor="rgba(255,255,255,0.1)",
+            minor=dict(showgrid=True, gridcolor="rgba(255,255,255,0.05)"),
+        ),
+        xaxis=dict(title="Date", gridcolor="rgba(255,255,255,0.1)"),
+        template="plotly_dark",
+        height=500,
+        showlegend=True,
+        hovermode="x unified",
+        margin=dict(l=80, r=20, t=20, b=40),
+        legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
+    )
+    st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
+
+    # --- Percentage Stacked Area Chart ---
     pct = positions.div(row_totals, axis=0) * 100
     pct = pct.fillna(0)
 
@@ -292,7 +447,8 @@ def render_portfolio_allocation(
             name=t,
             mode="lines",
             stackgroup="one",
-            line=dict(width=0.5),
+            fillcolor=_hex_to_rgba(cmap[t], 0.55),
+            line=dict(width=0.5, color=cmap[t]),
             hovertemplate=f"{t}: %{{y:.2f}}%<extra></extra>",
         ))
 
@@ -333,7 +489,7 @@ def render_portfolio_allocation(
     st.plotly_chart(fig, use_container_width=True, key=f"port_alloc_area{key_suffix}")
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None, port_series=None):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -601,105 +757,6 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         )
         st.plotly_chart(fig, use_container_width=True)
         
-        # Estimated Tax Owed Chart
-        if not pl_by_year.empty:
-            st.subheader(f"Estimated Total Tax Owed ({view_freq} - {tax_method})")
-            
-            # 1. Calculate Annual Federal Tax (Base)
-            federal_tax_annual = tax_library.calculate_tax_series_with_carryforward(
-                pl_by_year,
-                other_income,
-                filing_status,
-                method=tax_method,
-                use_standard_deduction=use_standard_deduction,
-                retirement_income=retirement_income,
-                retirement_year=retirement_year,
-            )
-
-            # 2. Calculate Annual State Tax (progressive brackets)
-            state_tax_annual = tax_library.calculate_state_tax_series_with_carryforward(
-                pl_by_year, other_income, state_code, filing_status,
-                use_standard_deduction=use_standard_deduction,
-                retirement_income=retirement_income,
-                retirement_year=retirement_year,
-            )
-            
-            total_tax_annual = federal_tax_annual + state_tax_annual
-            
-            # 3. Allocate to Periods if needed
-            if view_freq == "Yearly":
-                tax_to_plot = total_tax_annual
-                x_axis_tax = tax_to_plot.index
-            else:
-                # Allocate annual tax to periods based on realized gains
-                # We need the period data (agg_df) which we calculated above
-                
-                # Create a Series to hold allocated tax
-                tax_to_plot = pd.Series(0.0, index=agg_df.index)
-                
-                # Iterate through each year
-                for year in total_tax_annual.index:
-                    annual_tax = total_tax_annual.get(year, 0.0)
-                    if annual_tax <= 0:
-                        continue
-                        
-                    # Get periods for this year
-                    if view_freq == "Quarterly":
-                        # Filter agg_df for this year (Quarter index)
-                        # Period index is like "2021Q1"
-                        periods_in_year = [p for p in agg_df.index if p.year == year]
-                    elif view_freq == "Monthly":
-                        periods_in_year = [p for p in agg_df.index if p.year == year]
-                    elif view_freq == "Per Event":
-                        periods_in_year = [p for p in agg_df.index if p.year == year]
-                    
-                    # Calculate total POSITIVE realized P&L for this year from the periods
-                    # We only allocate tax to periods that had gains
-                    year_gains = 0.0
-                    period_gains = {}
-                    
-                    for p in periods_in_year:
-                        gain = agg_df.loc[p, "Realized P&L"]
-                        if gain > 0:
-                            year_gains += gain
-                            period_gains[p] = gain
-                        else:
-                            period_gains[p] = 0.0
-                            
-                    # Allocate
-                    if year_gains > 0:
-                        for p in periods_in_year:
-                            if period_gains[p] > 0:
-                                allocation_ratio = period_gains[p] / year_gains
-                                tax_to_plot[p] = annual_tax * allocation_ratio
-                
-                x_axis_tax = tax_to_plot.index.astype(str)
-
-            if tax_to_plot.sum() > 0:
-                fig_tax = go.Figure(go.Bar(
-                    x=x_axis_tax,
-                    y=tax_to_plot,
-                    marker_color="#EF553B", # Red for taxes
-                    texttemplate="%{y:$.2s}",
-                    textposition="auto",
-                    hovertemplate="%{y:$,.0f}<extra></extra>",
-                    name="Estimated Tax"
-                ))
-                fig_tax.update_layout(
-                    yaxis_title="Tax Owed ($)",
-                    xaxis_title={"Yearly": "Year", "Quarterly": "Quarter", "Monthly": "Month", "Per Event": "Event"}.get(view_freq, view_freq),
-                    template="plotly_dark",
-                    showlegend=False,
-                    height=400,
-                    hovermode="x unified"
-                )
-                st.plotly_chart(fig_tax, use_container_width=True)
-                
-                total_tax = tax_to_plot.sum()
-                st.metric("Total Estimated Tax Owed", f"${total_tax:,.2f}")
-            else:
-                st.info("No taxable gains realized.")
-        
     with c2:
         st.subheader("Total Turnover")
         
@@ -725,6 +782,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             composition_df,
             start_val=start_val,
             unique_id=unique_id or "",
+            port_series=port_series,
         )
 
     # Portfolio Composition

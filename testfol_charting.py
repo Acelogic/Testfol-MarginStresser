@@ -7,6 +7,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 import logging
+import os
 import pandas as pd
 import streamlit as st
 import requests
@@ -81,6 +82,7 @@ def _deserialize_result(item):
         "twr_series": twr if not twr.empty else None,
         "daily_returns_df": dr_df if not dr_df.empty else None,
         "is_local": item.get("is_local", False),
+        "api_failover": item.get("api_failover", False),
         "trades": trades,
         "trades_df": trades,
         "pl_by_year": pl,
@@ -427,6 +429,15 @@ if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_wid
 if "results_list" in st.session_state and st.session_state.results_list:
     results_list = st.session_state.results_list
     bench_series_list = st.session_state.get("bench_series_list", [])
+
+    # Notify user if any portfolio fell back from Testfol API to local engine
+    failover_names = [r["name"] for r in results_list if r.get("api_failover")]
+    if failover_names:
+        st.warning(
+            f"Testfol API was unavailable. The following portfolios were computed locally "
+            f"using {'Polygon.io' if os.environ.get('POLYGON_API_KEY') else 'yfinance'} price data: "
+            f"**{', '.join(failover_names)}**. Results may differ slightly from Testfol."
+        )
 
     st.divider()
 

@@ -15,7 +15,15 @@ The sidebar contains all the configuration options for your backtest.
 - **Save/Load**: Use the "Saved Portfolios" section to persist your favorite strategies.
 - **Allocation**: Enter your portfolio weights in the table. Must sum to 100%.
 
-### 2. Strategy Configuration Tabs
+### 2. Data Provider Setup (Optional)
+The app fetches price data from multiple sources with automatic fallback:
+-   **Default**: yfinance (free, no setup required)
+-   **Polygon.io**: Better coverage for delisted tickers. Set `POLYGON_API_KEY` environment variable.
+-   **Testfol.io**: Used for server-side backtesting. Falls back to local engine if unavailable.
+
+If the Testfol API goes down, backtests automatically run locally using the Shadow Engine with prices from your configured providers. A warning banner will notify you when this happens.
+
+### 3. Strategy Configuration Tabs
 
 #### 💼 Portfolio
 - **Start Value**: Initial capital (e.g., $10,000).
@@ -51,8 +59,11 @@ You can use Testfol modifiers in the ticker symbol to simulate leverage or expen
 | Modifier | Description | Example |
 | :--- | :--- | :--- |
 | `?L=X` | **Leverage**: Multiplies daily returns by X. | `SPY?L=2` (2x S&P 500) |
-| `?D=X` | **Drag**: Applies annual drag (expense ratio). | `SPY?D=0.50` (0.50% fee) |
+| `?E=X` | **Expense Ratio**: Applies annual expense ratio (%). | `QQQ?E=0.20` (0.20% annual fee) |
+| `?D=X` | **Drag**: Applies annual drag (legacy alias for expense ratio). | `SPY?D=0.50` (0.50% fee) |
 | `_SIM` | **Simulation**: Often used to extend history. | `UPRO_SIM` (Simulated 3x SPY) |
+
+You can combine modifiers: `NDXMEGASIM?L=2&E=0.95` (2x leveraged with 0.95% expense ratio).
 
 ---
 
@@ -64,7 +75,7 @@ You can use Testfol modifiers in the ticker symbol to simulate leverage or expen
 - **Max Drawdown**: Largest peak-to-trough decline.
 - **Post-Tax Net Equity**: The final liquidation value of your portfolio after paying all loan balances and taxes.
 
-### 3. Chart & Returns Analysis
+### 4. Chart & Returns Analysis
 
 #### 📈 Chart Tab (Primary)
 The **Chart** tab contains the main visualization tools, organized into sub-tabs:

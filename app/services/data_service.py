@@ -7,10 +7,10 @@ import sys
 import warnings
 
 import pandas as pd
-import yfinance as yf
 
 from app.common.constants import Tickers
 from app.services import testfol_api as api
+from app.services.price_providers import get_price_provider
 
 logger = logging.getLogger(__name__)
 
@@ -46,21 +46,13 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                     else:
                         warnings.warn(f"{base} requested but {csv_path} not found.")
 
-                    # 2. Fetch QTOP (Live ETF)
+                    # 2. Fetch QTOP (Live ETF) via provider chain
                     qtop_series = pd.Series(dtype=float)
                     try:
-                        qtop_df = yf.download("QTOP", period="max", auto_adjust=True, progress=False, timeout=30)
-                        if not qtop_df.empty:
-                            if 'Close' in qtop_df:
-                                qtop_series = qtop_df['Close']
-                            elif 'Adj Close' in qtop_df:
-                                qtop_series = qtop_df['Adj Close']
-                            else:
-                                qtop_series = qtop_df.iloc[:, 0]
-                        if isinstance(qtop_series, pd.DataFrame):
-                            qtop_series = qtop_series.iloc[:, 0]
-                        qtop_series.index = pd.to_datetime(qtop_series.index)
-                        qtop_series = qtop_series.sort_index()
+                        provider = get_price_provider()
+                        qtop_prices = provider.fetch_prices(["QTOP"], "2000-01-01", pd.Timestamp.now().strftime("%Y-%m-%d"))
+                        if not qtop_prices.empty and "QTOP" in qtop_prices.columns:
+                            qtop_series = qtop_prices["QTOP"].dropna().sort_index()
                     except Exception as e:
                         warnings.warn(f"Failed to fetch QTOP data: {e}")
 
@@ -119,25 +111,13 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                     else:
                         warnings.warn(f"{base} requested but {csv_path} not found.")
 
-                    # 2. Fetch QBIG (Live Proxy) using yfinance
+                    # 2. Fetch QBIG (Live Proxy) via provider chain
                     try:
-                        qbig_df = yf.download(Tickers.QBIG, period="max", auto_adjust=True, progress=False, timeout=30)
-
-                        # Handle varied yfinance return structures
+                        provider = get_price_provider()
+                        qbig_prices = provider.fetch_prices([Tickers.QBIG], "2000-01-01", pd.Timestamp.now().strftime("%Y-%m-%d"))
                         qbig_series = pd.Series(dtype=float)
-                        if not qbig_df.empty:
-                            if 'Close' in qbig_df:
-                                 qbig_series = qbig_df['Close']
-                            elif 'Adj Close' in qbig_df:
-                                 qbig_series = qbig_df['Adj Close']
-                            else:
-                                 qbig_series = qbig_df.iloc[:,0]
-
-                        if isinstance(qbig_series, pd.DataFrame):
-                            qbig_series = qbig_series.iloc[:,0]
-
-                        qbig_series.index = pd.to_datetime(qbig_series.index)
-                        qbig_series = qbig_series.sort_index()
+                        if not qbig_prices.empty and Tickers.QBIG in qbig_prices.columns:
+                            qbig_series = qbig_prices[Tickers.QBIG].dropna().sort_index()
                     except Exception as e:
                         warnings.warn(f"Failed to fetch QBIG data: {e}")
                         qbig_series = pd.Series(dtype=float)
@@ -173,57 +153,57 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                 except Exception as e:
                     raise RuntimeError(f"Failed to load/splice local {base}: {e}")
 
-            # API Fetch for standard tickers
-            # We can use the api.fetch_backtest directly as it has disk caching.
-            # No need for the extra st.cache_data layer here since specific args change often,
-            # but this function is cached with st.cache_data at the top level anyway.
-
-            # 1. Try Yahoo Finance First (For Real Market Prices)
-            # EXCEPTION: If the ticker implies a specific SIMULATION (e.g. VXUSSIM),
-            # we want the EXTENDED history from Testfol, NOT the short real history from Yahoo (VXUS).
-            # So we SKIP Yahoo for *SIM tickers (unless they are handled above like NDXMEGASIM)
+            # Standard ticker fetch via provider chain (Polygon → yfinance)
+            # SIM tickers need extended history from Testfol, not real-ticker history
             is_sim_request = base.upper().endswith("SIM") or base.upper().endswith("TR")
 
             if not is_sim_request:
                 try:
                     from app.core.shadow_backtest import parse_ticker
-                    # Resolve real ticker (e.g. QQQSIM -> QQQ)
                     mapped_ticker, _ = parse_ticker(base)
 
-                    # Use history() showing real price
-                    yf_obj = yf.Ticker(mapped_ticker)
-                    # Ensure dates are strings
                     sd_str = start_date.strftime("%Y-%m-%d") if hasattr(start_date, 'strftime') else str(start_date)
                     ed_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, 'strftime') else str(end_date)
 
-                    hist = yf_obj.history(start=sd_str, end=ed_str, auto_adjust=True, timeout=30)
-                    if not hist.empty and 'Close' in hist.columns:
-                        # Normalize Timezone to Naive to prevent mismatch with other data sources
-                        if hist.index.tz is not None:
-                            hist.index = hist.index.tz_localize(None)
-
-                        combined_prices[base] = hist['Close']
+                    provider = get_price_provider()
+                    prices = provider.fetch_prices([mapped_ticker], sd_str, ed_str)
+                    if not prices.empty and mapped_ticker in prices.columns and not prices[mapped_ticker].dropna().empty:
+                        combined_prices[base] = prices[mapped_ticker]
                         continue
                 except Exception:
-                    pass # Fail silently and use fallback
+                    pass  # Fall through to Testfol API
 
-            # 2. Testfol API Fallback (For Synthetic/Custom Tickers)
-            # Returns an Equity Curve (Backtest starting at 10,000)
-            broad_start = "1900-01-01"
-            broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
+            # Testfol API fallback (for SIM tickers or provider chain failures)
+            try:
+                broad_start = "1900-01-01"
+                broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-            series, _, _ = api.fetch_backtest(
-                start_date=broad_start,
-                end_date=broad_end,
-                start_val=10000,
-                cashflow=0,
-                cashfreq="Monthly",
-                rolling=1,
-                invest_div=True, # Total Return
-                rebalance="Yearly",
-                allocation={base: 100.0}
-            )
-            combined_prices[base] = series
+                series, _, _ = api.fetch_backtest(
+                    start_date=broad_start,
+                    end_date=broad_end,
+                    start_val=10000,
+                    cashflow=0,
+                    cashfreq="Monthly",
+                    rolling=1,
+                    invest_div=True,
+                    rebalance="Yearly",
+                    allocation={base: 100.0}
+                )
+                combined_prices[base] = series
+            except Exception as api_err:
+                # Last resort: try provider chain even for SIM tickers
+                if is_sim_request:
+                    try:
+                        from app.core.shadow_backtest import parse_ticker
+                        mapped_ticker, _ = parse_ticker(base)
+                        provider = get_price_provider()
+                        prices = provider.fetch_prices([mapped_ticker], str(start_date), str(end_date))
+                        if not prices.empty and mapped_ticker in prices.columns:
+                            combined_prices[base] = prices[mapped_ticker]
+                            continue
+                    except Exception:
+                        pass
+                raise api_err
 
         except Exception as e:
             warnings.warn(f"Failed to fetch data for {ticker}: {e}")

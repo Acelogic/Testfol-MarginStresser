@@ -32,6 +32,8 @@ graph TD
     subgraph app/services
         API[testfol_api.py]
         BE[backend.py]
+        PP[price_providers.py]
+        DS[data_service.py]
     end
 
     subgraph app/common
@@ -45,6 +47,7 @@ graph TD
     subgraph External
         TESTFOL[testfol.io API]
         YF[yfinance]
+        PG[Polygon.io]
         MEGA[NDXMEGASIM/2SIM CSVs]
     end
 
@@ -64,8 +67,12 @@ graph TD
     
     SH --> TX
     SH --> CA
-    SH --> YF
+    SH --> PP
     SH --> MEGA
+
+    PP --> PG
+    PP --> YF
+    DS --> PP
     
     RS --> MC
     MC --> CA
@@ -136,6 +143,7 @@ sequenceDiagram
 |------|---------|---------------|
 | `testfol_api.py` | API wrapper & Margin Logic | `fetch_backtest()`, `simulate_margin()` |
 | `data_service.py` | Complex data sourcing (FRED, splicing, SIM tickers) | `get_fed_funds_rate()`, `fetch_component_data()` |
+| `price_providers.py` | Multi-provider price data abstraction (Polygon.io, yfinance) | `get_price_provider()`, `ChainedProvider` |
 | `backend.py` | Legacy price utilities | `get_component_prices()` |
 
 ### `app/common/` - Utilities
@@ -156,16 +164,17 @@ sequenceDiagram
 
 ### Hybrid Engine Mode
 
-The app operates in two modes:
+The app operates in three modes:
 
-1. **Standard Mode**: Pure testfol.io API
-   - Uses remote API for all price data
+1. **Standard Mode**: Testfol API for backtesting, provider chain for component prices
    - Best for standard tickers (SPY, QQQ, etc.)
 
-2. **Hybrid Mode** (auto-enabled for NDXMEGASIM/2SIM):
+2. **Local Mode** (auto-enabled for NDXMEGASIM/threshold rebalancing): Shadow engine with provider chain for prices
    - Loads local CSV for simulated indices
    - Splices with QBIG ETF for recent data
    - Uses local Shadow Engine for tax calculations
+
+3. **Failover Mode** (auto-enabled when Testfol is down): Same as Local Mode, triggered automatically with user notification
 
 ### Tax Lot System (FIFO)
 
@@ -204,6 +213,7 @@ graph LR
 | `report_generator.py` | 9KB | Low - HTML export |
 | `calculations.py` | 8KB | Low - Math utilities |
 | `testfol_api.py` | 8KB | Low - API wrapper |
+| `price_providers.py` | 7KB | Low - Provider abstraction |
 | `backend.py` | 8KB | Low - Data utilities |
 | `sidebar.py` | 4KB | Low - Simple UI |
 | `utils.py` | 3KB | Low - Helpers |

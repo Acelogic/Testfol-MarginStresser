@@ -649,6 +649,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             start_val=start_val,
             retirement_income=retirement_income,
             retirement_year=_retirement_year,
+            port_series=port_series,
         )
 
     # --- Tax Analysis (charts) within same tax tab ---

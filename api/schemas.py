@@ -72,6 +72,7 @@ class BacktestResult(BaseModel):
     logs: list = Field(default_factory=list)
     raw_response: dict = Field(default_factory=dict)
     is_local: bool = False
+    api_failover: bool = False
     start_val: float = 10000.0
     sim_range: str = ""
     shadow_range: str = ""
