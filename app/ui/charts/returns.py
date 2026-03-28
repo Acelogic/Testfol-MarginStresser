@@ -533,7 +533,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
-    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily"])
+    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_drawdowns = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 Drawdowns"])
 
     with tab_summary:
         st.subheader(f"{portfolio_name} Seasonal Summary")
@@ -678,5 +678,156 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
         render_distribution(daily_ret, "Daily", "Days")
+
+    with tab_drawdowns:
+        st.subheader(f"{portfolio_name} Corrections >5%")
+
+        # Fetch SPYSIM for market comparison
+        from app.services.data_service import fetch_component_data
+        from app.core.calculations.stats import build_drawdown_table
+
+        start_date = port_series.index[0].strftime("%Y-%m-%d")
+        end_date = port_series.index[-1].strftime("%Y-%m-%d")
+
+        try:
+            spy_prices = fetch_component_data(["SPYSIM"], start_date, end_date)
+            spy_col = spy_prices.columns[0]
+            spy_raw = spy_prices[spy_col].reindex(port_series.index).ffill().bfill()
+            spy_norm = spy_raw / spy_raw.iloc[0] * port_series.iloc[0]
+        except Exception:
+            spy_norm = port_series.copy()
+            st.warning("Could not load SPY benchmark data. SPY columns may be inaccurate.")
+
+        df = build_drawdown_table(port_series, spy_norm)
+
+        if df.empty:
+            st.info("No corrections >5% found in this period.")
+        else:
+            # Summary metrics
+            n_total = len(df)
+            median_decline = df["_decline_raw"].median()
+            n_severe = (df["_severity"] == "Severe").sum()
+            n_moderate = (df["_severity"] == "Moderate").sum()
+            n_ongoing = df["_ongoing"].sum()
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Corrections", n_total)
+            c2.metric("Median Decline", f"{median_decline:.1f}%")
+            c3.metric("Severe (>25%)", n_severe)
+            c4.metric("Moderate (15-25%)", n_moderate)
+            c5.metric("Ongoing", n_ongoing)
+
+            # Severity filter
+            n_mild = (df["_severity"] == "Mild").sum()
+            n_minor = (df["_severity"] == "Minor").sum()
+            filter_options = [
+                f"All ({n_total})",
+                f"Severe >25% ({n_severe})",
+                f"Moderate 15-25% ({n_moderate})",
+                f"Mild 10-15% ({n_mild})",
+                f"Minor 5-10% ({n_minor})",
+            ]
+            selected = st.radio(
+                "Filter by severity",
+                filter_options,
+                horizontal=True,
+                label_visibility="collapsed",
+                key=f"dd_filter_{unique_id}",
+            )
+
+            # Apply filter
+            filtered = df
+            if "Severe" in selected and "All" not in selected:
+                filtered = df[df["_severity"] == "Severe"]
+            elif "Moderate" in selected and "All" not in selected:
+                filtered = df[df["_severity"] == "Moderate"]
+            elif "Mild" in selected and "All" not in selected:
+                filtered = df[df["_severity"] == "Mild"]
+            elif "Minor" in selected and "All" not in selected:
+                filtered = df[df["_severity"] == "Minor"]
+
+            # Build median row
+            if not filtered.empty:
+                median_row = pd.DataFrame([{
+                    "Correction Period": "Median",
+                    "Days": int(filtered["_days_raw"].median()),
+                    "% Decline": f"{filtered['_decline_raw'].median():.1f}%",
+                    "Recovery from Bottom": "",
+                    "Decline + Recovery Time": "",
+                    "SPY DD": f"{filtered['_spy_dd_raw'].median():.1f}%",
+                    "SPY Recovery from Bottom": "",
+                    "SPY Decline + Recovery Time": "",
+                    "Ratio": f"{filtered['_ratio_raw'].median():.1f}x",
+                    "Market Event": "",
+                    "_ongoing": False,
+                    "_severity": "",
+                    "_decline_raw": 0,
+                    "_spy_dd_raw": 0,
+                    "_ratio_raw": 0,
+                    "_days_raw": 0,
+                }])
+                display_df = pd.concat([filtered, median_row], ignore_index=True)
+            else:
+                display_df = filtered.copy()
+
+            # Drop hidden columns for display
+            display_cols = [c for c in display_df.columns if not c.startswith("_")]
+            display_df = display_df[display_cols]
+
+            # Style function
+            def style_drawdowns(styler):
+                def color_decline(val):
+                    if not isinstance(val, str) or not val.endswith("%"):
+                        return ""
+                    try:
+                        v = float(val.replace("%", ""))
+                    except ValueError:
+                        return ""
+                    if abs(v) >= 25: return "color: #ef4444; font-weight: bold"
+                    if abs(v) >= 15: return "color: #f97316; font-weight: bold"
+                    if abs(v) >= 10: return "color: #eab308"
+                    return "color: #94a3b8"
+
+                def color_ratio(val):
+                    if not isinstance(val, str) or not val.endswith("x"):
+                        return ""
+                    try:
+                        v = float(val.replace("x", ""))
+                    except ValueError:
+                        return ""
+                    if v < 1.5: return "color: #34d399"
+                    if v > 3.0: return "color: #f97316"
+                    return ""
+
+                def color_ongoing(val):
+                    if isinstance(val, str) and "ongoing" in val:
+                        return "color: #ef4444; font-weight: bold"
+                    return ""
+
+                def color_spy(val):
+                    if not isinstance(val, str) or val == "":
+                        return ""
+                    if "ongoing" in val:
+                        return "color: #ef4444; font-weight: bold"
+                    return "color: #94a3b8"
+
+                def color_median_row(row):
+                    if row["Correction Period"] == "Median":
+                        return ["color: #3b82f6; font-weight: bold"] * len(row)
+                    return [""] * len(row)
+
+                styler.map(color_decline, subset=["% Decline"])
+                styler.map(color_ratio, subset=["Ratio"])
+                styler.map(color_ongoing, subset=["Recovery from Bottom", "Decline + Recovery Time"])
+                styler.map(color_spy, subset=["SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
+                styler.apply(color_median_row, axis=1)
+                return styler
+
+            st.dataframe(
+                display_df.style.pipe(style_drawdowns),
+                use_container_width=True,
+                hide_index=True,
+                height=min(800, 35 * (len(display_df) + 1) + 38),
+            )
 
 
