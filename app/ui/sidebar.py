@@ -12,6 +12,66 @@ def render():
 
     with st.sidebar:
         st.title("📈 Testfol Charting")
+
+        with st.expander("📋 Changelog (v3.5.0)", expanded=False):
+            st.markdown("""
+**v3.5.0** — Drawdowns Tab & Corrections Analysis
+- New **Drawdowns** tab in Returns Analysis
+- Corrections >5% with SPY comparison, severity filter
+- 70+ market event labels (2000–2026)
+- Sortable duration columns
+
+**v3.4.0** — NDX Simulation Accuracy
+- Official Nasdaq membership auditing
+- Survivorship bias dampening
+- Price cache improvements
+
+**v3.3.0** — Multi-Provider Price Data
+- Polygon.io → yfinance automatic failover
+- Component performance chart
+- ER-aware presets (NDXMEGASPLIT w/ ERs)
+
+**v3.2.0** — Margin & Tax Overhaul
+- Historical smart tax rates (2013–2023)
+- Variable Fed Funds margin interest
+- Draw start date & retirement income
+- 164 regression tests
+
+**v3.1.0** — Portfolio Margin & State Taxes
+- Dynamic PM comparison & buy restrictions
+- State tax library (all 50 states)
+- Rolling metrics & risk charts
+
+**v3.0.0** — Architecture Refactor
+- Split into `app/` package structure
+- FastAPI backend with REST endpoints
+- Shadow backtest engine (FIFO tax lots)
+- Disk-based HMAC cache
+
+**v2.5.0** — Technical Analysis
+- 200DMA, 150MA, Munger 200WMA
+- Weinstein Stage Analysis
+- NDX-100 MA scanner
+- Trader's Cheat Sheet
+
+**v2.0.0** — Returns & Monte Carlo
+- Seasonal summary, heatmaps, distributions
+- Annual/Quarterly/Monthly/Daily returns
+- Monte Carlo simulation
+- Benchmark comparisons
+
+**v1.5.0** — Backtesting Engine
+- Shadow yfinance backtester
+- Custom rebalancing logic
+- Tax calculations (federal + GLD)
+- NDXMEGA simulated tickers
+
+**v1.0.0** — Initial Release
+- Margin stress testing
+- Log scaling, chart metrics
+- Testfol API integration
+""")
+
         st.markdown("---")
         
         st.header("Global Settings")
