@@ -340,7 +340,10 @@ def fmt_duration(days: int) -> str:
 
 
 MARKET_EVENT_MAP: dict[tuple[int, int], str] = {
-    (2000, 7): "Dot-com Bubble Burst, Tech Wreck",
+    (2000, 1): "Y2K Fears, Dot-com Excess",
+    (2000, 3): "Dot-com Bubble Burst, Tech Wreck",
+    (2000, 7): "Dot-com Continued, Tech Wreck",
+    (2007, 2): "Subprime Early Signs, Shanghai Crash",
     (2007, 7): "Subprime Contagion, Quant Blowups",
     (2007, 11): "GFC: Lehman/AIG/Bear Stearns Collapse",
     (2010, 11): "Ireland Bailout, EU Debt Contagion",
@@ -349,6 +352,7 @@ MARKET_EVENT_MAP: dict[tuple[int, int], str] = {
     (2011, 7): "US Downgrade (AAA->AA+), EU Crisis",
     (2012, 3): "EU Debt (Spain/Italy), Austerity",
     (2012, 9): "Fiscal Cliff Fears, Election",
+    (2013, 5): "Taper Tantrum, Fed Signals QE Wind-Down",
     (2014, 1): "EM Currency Crisis (Turkey/Argentina)",
     (2014, 3): "Russia Annexes Crimea, Sanctions",
     (2014, 7): "Ukraine/MH17, Gaza, ISIS, Ebola",
@@ -359,6 +363,7 @@ MARKET_EVENT_MAP: dict[tuple[int, int], str] = {
     (2015, 7): "China Devaluation, Yuan Shock, EM Crash",
     (2015, 11): "Paris Attacks, Rate Hike, Oil <$40",
     (2015, 12): "China, Oil <$30, Recession Fears",
+    (2016, 6): "Brexit Vote, EU Uncertainty",
     (2016, 10): "Election Uncertainty, Trump Shock",
     (2017, 6): "Tech/FANG Rotation, Valuation Fears",
     (2018, 1): "Volmageddon (XIV Blowup), Rate Fears",
@@ -432,7 +437,7 @@ def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.Da
         "Recovery from Bottom", "Decline + Recovery Time",
         "SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time",
         "Ratio", "Market Event",
-        "_ongoing", "_severity", "_decline_raw", "_spy_dd_raw", "_ratio_raw", "_days_raw",
+        "_ongoing", "_severity", "_decline_raw", "_spy_dd_raw", "_ratio_raw", "_days_raw", "_peak_date",
     ]
 
     episodes = find_drawdown_episodes(port_series, threshold=-0.05)
@@ -505,9 +510,11 @@ def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.Da
             "_spy_dd_raw": sdd,
             "_ratio_raw": ratio,
             "_days_raw": n_days,
+            "_peak_date": peak,
         })
 
     df = pd.DataFrame(rows, columns=columns)
+    df = df.sort_values("_peak_date").reset_index(drop=True)
     # Ensure _ongoing holds native Python bools (pandas coerces to np.bool_ by default)
     df["_ongoing"] = df["_ongoing"].astype(object)
     return df

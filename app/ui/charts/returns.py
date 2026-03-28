@@ -746,33 +746,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             elif "Minor" in selected and "All" not in selected:
                 filtered = df[df["_severity"] == "Minor"]
 
-            # Build median row
-            if not filtered.empty:
-                median_row = pd.DataFrame([{
-                    "Correction Period": "Median",
-                    "Days": int(filtered["_days_raw"].median()),
-                    "% Decline": f"{filtered['_decline_raw'].median():.1f}%",
-                    "Recovery from Bottom": "",
-                    "Decline + Recovery Time": "",
-                    "SPY DD": f"{filtered['_spy_dd_raw'].median():.1f}%",
-                    "SPY Recovery from Bottom": "",
-                    "SPY Decline + Recovery Time": "",
-                    "Ratio": f"{filtered['_ratio_raw'].median():.1f}x",
-                    "Market Event": "",
-                    "_ongoing": False,
-                    "_severity": "",
-                    "_decline_raw": 0,
-                    "_spy_dd_raw": 0,
-                    "_ratio_raw": 0,
-                    "_days_raw": 0,
-                }])
-                display_df = pd.concat([filtered, median_row], ignore_index=True)
-            else:
-                display_df = filtered.copy()
-
             # Drop hidden columns for display
-            display_cols = [c for c in display_df.columns if not c.startswith("_")]
-            display_df = display_df[display_cols]
+            display_df = filtered[[c for c in filtered.columns if not c.startswith("_")]]
 
             # Style function
             def style_drawdowns(styler):
@@ -811,16 +786,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                         return "color: #ef4444; font-weight: bold"
                     return "color: #94a3b8"
 
-                def color_median_row(row):
-                    if row["Correction Period"] == "Median":
-                        return ["color: #3b82f6; font-weight: bold"] * len(row)
-                    return [""] * len(row)
-
                 styler.map(color_decline, subset=["% Decline"])
                 styler.map(color_ratio, subset=["Ratio"])
                 styler.map(color_ongoing, subset=["Recovery from Bottom", "Decline + Recovery Time"])
                 styler.map(color_spy, subset=["SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
-                styler.apply(color_median_row, axis=1)
                 return styler
 
             st.dataframe(
