@@ -179,7 +179,7 @@ def test_find_drawdown_episodes_empty():
 # fmt_duration
 # ---------------------------------------------------------------------------
 
-from app.core.calculations import fmt_duration, get_market_event
+from app.core.calculations import fmt_duration, get_market_event, build_drawdown_table
 
 
 def test_fmt_duration_years():
@@ -220,3 +220,58 @@ def test_get_market_event_no_match():
     date = pd.Timestamp("1990-01-01")
     event = get_market_event(date)
     assert event == ""
+
+
+# ---------------------------------------------------------------------------
+# build_drawdown_table
+# ---------------------------------------------------------------------------
+
+def test_build_drawdown_table_basic():
+    """Produces a DataFrame with expected columns from a series with one drawdown."""
+    dates = pd.bdate_range("2023-01-02", periods=60)
+    port = pd.Series(np.concatenate([
+        np.linspace(100, 120, 15),
+        np.linspace(120, 80, 15),
+        np.linspace(80, 120, 15),
+        np.linspace(120, 130, 15),
+    ]), index=dates)
+    # Use same series as "SPY" for simplicity
+    spy = port.copy()
+    df = build_drawdown_table(port, spy)
+    assert len(df) == 1
+    assert "Correction Period" in df.columns
+    assert "% Decline" in df.columns
+    assert "Recovery from Bottom" in df.columns
+    assert "Decline + Recovery Time" in df.columns
+    assert "SPY DD" in df.columns
+    assert "Ratio" in df.columns
+    assert "Market Event" in df.columns
+    assert "_severity" in df.columns
+    assert "_ongoing" in df.columns
+    # Decline should be around -33%
+    assert df.iloc[0]["_decline_raw"] == pytest.approx(-33.3, abs=5.0)
+
+
+def test_build_drawdown_table_empty():
+    """No drawdowns returns empty DataFrame with correct columns."""
+    dates = pd.bdate_range("2023-01-02", periods=30)
+    port = pd.Series(np.linspace(100, 130, 30), index=dates)
+    spy = port.copy()
+    df = build_drawdown_table(port, spy)
+    assert len(df) == 0
+    assert "Correction Period" in df.columns
+
+
+def test_build_drawdown_table_ongoing():
+    """Ongoing drawdown shows 'ongoing' in recovery columns."""
+    dates = pd.bdate_range("2023-01-02", periods=30)
+    port = pd.Series(np.concatenate([
+        np.linspace(100, 120, 15),
+        np.linspace(120, 90, 15),
+    ]), index=dates)
+    spy = port.copy()
+    df = build_drawdown_table(port, spy)
+    assert len(df) == 1
+    assert df.iloc[0]["_ongoing"] is True
+    assert "ongoing" in df.iloc[0]["Recovery from Bottom"]
+    assert "ongoing" in df.iloc[0]["Decline + Recovery Time"]

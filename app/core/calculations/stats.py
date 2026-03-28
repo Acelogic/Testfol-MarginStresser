@@ -406,3 +406,108 @@ def get_market_event(peak_date) -> str:
         if (y, m) in MARKET_EVENT_MAP:
             return MARKET_EVENT_MAP[(y, m)]
     return ""
+
+
+def _classify_severity(decline_pct: float) -> str:
+    """Classify drawdown severity by percentage (already negative)."""
+    d = abs(decline_pct)
+    if d >= 25: return "Severe"
+    if d >= 15: return "Moderate"
+    if d >= 10: return "Mild"
+    return "Minor"
+
+
+def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.DataFrame:
+    """Build a DataFrame of all drawdown episodes with SPY comparison.
+
+    Args:
+        port_series: Portfolio value series (DatetimeIndex).
+        spy_series: SPY/SPYSIM value series, aligned to same dates as port_series.
+
+    Returns:
+        DataFrame with display columns and hidden _metadata columns for filtering.
+    """
+    columns = [
+        "Correction Period", "Days", "% Decline",
+        "Recovery from Bottom", "Decline + Recovery Time",
+        "SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time",
+        "Ratio", "Market Event",
+        "_ongoing", "_severity", "_decline_raw", "_spy_dd_raw", "_ratio_raw", "_days_raw",
+    ]
+
+    episodes = find_drawdown_episodes(port_series, threshold=-0.05)
+    if not episodes:
+        return pd.DataFrame(columns=columns)
+
+    spy_norm = spy_series / spy_series.iloc[0] * port_series.iloc[0]
+    last_date = port_series.index[-1]
+    rows = []
+
+    for ep in episodes:
+        peak, trough, recovery = ep["peak_date"], ep["trough_date"], ep["recovery"]
+        pdd = ep["dd"] * 100
+        n_days = (trough - peak).days
+
+        # SPY drawdown during same window
+        end = recovery if recovery else last_date
+        sw = spy_norm.loc[peak:end]
+        if sw.empty:
+            sdd = 0.0
+            spy_trough = peak
+        else:
+            sddw = sw / sw.cummax() - 1.0
+            sdd = sddw.min() * 100
+            spy_trough = sddw.idxmin()
+        ratio = abs(pdd / sdd) if sdd != 0 else 0.0
+
+        # Portfolio recovery
+        if recovery:
+            split_recov = fmt_duration((recovery - trough).days)
+            split_total = fmt_duration((recovery - peak).days)
+        else:
+            split_recov = f"ongoing ({fmt_duration((last_date - trough).days)})"
+            split_total = f"ongoing ({fmt_duration((last_date - peak).days)})"
+
+        # SPY recovery
+        if not sw.empty:
+            spy_peak_val = spy_norm.loc[peak]
+            spy_after = spy_norm.loc[spy_trough:]
+            spy_recovered = spy_after[spy_after >= spy_peak_val]
+            if len(spy_recovered) > 0:
+                spy_rd = spy_recovered.index[0]
+                spy_recov = fmt_duration((spy_rd - spy_trough).days)
+                spy_total = fmt_duration((spy_rd - peak).days)
+            else:
+                spy_recov = f"ongoing ({fmt_duration((last_date - spy_trough).days)})"
+                spy_total = f"ongoing ({fmt_duration((last_date - peak).days)})"
+        else:
+            spy_recov = "N/A"
+            spy_total = "N/A"
+
+        period = f"{peak.strftime('%b %d, %Y')} - {trough.strftime('%b %d, %Y')}"
+        if not recovery:
+            period += "*"
+
+        rows.append({
+            "Correction Period": period,
+            "Days": n_days,
+            "% Decline": f"{pdd:.1f}%",
+            "Recovery from Bottom": split_recov,
+            "Decline + Recovery Time": split_total,
+            "SPY DD": f"{sdd:.1f}%",
+            "SPY Recovery from Bottom": spy_recov,
+            "SPY Decline + Recovery Time": spy_total,
+            "Ratio": f"{ratio:.1f}x",
+            "Market Event": get_market_event(peak),
+            "_ongoing": bool(recovery is None),
+            "_severity": _classify_severity(pdd),
+            "_decline_raw": pdd,
+            "_spy_dd_raw": sdd,
+            "_ratio_raw": ratio,
+            "_days_raw": n_days,
+        })
+
+    df = pd.DataFrame(rows, columns=columns)
+    # Ensure _ongoing holds native Python bools (pandas coerces to np.bool_ by default)
+    df["_ongoing"] = df["_ongoing"].astype(object)
+    return df

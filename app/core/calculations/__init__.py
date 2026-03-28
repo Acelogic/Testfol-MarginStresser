@@ -11,6 +11,7 @@ from app.core.calculations.stats import (
     fmt_duration,
     MARKET_EVENT_MAP,
     get_market_event,
+    build_drawdown_table,
 )
 from app.core.calculations.moving_averages import (
     analyze_ma,
@@ -35,6 +36,7 @@ __all__ = [
     "fmt_duration",
     "MARKET_EVENT_MAP",
     "get_market_event",
+    "build_drawdown_table",
     "analyze_ma",
     "analyze_wma",
     "compare_breach_events",
