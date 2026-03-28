@@ -583,7 +583,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         should_inject = False
         if cashflow > 0:
             # Stop DCA at draw_start_date or retirement_date if dca_in_retirement is False
-            _dca_cutoff_date = draw_start_date or retirement_date
+            _dca_cutoff_date = retirement_date
             if not dca_in_retirement and _dca_cutoff_date is not None and date.date() >= _dca_cutoff_date:
                 should_inject = False
             elif cashflow_freq == Freq.YEARLY:
