@@ -362,6 +362,7 @@ MARKET_EVENT_MAP: dict[tuple[int, int], str] = {
     (2011, 2): "Arab Spring, Japan Earthquake/Fukushima",
     (2011, 4): "EU Debt (Portugal), S&P Warning",
     (2011, 7): "US Downgrade (AAA->AA+), EU Crisis",
+    (2011, 11): "EU Debt Crisis, Italy/Greece Contagion, MF Global",
     (2012, 3): "EU Debt (Spain/Italy), Austerity",
     (2012, 9): "Fiscal Cliff Fears, Election",
     (2013, 5): "Taper Tantrum, Fed Signals QE Wind-Down",
