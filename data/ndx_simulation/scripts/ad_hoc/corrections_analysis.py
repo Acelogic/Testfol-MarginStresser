@@ -58,7 +58,22 @@ HTML_OUT = os.path.join(AD_HOC_RESULTS_DIR, "ndxmegasplit_corrections.html")
 
 # ── Market event descriptions ────────────────────────────────────────────
 EVENT_MAP = {
-    (2000, 7): "Dot-com Bubble Burst, Tech Wreck",
+    (2000, 1): "Y2K Fears, Dot-com Excess",
+    (2000, 3): "Dot-com Bubble Burst, Tech Wreck",
+    (2000, 7): "Dot-com Continued, Tech Wreck",
+    (2001, 1): "Dot-com Unwind, Recession Begins",
+    (2001, 9): "9/11 Attacks, Market Shutdown",
+    (2002, 3): "WorldCom/Enron Scandals, Accounting Crisis",
+    (2002, 7): "Corporate Fraud, Market Capitulation",
+    (2003, 1): "Iraq War Buildup, Terror Fears",
+    (2003, 3): "Iraq Invasion, Oil Spike, SARS",
+    (2004, 3): "Madrid Bombings, Rate Hike Fears",
+    (2004, 7): "Oil >$50, Rate Hikes Begin",
+    (2005, 3): "GM/Ford Downgrades, Credit Fears",
+    (2005, 10): "Katrina Aftermath, Oil Spike, Inflation",
+    (2006, 5): "EM Selloff, Rate Hike Fears",
+    (2006, 7): "Lebanon War, Oil $78, Housing Cools",
+    (2007, 2): "Subprime Early Signs, Shanghai Crash",
     (2007, 7): "Subprime Contagion, Quant Blowups",
     (2007, 11): "GFC: Lehman/AIG/Bear Stearns Collapse",
     (2010, 11): "Ireland Bailout, EU Debt Contagion",
@@ -67,6 +82,7 @@ EVENT_MAP = {
     (2011, 7): "US Downgrade (AAA->AA+), EU Crisis",
     (2012, 3): "EU Debt (Spain/Italy), Austerity",
     (2012, 9): "Fiscal Cliff Fears, Election",
+    (2013, 5): "Taper Tantrum, Fed Signals QE Wind-Down",
     (2014, 1): "EM Currency Crisis (Turkey/Argentina)",
     (2014, 3): "Russia Annexes Crimea, Sanctions",
     (2014, 7): "Ukraine/MH17, Gaza, ISIS, Ebola",
@@ -77,6 +93,7 @@ EVENT_MAP = {
     (2015, 7): "China Devaluation, Yuan Shock, EM Crash",
     (2015, 11): "Paris Attacks, Rate Hike, Oil <$40",
     (2015, 12): "China, Oil <$30, Recession Fears",
+    (2016, 6): "Brexit Vote, EU Uncertainty",
     (2016, 10): "Election Uncertainty, Trump Shock",
     (2017, 6): "Tech/FANG Rotation, Valuation Fears",
     (2018, 1): "Volmageddon (XIV Blowup), Rate Fears",
@@ -216,12 +233,13 @@ def build_rows(portfolio, spy_norm):
         ratio = abs(pdd / sdd) if sdd != 0 else 0
 
         # SPLIT recovery
+        last_date = portfolio.index[-1]
         if recovery:
             split_recov = fmt_recov((recovery - trough).days)
             split_total = fmt_recov((recovery - peak).days)
         else:
-            split_recov = "ongoing"
-            split_total = "ongoing"
+            split_recov = f"ongoing ({fmt_recov((last_date - trough).days)})"
+            split_total = f"ongoing ({fmt_recov((last_date - peak).days)})"
 
         # SPY recovery
         spy_peak_val = spy_norm.loc[peak]
@@ -232,8 +250,8 @@ def build_rows(portfolio, spy_norm):
             spy_recov = fmt_recov((spy_rd - spy_trough).days)
             spy_total = fmt_recov((spy_rd - peak).days)
         else:
-            spy_recov = "ongoing"
-            spy_total = "ongoing"
+            spy_recov = f"ongoing ({fmt_recov((last_date - spy_trough).days)})"
+            spy_total = f"ongoing ({fmt_recov((last_date - peak).days)})"
 
         period = f"{peak.strftime('%b %d, %Y')} - {trough.strftime('%b %d, %Y')}"
         if not recovery:
@@ -293,7 +311,7 @@ def export_png(rows, portfolio, episodes):
 
     col_x = [0.003, 0.145, 0.185, 0.245, 0.305, 0.355, 0.405, 0.45, 0.495, 0.54, 0.585, 0.62]
     col_align = ["left", "right", "right", "right", "right", "right", "right", "right", "right", "right", "right", "left"]
-    headers = ["Correction Period", "Days", "SPLIT High", "SPLIT Low", "% Decline", "Recov", "Total", "SPY DD", "SPY Rec", "SPY Tot", "Ratio", '"Markets Fall On..."']
+    headers = ["Correction Period", "Days", "SPLIT High", "SPLIT Low", "% Decline", "Recovery\nfrom Bottom", "Decline +\nRecovery Time", "SPY DD", "Recovery\nfrom Bottom", "Decline +\nRecovery Time", "Ratio", '"Markets Fall On..."']
 
     # Title
     ty = fig_h - 0.6
@@ -329,8 +347,8 @@ def export_png(rows, portfolio, episodes):
 
         pw = "bold" if r["severe"] or r["ongoing"] else "normal"
         pc = text_w if r["severe"] or r["ongoing"] else text_g
-        rc = red if r["split_recov"] == "ongoing" else text_w
-        rw = "bold" if r["split_recov"] == "ongoing" else "normal"
+        rc = red if "ongoing" in r["split_recov"] else text_w
+        rw = "bold" if "ongoing" in r["split_recov"] else "normal"
         src = red if r["spy_recov"] == "ongoing" else text_g
         srw = "bold" if r["spy_recov"] == "ongoing" else "normal"
         ratio_c = green if r["ratio"] < 1.5 else (text_w if r["ratio"] < 3 else orange)
@@ -492,11 +510,11 @@ tr.severe td:first-child, tr.ongoing td:first-child {{ font-weight: bold; color:
   <th>SPLIT High</th>
   <th>SPLIT Low</th>
   <th>% Decline</th>
-  <th><span class="group-header">SPLIT</span><br>Recov</th>
-  <th>Total</th>
+  <th><span class="group-header">SPLIT</span><br>Recovery<br>from Bottom</th>
+  <th>Decline +<br>Recovery Time</th>
   <th><span class="group-header">SPY</span><br>DD</th>
-  <th>Recov</th>
-  <th>Total</th>
+  <th>Recovery<br>from Bottom</th>
+  <th>Decline +<br>Recovery Time</th>
   <th>Ratio</th>
   <th style="text-align:left">"Markets Fall On..."</th>
 </tr>
@@ -544,11 +562,11 @@ function renderRows(filtered) {{
       {{ text: '$' + r.high.toLocaleString('en-US', {{maximumFractionDigits:0}}) }},
       {{ text: '$' + r.low.toLocaleString('en-US', {{maximumFractionDigits:0}}) }},
       {{ text: r.decline.toFixed(1) + '%', cls: declineClass(r.decline) }},
-      {{ text: r.split_recov, cls: r.split_recov === 'ongoing' ? 'ongoing-text' : '' }},
-      {{ text: r.split_total, cls: r.split_total === 'ongoing' ? 'ongoing-text' : '' }},
+      {{ text: r.split_recov, cls: r.split_recov.includes('ongoing') ? 'ongoing-text' : '' }},
+      {{ text: r.split_total, cls: r.split_total.includes('ongoing') ? 'ongoing-text' : '' }},
       {{ text: r.spy_dd.toFixed(1) + '%', style: 'color:#94a3b8' }},
-      {{ text: r.spy_recov, cls: r.spy_recov === 'ongoing' ? 'ongoing-text' : '', style: 'color:#94a3b8' }},
-      {{ text: r.spy_total, cls: r.spy_total === 'ongoing' ? 'ongoing-text' : '', style: 'color:#94a3b8' }},
+      {{ text: r.spy_recov, cls: r.spy_recov.includes('ongoing') ? 'ongoing-text' : '', style: 'color:#94a3b8' }},
+      {{ text: r.spy_total, cls: r.spy_total.includes('ongoing') ? 'ongoing-text' : '', style: 'color:#94a3b8' }},
       {{ text: r.ratio.toFixed(1) + 'x', cls: ratioClass(r.ratio) }},
       {{ text: r.event, align: 'left' }}
     ];
