@@ -9,6 +9,8 @@ import config
 import chart_style
 import price_manager
 import changes_parser
+from official_index_data import get_official_constituents
+from methodology_utils import apply_ndx30_company_cap
 
 
 def apply_ndx30_caps(w_series):
@@ -161,17 +163,26 @@ def backtest():
         # NDX30: Take top 30 COMPANIES by NDX weight
         # Per methodology: dual-class shares count as one company.
         # Select 30 companies, include all their individual securities.
-        dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
-        mapped = q_weights[q_weights['IsMapped'] == True].copy()
-        mapped['Company'] = mapped['Ticker'].map(lambda t: dc.get(t, t))
+        official_tickers = get_official_constituents("NDX30", start_dt)
+        if official_tickers:
+            official_set = set(official_tickers)
+            selected_tickers = (
+                q_weights[q_weights["Ticker"].isin(official_set)]
+                .sort_values("Weight", ascending=False)["Ticker"]
+                .tolist()
+            )
+        else:
+            dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
+            mapped = q_weights[q_weights['IsMapped'] == True].copy()
+            mapped['Company'] = mapped['Ticker'].map(lambda t: dc.get(t, t))
 
-        company_weights = mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
-        company_tickers = mapped.groupby('Company')['Ticker'].apply(list).to_dict()
+            company_weights = mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
+            company_tickers = mapped.groupby('Company')['Ticker'].apply(list).to_dict()
 
-        top_companies = company_weights.head(config.NDX30_NUM_CONSTITUENTS).index.tolist()
-        selected_tickers = []
-        for comp in top_companies:
-            selected_tickers.extend(company_tickers.get(comp, []))
+            top_companies = company_weights.head(config.NDX30_NUM_CONSTITUENTS).index.tolist()
+            selected_tickers = []
+            for comp in top_companies:
+                selected_tickers.extend(company_tickers.get(comp, []))
 
         if not selected_tickers:
             print(f"Warning: No selection for {start_dt}")
@@ -184,8 +195,8 @@ def backtest():
         if ndx30_subset.empty:
             continue
 
-        # Apply NDX30 two-step capping
-        final_weights = apply_ndx30_caps(ndx30_subset.set_index('Ticker')['Weight'])
+        # Apply methodology-aligned company-level capping, then project back to issues
+        final_weights = apply_ndx30_company_cap(ndx30_subset)
 
         # Save as previous good portfolio for carry-forward
         prev_final_weights = final_weights.copy()
@@ -271,6 +282,8 @@ def backtest():
 
     ndx30_values = ndx30_values.dropna()
 
+    plot_year_range = f"{ndx30_values.index.min().year}-{ndx30_values.index.max().year}"
+
     # Chart
     if config.BENCHMARK_TICKER in data.columns:
         benchmark_data = data[config.BENCHMARK_TICKER].reindex(ndx30_values.index)
@@ -292,7 +305,7 @@ def backtest():
                          label=f"{config.BENCHMARK_TICKER} (Total Return)",
                          color='black', alpha=0.6, linestyle='--')
 
-                plt.title('NDX30 (Top 30) vs Nasdaq-100 (2000-2025)')
+                plt.title(f'NDX30 (Top 30) vs Nasdaq-100 ({plot_year_range})')
                 plt.yscale('log')
                 plt.legend()
 
@@ -320,7 +333,7 @@ def backtest():
         ax = plt.gca()
         plt.plot(ndx30_values.index, (ndx30_values / ndx30_values.iloc[0]) * 100,
                  label='NDX30 (Simulated)', linewidth=2.5)
-        plt.title('NDX30 (Top 30) Strategy (2000-2025)')
+        plt.title(f'NDX30 (Top 30) Strategy ({plot_year_range})')
         plt.yscale('log')
         plt.legend()
 

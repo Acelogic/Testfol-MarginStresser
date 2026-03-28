@@ -10,6 +10,16 @@ import config
 import chart_style
 import price_manager
 import changes_parser
+from official_index_data import get_official_constituents
+from methodology_utils import (
+    apply_company_cap,
+    build_company_views,
+    canonical_company,
+    expand_companies_to_tickers,
+    pick_unique_fillers,
+    quarterly_company_selection,
+    select_companies_up_to_threshold,
+)
 
 # Configuration (Loaded from config.py)
 
@@ -86,7 +96,7 @@ def backtest():
     
     # Store constituents count
     constituents_history = []
-    current_constituents = set() # Standard selection
+    current_companies = []  # Standard selection at the company level
     
     print("Simulating NDX Mega 2.0 strategy...")
 
@@ -150,79 +160,40 @@ def backtest():
                     print(f"  Q {start_dt.date()}: DISTORTED weights (overlap={overlap}/5) — no previous portfolio, skipping")
                     continue
         
-        # Standard Selection (Top 40%) - Using MEGA2 constants
+        # Standard Selection (Top 47%) - Using MEGA2 constants
         standard_tickers = []
-        curr_sum = 0.0
+        standard_companies = []
+        official_tickers = get_official_constituents("NDXMEGA2", start_dt)
+        _, company_weights, company_cum_weights, company_tickers = build_company_views(q_weights)
         
-        if is_annual_recon or not current_constituents:
+        if official_tickers:
+            official_set = set(official_tickers)
+            ranked = q_weights[q_weights["Ticker"].isin(official_set)].sort_values("Weight", ascending=False)
+            standard_tickers = ranked["Ticker"].tolist()
+            standard_companies = list(dict.fromkeys(canonical_company(t) for t in standard_tickers))
+        elif is_annual_recon or not current_companies:
             # Reconstitution or First Run: 47% Selection
-            # Per methodology: combine dual-class shares for company-level selection.
-            dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
-            q_mapped = q_weights[q_weights['IsMapped'] == True].copy()
-            q_mapped['Company'] = q_mapped['Ticker'].map(lambda t: dc.get(t, t))
-
-            company_weights = q_mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
-            company_tickers = q_mapped.groupby('Company')['Ticker'].apply(list).to_dict()
-
-            for company, cw in company_weights.items():
-                if curr_sum < config.MEGA2_TARGET_THRESHOLD:
-                    for t in company_tickers.get(company, []):
-                        standard_tickers.append(t)
-                    curr_sum += cw
-                else:
-                    break
+            standard_companies = select_companies_up_to_threshold(
+                company_weights,
+                config.MEGA2_TARGET_THRESHOLD,
+            )
+            standard_tickers = expand_companies_to_tickers(standard_companies, company_tickers)
+            if not standard_tickers and not company_weights.empty:
+                first_company = company_weights.index[0]
+                standard_companies = [first_company]
+                standard_tickers = expand_companies_to_tickers(standard_companies, company_tickers)
         else:
             # Quarterly Rebalance: Swap/Replacement Rules (Mega 2.0 Methodology)
-            # 1. Identify Buffer Set (Top 50%)
-            buffer_set = set()
-            
-            ticker_metrics = {}
-            for ticks, w, cw, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['CumWeight'], q_weights['IsMapped']):
-                if mapped:
-                    ticker_metrics[ticks] = {'Weight': w, 'CumWeight': cw}
-                    if cw <= config.MEGA2_BUFFER_THRESHOLD:
-                        buffer_set.add(ticks)
-            
-            # 2. Check for Dropouts
-            dropouts = []
-            retention_list = []
-            
-            for c in current_constituents:
-                if c in buffer_set:
-                    retention_list.append(c)
-                else:
-                    dropouts.append(c)
-                    
-            # 3. Apply Swap Logic
-            if not dropouts:
-                selected_tickers = list(current_constituents)
-            else:
-                dropout_cum_weights = []
-                for d in dropouts:
-                    if d in ticker_metrics:
-                        dropout_cum_weights.append(ticker_metrics[d]['CumWeight'])
-                    else:
-                        dropout_cum_weights.append(1.0)
-                        
-                dynamic_threshold = max(dropout_cum_weights) if dropout_cum_weights else 1.0
-                
-                candidates = []
-                for ticks, metrics in ticker_metrics.items():
-                    if ticks not in retention_list:
-                        if metrics['CumWeight'] <= dynamic_threshold:
-                            candidates.append((ticks, metrics['Weight']))
-                
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                
-                num_needed = len(dropouts)
-                replacements = [x[0] for x in candidates[:num_needed]]
-                
-                selected_tickers = retention_list + replacements
-                
-            standard_tickers = selected_tickers
+            standard_companies = quarterly_company_selection(
+                company_weights,
+                company_cum_weights,
+                current_companies,
+                config.MEGA2_BUFFER_THRESHOLD,
+            )
+            standard_tickers = expand_companies_to_tickers(standard_companies, company_tickers)
 
         # Update current standard constituents
-        current_constituents = set(standard_tickers)
+        current_companies = standard_companies.copy()
         
         # Minimum Security Rule: Fill to 9 if needed
         valid_mapped_all = q_weights[q_weights['IsMapped'] == True]
@@ -230,13 +201,16 @@ def backtest():
         selected_tickers = standard_tickers.copy()
         is_min_security_triggered = False
         
-        if len(selected_tickers) < config.MEGA2_MIN_CONSTITUENTS:
+        if not official_tickers and len(selected_tickers) < config.MEGA2_MIN_CONSTITUENTS:
             is_min_security_triggered = True
-            # Add next largest mapped tickers NOT in the standard set
-            remaining = valid_mapped_all[~valid_mapped_all['Ticker'].isin(selected_tickers)]
             needed = config.MEGA2_MIN_CONSTITUENTS - len(selected_tickers)
-            if not remaining.empty:
-                fillers = remaining.head(needed)['Ticker'].tolist()
+            fillers = pick_unique_fillers(
+                valid_mapped_all,
+                selected_tickers,
+                standard_companies,
+                needed,
+            )
+            if fillers:
                 selected_tickers.extend(fillers)
 
         if not selected_tickers:
@@ -245,6 +219,17 @@ def backtest():
 
         # Filter for valid tickers in our price data
         valid_tickers = [t for t in selected_tickers if t in data.columns]
+        if is_min_security_triggered and len(valid_tickers) < config.MEGA2_MIN_CONSTITUENTS:
+            needed = config.MEGA2_MIN_CONSTITUENTS - len(valid_tickers)
+            live_universe = valid_mapped_all[valid_mapped_all["Ticker"].isin(data.columns)]
+            live_fillers = pick_unique_fillers(
+                live_universe,
+                valid_tickers,
+                standard_companies,
+                needed,
+            )
+            if live_fillers:
+                valid_tickers.extend(live_fillers)
         mega_subset = q_weights[q_weights['Ticker'].isin(valid_tickers)].copy()
         
         if mega_subset.empty:
@@ -254,8 +239,12 @@ def backtest():
 
 
         if not is_min_security_triggered:
-            # Normal: Re-weight by NDX weight and 30% Cap
-            final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA2_SINGLE_STOCK_CAP, total_target=1.0)
+            # Normal: Re-weight by NDX company weight and 30% company cap.
+            final_weights = apply_company_cap(
+                mega_subset,
+                config.MEGA2_SINGLE_STOCK_CAP,
+                total_target=1.0,
+            )
         else:
             # Minimum Security Rule Active (per methodology page 3):
             # 1. Standards get 99% of total weight (with 30% cap)
@@ -269,17 +258,20 @@ def backtest():
             w_filler = pd.Series(dtype=float)
 
             if not standard_subset.empty:
-                n_standards = len(standard_subset)
-                max_possible = n_standards * config.MEGA2_SINGLE_STOCK_CAP
+                standard_companies_live = standard_subset["Ticker"].map(
+                    lambda t: getattr(config, "DUAL_CLASS_GROUPS", {}).get(t, t)
+                ).nunique()
+                max_possible = standard_companies_live * config.MEGA2_SINGLE_STOCK_CAP
+                standard_target_cap = 0.99 if not filler_subset.empty else 1.0
 
                 # Attempt 99/1 split per spec; fall back if caps prevent it
-                if max_possible >= 0.99:
-                    standard_target = 0.99
+                if max_possible >= standard_target_cap:
+                    standard_target = standard_target_cap
                 else:
                     standard_target = max_possible
 
-                w_standard = apply_caps(
-                    standard_subset.set_index('Ticker')['Weight'],
+                w_standard = apply_company_cap(
+                    standard_subset,
                     config.MEGA2_SINGLE_STOCK_CAP,
                     total_target=standard_target
                 )
@@ -391,24 +383,25 @@ def backtest():
                     
                     if needed > 0:
                         print(f"    Count fell to {len(current_tickers)}. Finding {needed} replacements...")
-                        
-                        # Exclude ALL tickers dropped so far this quarter (including today)
-                        # We track this in 'dropped_this_quarter' set maintained in the outer loop
-                        
-                        # Candidates from q_weights (excluding current AND any dropped this quarter)
                         candidates_df = q_weights[
-                            (~q_weights['Ticker'].isin(current_tickers)) & 
-                            (~q_weights['Ticker'].isin(dropped_this_quarter))
+                            (~q_weights['Ticker'].isin(current_tickers)) &
+                            (~q_weights['Ticker'].isin(dropped_this_quarter)) &
+                            (q_weights['Ticker'].isin(data.columns))
                         ]
                         candidates_df = candidates_df[candidates_df['IsMapped'] == True]
-                        
-                        found_count = 0
-                        for t in candidates_df['Ticker']:
-                            if t in data.columns:
-                                print(f"      Selected replacement: {t}")
-                                current_tickers.append(t)
-                                found_count += 1
-                            if found_count >= needed: break
+                        current_standard_companies = [
+                            getattr(config, "DUAL_CLASS_GROUPS", {}).get(t, t)
+                            for t in standard_tickers
+                        ]
+                        replacements = pick_unique_fillers(
+                            candidates_df,
+                            current_tickers,
+                            current_standard_companies,
+                            needed,
+                        )
+                        for t in replacements:
+                            print(f"      Selected replacement: {t}")
+                            current_tickers.append(t)
                     
                     # Recalculate Weights (Mini-Rebalance)
                     # Classify Standards vs Fillers
@@ -439,12 +432,15 @@ def backtest():
                     
                     # Apply Logic (99/1 split per methodology)
                     if not standard_subset.empty:
-                        n_standards = len(standard_subset)
-                        max_possible = n_standards * config.MEGA2_SINGLE_STOCK_CAP
-                        standard_target = 0.99 if max_possible >= 0.99 else max_possible
+                        standard_companies_live = standard_subset["Ticker"].map(
+                            lambda t: getattr(config, "DUAL_CLASS_GROUPS", {}).get(t, t)
+                        ).nunique()
+                        max_possible = standard_companies_live * config.MEGA2_SINGLE_STOCK_CAP
+                        standard_target_cap = 0.99 if not filler_subset.empty else 1.0
+                        standard_target = standard_target_cap if max_possible >= standard_target_cap else max_possible
 
-                        w_standard = apply_caps(
-                            standard_subset.set_index('Ticker')['Weight'], 
+                        w_standard = apply_company_cap(
+                            standard_subset,
                             config.MEGA2_SINGLE_STOCK_CAP, 
                             total_target=standard_target
                         )
@@ -462,6 +458,8 @@ def backtest():
 
     mega_values = mega_values.dropna()
     
+    plot_year_range = f"{mega_values.index.min().year}-{mega_values.index.max().year}"
+
     # Comparison
     if config.BENCHMARK_TICKER in data.columns:
         benchmark_data = data[config.BENCHMARK_TICKER].reindex(mega_values.index)
@@ -485,7 +483,7 @@ def backtest():
                 plt.plot(mega_values.index, (mega_values / mega_values.iloc[0]) * 100, label='NDX Mega 2.0 (Simulated)', linewidth=2.5)
                 plt.plot(benchmark_curve.index, benchmark_curve, label=f"{config.BENCHMARK_TICKER} (Total Return)", color='black', alpha=0.6, linestyle='--')
                 
-                plt.title('NDX Mega 2.0 Strategy vs Nasdaq-100 (2000-2025)')
+                plt.title(f'NDX Mega 2.0 Strategy vs Nasdaq-100 ({plot_year_range})')
                 plt.yscale('log')
                 plt.legend()
                 
@@ -513,7 +511,7 @@ def backtest():
         plt.figure(figsize=(14, 8))
         ax = plt.gca()
         plt.plot(mega_values.index, (mega_values / mega_values.iloc[0]) * 100, label='NDX Mega 2.0 (Simulated)', linewidth=2.5)
-        plt.title('NDX Mega 2.0 Strategy (2000-2025)')
+        plt.title(f'NDX Mega 2.0 Strategy ({plot_year_range})')
         plt.yscale('log')
         plt.legend()
         

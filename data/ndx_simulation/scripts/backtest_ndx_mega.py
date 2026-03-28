@@ -10,6 +10,15 @@ import config
 import chart_style
 import price_manager
 import changes_parser
+from official_index_data import get_official_constituents
+from methodology_utils import (
+    apply_company_cap,
+    build_company_views,
+    canonical_company,
+    expand_companies_to_tickers,
+    quarterly_company_selection,
+    select_companies_up_to_threshold,
+)
 
 # Configuration (Loaded from config.py)
 
@@ -83,7 +92,7 @@ def backtest():
     
     # Store constituents count
     constituents_history = []
-    current_constituents = set()
+    current_companies = []
     prev_top5 = None  # Track last known good top-5 for composition quality gate
     prev_final_weights = None  # Track last good portfolio for carry-forward
 
@@ -145,114 +154,43 @@ def backtest():
         # Identify Annual Reconstitution (December) vs Quarterly Rebalance
         is_annual_recon = (start_dt.month == 12)
 
+        selected_companies = []
         selected_tickers = []
+        official_tickers = get_official_constituents("NDXMEGA", start_dt)
         
-        if is_annual_recon or not current_constituents:
+        _, company_weights, company_cum_weights, company_tickers = build_company_views(q_weights)
+
+        if official_tickers:
+            official_set = set(official_tickers)
+            ranked = q_weights[q_weights["Ticker"].isin(official_set)].sort_values("Weight", ascending=False)
+            selected_tickers = ranked["Ticker"].tolist()
+            selected_companies = list(dict.fromkeys(canonical_company(t) for t in selected_tickers))
+        elif is_annual_recon or not current_companies:
             # Annual Reconstitution or First Run: 47% Selection
-            #
-            # Per methodology: "the market capitalization of each company is the
-            # combined market capitalization of all eligible share classes."
-            # So we rank by COMPANY weight (combining dual-class shares like
-            # GOOG+GOOGL), but include ALL individual securities when selected.
-
-            # Build company-level view for selection
-            dc = getattr(config, 'DUAL_CLASS_GROUPS', {})
-            q_mapped = q_weights[q_weights['IsMapped'] == True].copy()
-            q_mapped['Company'] = q_mapped['Ticker'].map(lambda t: dc.get(t, t))
-
-            # Company weights = sum of all share classes
-            company_weights = q_mapped.groupby('Company')['Weight'].sum().sort_values(ascending=False)
-            # Also include unmapped weight in the cumulative threshold
-            unmapped_weight = q_weights[q_weights['IsMapped'] == False]['Weight'].sum()
-
-            # Tickers belonging to each company
-            company_tickers = q_mapped.groupby('Company')['Ticker'].apply(list).to_dict()
-
-            curr_sum = 0.0
-            selected_companies = []
-            for company, cw in company_weights.items():
-                if curr_sum < config.MEGA1_TARGET_THRESHOLD:
-                    selected_companies.append(company)
-                    for t in company_tickers.get(company, []):
-                        selected_tickers.append(t)
-                    curr_sum += cw
-                else:
-                    break
+            selected_companies = select_companies_up_to_threshold(
+                company_weights,
+                config.MEGA1_TARGET_THRESHOLD,
+            )
+            selected_tickers = expand_companies_to_tickers(selected_companies, company_tickers)
 
             # Fallback
-            if not selected_tickers and not q_weights.empty:
-                 first_mapped = q_weights[q_weights['IsMapped'] == True]
-                 if not first_mapped.empty:
-                     selected_tickers.append(first_mapped.iloc[0]['Ticker'])
+            if not selected_tickers and not company_weights.empty:
+                first_company = company_weights.index[0]
+                selected_companies = [first_company]
+                selected_tickers = expand_companies_to_tickers(selected_companies, company_tickers)
                  
         else:
             # Quarterly Rebalance: Swap/Replacement Rules
-            # 1. Identify Buffer Set (Top 50%)
-            buffer_set = set()
-            
-            # Map tickers to their current metrics for easy lookup
-            ticker_metrics = {} 
-            for ticks, w, cw, mapped in zip(q_weights['Ticker'], q_weights['Weight'], q_weights['CumWeight'], q_weights['IsMapped']):
-                if mapped:
-                    ticker_metrics[ticks] = {'Weight': w, 'CumWeight': cw}
-                    if cw <= config.MEGA1_BUFFER_THRESHOLD:
-                        buffer_set.add(ticks)
-            
-            # 2. Check for Dropouts (Current constituents NOT in Buffer)
-            dropouts = []
-            retention_list = []
-            
-            for c in current_constituents:
-                if c in buffer_set:
-                    retention_list.append(c)
-                else:
-                    dropouts.append(c)
-            
-            # 3. Apply Swap Logic
-            if not dropouts:
-                # Methodology: "If there are no current constituents outside of the top 50%, then no constituent changes are made"
-                selected_tickers = list(current_constituents)
-            else:
-                # "Dynamic Threshold is determined as the maximum cumulative weight of current constituents outside the top 50%"
-                # Note: Dropouts might not be in q_weights if they were delisted or totally removed from NDX.
-                # If they are not in NDX, they are definitely dropouts, but have no CumWeight.
-                # In that case, what is the threshold?
-                # Presumably, if a stock is gone, we must replace it.
-                # If a stock is just low rank, we use its CumWeight.
-                
-                dropout_cum_weights = []
-                for d in dropouts:
-                    if d in ticker_metrics:
-                        dropout_cum_weights.append(ticker_metrics[d]['CumWeight'])
-                    else:
-                        # Removed from NDX entirely?
-                        # Implicitly infinite threshold? Or simply it triggers replacement.
-                        # If a stock is removed, it contributes to the count 'n' but provides no 'threshold' value itself.
-                        # We should likely take the Max of the ones that ARE in the index.
-                        # If ALL are removed, we likely default to something reasonable (like the last valid one?)
-                        # Actually, if a stock is removed, it's effectively at CumWeight 100% (Rank Last).
-                        dropout_cum_weights.append(1.0) 
-                
-                dynamic_threshold = max(dropout_cum_weights) if dropout_cum_weights else 1.0
-                
-                # "All companies... not already maintained... and are at or below the dynamic threshold are considered"
-                candidates = []
-                for ticks, metrics in ticker_metrics.items():
-                    if ticks not in retention_list:
-                        if metrics['CumWeight'] <= dynamic_threshold:
-                             candidates.append((ticks, metrics['Weight']))
-                
-                # Sort by Base Universe Weight Descending
-                candidates.sort(key=lambda x: x[1], reverse=True)
-                
-                # "The top 'n' companies are chosen... where 'n' represents the number of current constituents outside..."
-                num_needed = len(dropouts)
-                replacements = [x[0] for x in candidates[:num_needed]]
-                
-                selected_tickers = retention_list + replacements
+            selected_companies = quarterly_company_selection(
+                company_weights,
+                company_cum_weights,
+                current_companies,
+                config.MEGA1_BUFFER_THRESHOLD,
+            )
+            selected_tickers = expand_companies_to_tickers(selected_companies, company_tickers)
             
         # Update current constituents for next loop
-        current_constituents = set(selected_tickers)
+        current_companies = selected_companies.copy()
         
         if not selected_tickers:
              print(f"Warning: No selection for {start_dt}")
@@ -267,10 +205,8 @@ def backtest():
         if mega_subset.empty:
             continue
             
-        # Stats
-        # Final Weights (Cap 35%)
-        # Note: We re-normalize to 100% of the HELD portfolio here.
-        final_weights = apply_caps(mega_subset.set_index('Ticker')['Weight'], config.MEGA1_SINGLE_STOCK_CAP)
+        # Final weights use company-level capping, then split proportionally across share classes.
+        final_weights = apply_company_cap(mega_subset, config.MEGA1_SINGLE_STOCK_CAP, total_target=1.0)
 
         # Save as previous good portfolio for carry-forward
         prev_final_weights = final_weights.copy()
@@ -383,6 +319,8 @@ def backtest():
 
     mega_values = mega_values.dropna()
     
+    plot_year_range = f"{mega_values.index.min().year}-{mega_values.index.max().year}"
+
     # Validation against NDX
     # Validation against NDX
     plt.figure(figsize=(14, 8))
@@ -416,7 +354,7 @@ def backtest():
     else:
         print(f"Warning: Benchmark ticker {config.BENCHMARK_TICKER} not found in price data.")
         
-        plt.title('NDX Mega Strategy vs Nasdaq-100 (2000-2025)')
+        plt.title(f'NDX Mega Strategy vs Nasdaq-100 ({plot_year_range})')
         plt.yscale('log')
         plt.legend()
         

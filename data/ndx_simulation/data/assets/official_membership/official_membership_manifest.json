@@ -1,0 +1,34 @@
+{
+  "generated_at_utc": "2026-03-28T08:46:49.192055+00:00",
+  "indexes": {
+    "NDX": {
+      "daily_file": "ndx_official_membership_daily.csv",
+      "daily_rows": 5853,
+      "first_available_date": "2003-01-02",
+      "index_symbol": "NDX",
+      "last_available_date": "2026-03-27",
+      "period_rows": 173,
+      "periods_file": "ndx_official_membership_periods.csv"
+    },
+    "NDX30": {
+      "daily_file": "ndx30_official_membership_daily.csv",
+      "daily_rows": 398,
+      "first_available_date": "2024-08-26",
+      "index_symbol": "NDX30",
+      "last_available_date": "2026-03-27",
+      "period_rows": 10,
+      "periods_file": "ndx30_official_membership_periods.csv"
+    },
+    "NDXMEGA": {
+      "daily_file": "ndxmega_official_membership_daily.csv",
+      "daily_rows": 418,
+      "first_available_date": "2024-07-29",
+      "index_symbol": "NDXMEGA",
+      "last_available_date": "2026-03-27",
+      "period_rows": 4,
+      "periods_file": "ndxmega_official_membership_periods.csv"
+    }
+  },
+  "source": "https://indexes.nasdaqomx.com/Index/WeightingData",
+  "time_of_day": "SOD"
+}

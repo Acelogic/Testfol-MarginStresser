@@ -42,15 +42,16 @@ def get_price_data(tickers, start_date='2000-01-01', force_refresh=False, data_s
             pct_missing = len(missing) / len(tickers) if tickers else 0
             
             if pct_missing > 0.25:
-                print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%} coverage). Download recommended.")
-                print("Refreshing data to ensure coverage...")
-                return download_and_cache(tickers, start_date, cache_file, source, api_key)
+                print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%}) — likely historical/delisted, using cache as-is.")
             elif pct_missing > 0.10:
                 print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%}) — likely delisted, using cache as-is.")
             
             if pd.to_datetime(start_date) < df.index[0]:
-                print(f"Cache starts {df.index[0].date()}, need {start_date}. Refreshing...")
-                return download_and_cache(tickers, start_date, cache_file, source, api_key)
+                start_gap = df.index[0] - pd.to_datetime(start_date)
+                if start_gap > pd.Timedelta(days=7):
+                    print(f"Cache starts {df.index[0].date()}, need {start_date}. Refreshing...")
+                    return download_and_cache(tickers, start_date, cache_file, source, api_key)
+                print(f"Cache starts {df.index[0].date()}, close enough to {start_date}. Using cache.")
                  
             return df
             
@@ -221,20 +222,36 @@ def apply_successor_fallback(df):
     except ImportError:
         return df
 
+    def parse_successor_spec(spec):
+        if isinstance(spec, dict):
+            successor = spec.get('successor')
+            effective_date = spec.get('effective_date')
+        else:
+            successor = spec
+            effective_date = None
+
+        if effective_date:
+            effective_date = pd.Timestamp(effective_date)
+        return successor, effective_date
+
     successors_needed = {}
-    for t, succ in SUCCESSOR_TICKERS.items():
+    for t, spec in SUCCESSOR_TICKERS.items():
+        succ, effective_date = parse_successor_spec(spec)
         if succ and succ != t:
             # Fill if ticker is missing OR has >50% NaN (matching yfinance threshold)
             if t not in df.columns or df[t].isna().mean() > 0.50:
-                successors_needed[t] = succ
+                successors_needed[t] = {
+                    'successor': succ,
+                    'effective_date': effective_date,
+                }
 
     if not successors_needed:
         return df
 
     # Download successor tickers that aren't in the dataframe
     missing_succs = list(set(
-        succ for succ in successors_needed.values()
-        if succ not in df.columns or df[succ].isna().all()
+        spec['successor'] for spec in successors_needed.values()
+        if spec['successor'] not in df.columns or df[spec['successor']].isna().all()
     ))
     if missing_succs:
         import time
@@ -255,13 +272,37 @@ def apply_successor_fallback(df):
                 print(f"    Failed to download {succ}: {e}")
 
     filled = 0
-    for orig, succ in successors_needed.items():
-        if succ in df.columns and not df[succ].isna().all():
-            df[orig] = df[succ]
+    for orig, spec in successors_needed.items():
+        succ = spec['successor']
+        effective_date = spec['effective_date']
+
+        if succ not in df.columns or df[succ].isna().all():
+            continue
+
+        if orig not in df.columns:
+            df[orig] = pd.Series(index=df.index, dtype=float)
+
+        existing = df[orig].copy()
+        if existing.notna().any():
+            start_date = existing.dropna().index.max() + pd.offsets.BDay(1)
+        else:
+            start_date = df.index.min()
+
+        if effective_date is not None:
+            start_date = max(start_date, effective_date)
+
+        fill_mask = (
+            (df.index >= start_date)
+            & df[orig].isna()
+            & df[succ].notna()
+        )
+
+        if fill_mask.any():
+            df.loc[fill_mask, orig] = df.loc[fill_mask, succ]
             filled += 1
 
     if filled:
-        print(f"  Successor fallback: filled {filled} delisted tickers with acquirer data")
+        print(f"  Successor fallback: filled {filled} delisted tickers with date-aware acquirer data")
 
     return df
 
@@ -408,4 +449,3 @@ def download_from_polygon(tickers, start_date, api_key):
     print(f"  Date range: {df.index[0].date()} to {df.index[-1].date()}")
     
     return df
-

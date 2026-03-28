@@ -481,19 +481,19 @@ MANUAL_OVERRIDES = {
 # Tickers that were acquired — map to successor for price fallback
 SUCCESSOR_TICKERS = {
     # === Original entries ===
-    'CELG': 'BMY',    # Celgene → Bristol-Myers (2019)
-    'XLNX': 'AMD',    # Xilinx → AMD (2022)
-    'MXIM': 'ADI',    # Maxim → Analog Devices (2021)
+    'CELG': {'successor': 'BMY', 'effective_date': '2019-11-20'},   # Celgene → Bristol-Myers
+    'XLNX': {'successor': 'AMD', 'effective_date': '2022-02-14'},   # Xilinx → AMD
+    'MXIM': {'successor': 'ADI', 'effective_date': '2021-08-26'},   # Maxim → Analog Devices
     'CTXS': None,     # Citrix → taken private
-    'ATVI': 'MSFT',   # Activision → Microsoft (2023)
-    'CERN': 'ORCL',   # Cerner → Oracle (2022)
-    'ESRX': 'CI',     # Express Scripts → Cigna (2018)
-    'ALTR': 'INTC',   # Altera → Intel (2015)
+    'ATVI': {'successor': 'MSFT', 'effective_date': '2023-10-13'},  # Activision → Microsoft
+    'CERN': {'successor': 'ORCL', 'effective_date': '2022-06-08'},  # Cerner → Oracle
+    'ESRX': {'successor': 'CI', 'effective_date': '2018-12-20'},    # Express Scripts → Cigna
+    'ALTR': {'successor': 'INTC', 'effective_date': '2015-12-28'},  # Altera → Intel
     'LLTC': 'ADI',    # Linear Tech → Analog Devices (2017)
-    'NUAN': 'MSFT',   # Nuance → Microsoft (2022)
-    'FLIR': 'TDY',    # FLIR → Teledyne (2021)
+    'NUAN': {'successor': 'MSFT', 'effective_date': '2022-03-04'},  # Nuance → Microsoft
+    'FLIR': {'successor': 'TDY', 'effective_date': '2021-05-14'},   # FLIR → Teledyne
     'LVLT': 'LUMN',   # Level 3 → Lumen (2017)
-    'WFM':  'AMZN',   # Whole Foods → Amazon (2017)
+    'WFM':  {'successor': 'AMZN', 'effective_date': '2017-08-28'},  # Whole Foods → Amazon
     'KRFT': 'KHC',    # Kraft → Kraft Heinz (2015)
     'DELL': 'DELL',   # Dell went private, came back as DELL
     'JDSU': 'VIAV',   # JDS Uniphase → Viavi Solutions (2015)
@@ -516,13 +516,13 @@ SUCCESSOR_TICKERS = {
     'MYL':  'VTRS',   # Mylan → Viatris (2020)
     'VIAB': 'PARA',   # Viacom → Paramount (2019)
     'BBRY': 'BB',     # BlackBerry ticker change
-    'RHT':  'IBM',    # Red Hat → IBM (2019)
+    'RHT':  {'successor': 'IBM', 'effective_date': '2019-07-09'},   # Red Hat → IBM
     'MEDI': 'AZN',    # MedImmune → AstraZeneca (2007)
-    'SGEN': 'PFE',    # Seagen → Pfizer (2023)
-    'SPLK': 'CSCO',   # Splunk → Cisco (2024)
+    'SGEN': {'successor': 'PFE', 'effective_date': '2023-12-14'},   # Seagen → Pfizer
+    'SPLK': {'successor': 'CSCO', 'effective_date': '2024-03-18'},  # Splunk → Cisco
 
     # === Additional acquired companies ===
-    'ANSS': 'SNPS',   # Ansys → Synopsys (2025)
+    'ANSS': {'successor': 'SNPS', 'effective_date': '2025-07-17'},  # Ansys → Synopsys
     'CTRP': 'TCOM',   # Ctrip → Trip.com (ticker change 2019)
     'FOXA': 'FOX',    # 21st Century Fox → Fox Corp (2019, Disney deal)
     'WBA':  None,     # Walgreens → taken private by Sycamore (2025)
