@@ -92,7 +92,7 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                             rebuild_script = os.path.join("data", "ndx_simulation", "scripts", "rebuild_all.py")
                             if os.path.exists(rebuild_script):
                                 try:
-                                    subprocess.run([sys.executable, rebuild_script], check=True, timeout=120)
+                                    subprocess.run([sys.executable, rebuild_script], check=True, timeout=1800)
                                     logger.info("Rebuild complete. Reloading data.")
                                     df_sim = pd.read_csv(csv_path) # Retry load
                                 except Exception as rebuild_err:

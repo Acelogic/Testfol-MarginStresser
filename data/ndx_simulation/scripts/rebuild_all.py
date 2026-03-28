@@ -66,6 +66,11 @@ Examples:
         action='store_true',
         help='DEEP CLEAN: Deletes all downloaded data, caches, and results before running.'
     )
+    parser.add_argument(
+        '--skip-official-membership',
+        action='store_true',
+        help='Skip Nasdaq official membership archive refresh step.'
+    )
     args = parser.parse_args()
 
     # Build environment variables to pass to child scripts
@@ -184,6 +189,13 @@ Examples:
     # This ensures new filings are mapped to tickers before reconstruction
     mapper_script = os.path.join(src_dir, "mapper.py")
     run_script(mapper_script, "Update Name Mappings", env_vars)
+
+    # 2.5. Refresh archived official Nasdaq membership snapshots used by backtests
+    if not args.skip_official_membership:
+        official_membership_script = os.path.join(scripts_dir, "download_official_membership.py")
+        run_script(official_membership_script, "Refresh Official Nasdaq Membership Archive", env_vars)
+    else:
+        logging.info("--- Skipped: Refresh Official Nasdaq Membership Archive ---\n")
 
     # 3. Reconstruct Weights (scripts/reconstruct_weights.py)
     if not args.skip_reconstruct:

@@ -209,7 +209,8 @@ The tool now includes a professional **Monte Carlo Simulation** suite to stress-
 This project includes a powerful engine to reconstruct historical index data from SEC filings. If you need to regenerate the `NDXMEGASIM` or `NDXMEGA2SIM` datasets:
 
 ```bash
-# Run the full reconstruction pipeline (Downloads -> Parse -> Backtest)
+# Run the full reconstruction pipeline
+# (Downloads -> Parse -> Name Map -> Official Membership Archive -> Reconstruct -> Backtest -> Validate)
 python3 data/ndx_simulation/scripts/rebuild_all.py
 ```
 This process uses the self-contained `data/ndx_simulation` module.
