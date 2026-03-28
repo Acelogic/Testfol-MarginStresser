@@ -1,6 +1,5 @@
 import pandas as pd
 import json
-import yfinance as yf
 import numpy as np
 import datetime
 import os
@@ -8,16 +7,28 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
-import changes_parser
 import calendar
 import ndx_parser
 import price_manager
+from official_index_data import get_official_constituents
 
 # Configuration
 INPUT_CSV = config.COMPONENTS_FILE
 MAPPING_FILE = os.path.join(config.ASSETS_DIR, "name_mapping.json")
 OUTPUT_FILE = config.WEIGHTS_FILE
+OFFICIAL_ALIGNMENT_FILE = os.path.join(config.RESULTS_DIR, "ndx_official_membership_alignment.csv")
 PROXY_TICKER = "QQQ"
+APPLY_OFFICIAL_NDX_FILTER = False
+MAPPING_OVERRIDES = {
+    "Xcel Energy, Inc.": "XEL",
+}
+
+
+def apply_mapping_overrides(mapping):
+    """Patch known stale mappings in the legacy name map."""
+    mapping = dict(mapping)
+    mapping.update(MAPPING_OVERRIDES)
+    return mapping
 
 def load_data(): # Load Components
     print(f"Loading {config.COMPONENTS_FILE}...")
@@ -40,67 +51,8 @@ def load_data(): # Load Components
     # Load Name Mapping
     with open(MAPPING_FILE, "r") as f:
         mapping = json.load(f)
-    
-    # --- Inject Missing Filings from Changes ---
-    changes = changes_parser.load_changes()
-    if not changes.empty:
-        # Identify Additions
-        additions = changes[pd.notna(changes['Added Ticker'])].copy()
-        
-        # Check if we have data for them
-        known_tickers = set(mapping.values())
-        
-        # We also need to check if we already have a filing for them near the change date
-        # But for now, let's just inject if the Ticker is completely unknown OR if it's a recent addition (2025)
-        
-        for _, row in additions.iterrows():
-            ticker = row['Added Ticker']
-            date = row['Date']
-            name = row['Added Security'] if pd.notna(row['Added Security']) else ticker
-            
-            # Filter for recent relevant changes (e.g. 2025)
-            if date.year < 2025: continue
-            
-            # Check if we already have filing data?
-            # It's hard to check efficiently without scanning DF. 
-            # But let's assume if it's in 'changes', we might need it.
-            # Especially for Dec 2025.
-            
-            # Fetch Data if missing from DF for this period?
-            # Simplest: Just inject. If duplicate, sorting/dedup logic later handles it (mostly).
-            # But fetching is slow. Only fetch if missing.
-            
-            # Optimization: Only for Dec 2025 changes?
-            if date.month == 12 and date.year == 2025:
-                print(f"Injecting missing filing for {ticker} ({date.date()})...")
-                try:
-                    t = yf.Ticker(ticker)
-                    info = t.info
-                    shares = info.get('sharesOutstanding')
-                    
-                    # Fetch Price for Value
-                    # We need price at 'Date' (Change Date)
-                    # Use history
-                    hist = t.history(start=date, end=date + pd.Timedelta(days=5))
-                    if not hist.empty and shares:
-                        price = hist['Close'].iloc[0]
-                        value = shares * price
-                        
-                        # Add to DF
-                        new_row = {
-                            'Date': date,
-                            'Company': name,
-                            'Shares': shares, # Note: DF usually has string with commas, but numeric works
-                            'Value': value     # formatting?
-                        }
-                        
-                        # Add MAPPING
-                        mapping[name] = ticker
-                        
-                        df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
-                except Exception as e:
-                    print(f"Failed to inject {ticker}: {e}")
 
+    mapping = apply_mapping_overrides(mapping)
     return df, mapping
 
 def get_unique_tickers(mapping):
@@ -292,11 +244,73 @@ def reconstruct():
     # Sum 'Value' for same ('Date', 'Ticker')
     # Keep metadata from first occurrence
     if not res_df.empty:
+        res_df['Date'] = pd.to_datetime(res_df['Date'])
         res_df = res_df.groupby(['Date', 'Ticker'], as_index=False).agg({
             'Value': 'sum',
             'Name': 'first',
             'IsMapped': 'first'
         })
+
+        print("Generating official NDX membership alignment audit...")
+        alignment_rows = []
+
+        for dt, grp in res_df.groupby('Date', sort=True):
+            grp = grp.copy()
+            mapped_tickers = set(grp.loc[grp['IsMapped'] == True, 'Ticker'])
+            official_tickers = get_official_constituents("NDX", dt)
+
+            if not official_tickers:
+                alignment_rows.append({
+                    "Date": dt.date(),
+                    "OfficialCount": 0,
+                    "KeptMappedCount": len(mapped_tickers),
+                    "RemovedExtraCount": 0,
+                    "MissingOfficialCount": 0,
+                    "RemovedExtras": "",
+                    "MissingOfficial": "",
+                })
+                continue
+
+            official_set = set(official_tickers)
+            kept_grp = grp[(grp['IsMapped'] == True) & (grp['Ticker'].isin(official_set))].copy()
+
+            removed_extras = sorted(mapped_tickers - official_set)
+            missing_official = sorted(official_set - set(kept_grp['Ticker']))
+
+            alignment_rows.append({
+                "Date": dt.date(),
+                "OfficialCount": len(official_set),
+                "KeptMappedCount": len(kept_grp),
+                "RemovedExtraCount": len(removed_extras),
+                "MissingOfficialCount": len(missing_official),
+                "RemovedExtras": "|".join(removed_extras),
+                "MissingOfficial": "|".join(missing_official),
+            })
+
+        alignment_df = pd.DataFrame(alignment_rows)
+        alignment_df.to_csv(OFFICIAL_ALIGNMENT_FILE, index=False)
+        print(f"Saved official membership alignment audit to {OFFICIAL_ALIGNMENT_FILE}")
+
+        if APPLY_OFFICIAL_NDX_FILTER:
+            print("Official NDX membership filter is enabled.")
+            filtered_groups = []
+
+            for dt, grp in res_df.groupby('Date', sort=True):
+                official_tickers = get_official_constituents("NDX", dt)
+                if not official_tickers:
+                    filtered_groups.append(grp)
+                    continue
+
+                official_set = set(official_tickers)
+                kept_grp = grp[(grp['IsMapped'] == True) & (grp['Ticker'].isin(official_set))].copy()
+
+                if kept_grp.empty:
+                    print(f"Warning: {dt.date()} official NDX filter yielded no mapped members; keeping reconstructed universe.")
+                    filtered_groups.append(grp)
+                else:
+                    filtered_groups.append(kept_grp)
+
+            res_df = pd.concat(filtered_groups, ignore_index=True)
     
     # Calculate Weights per Date
     # GroupBy Date sum
