@@ -1,358 +1,265 @@
-import pandas as pd
 import argparse
-import sys
 import os
-from datetime import datetime
 import sys
-import os
+
+import pandas as pd
+
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
 
-# Configuration imported from config.py
+
 WEIGHTS_FILE = config.WEIGHTS_FILE
-MEGA_TARGET_THRESHOLD = config.MEGA1_TARGET_THRESHOLD
-MEGA_BUFFER_THRESHOLD = config.MEGA1_BUFFER_THRESHOLD
-SINGLE_STOCK_CAP = config.MEGA1_SINGLE_STOCK_CAP
+HISTORY_FILES = {
+    "mega1": {
+        "label": "NDX Mega 1.0",
+        "path": os.path.join(config.RESULTS_DIR, "ndx_mega_constituents.csv"),
+    },
+    "mega2": {
+        "label": "NDX Mega 2.0",
+        "path": os.path.join(config.RESULTS_DIR, "ndx_mega2_constituents.csv"),
+    },
+    "ndx30": {
+        "label": "NDX30",
+        "path": os.path.join(config.RESULTS_DIR, "ndx30_constituents.csv"),
+    },
+}
+STRATEGY_ORDER = ["mega1", "mega2", "ndx30"]
 
-# Mega 2.0 Settings
-MEGA2_TARGET_THRESHOLD = config.MEGA2_TARGET_THRESHOLD
-SINGLE_STOCK_CAP2 = config.MEGA2_SINGLE_STOCK_CAP
-MIN_CONSTITUENTS2 = config.MEGA2_MIN_CONSTITUENTS
 
-# NDX30 Settings
-NDX30_NUM = config.NDX30_NUM_CONSTITUENTS
-NDX30_HARD_CAP = config.NDX30_HARD_CAP
-NDX30_SOFT_CAP = config.NDX30_SOFT_CAP
-NDX30_AGG_LIMIT = config.NDX30_AGG_LIMIT
+def load_weights():
+    if not os.path.exists(WEIGHTS_FILE):
+        raise FileNotFoundError(f"{WEIGHTS_FILE} not found. Run rebuild_all.py first.")
 
-def apply_caps(w_series, cap, total_target=1.0):
-    """
-    Apply capping rules iteratively.
-    Re-normalizes weights to sum to total_target, then caps any single weight > cap.
-    Surplus is redistributed proportionally to uncapped members.
-    """
-    w = w_series.copy()
-    if w.sum() == 0: return w
-    w = (w / w.sum()) * total_target
-    
-    for _ in range(10):
-        excess = w[w > cap]
-        if excess.empty: break
-        
-        surplus = (excess - cap).sum()
-        w[w > cap] = cap
-        
-        others = w[w < cap]
-        if others.empty: break
-        
-        # Redistribute surplus
-        w[w < cap] = others + (surplus * others / others.sum())
-        
-    return w
+    weights = pd.read_csv(WEIGHTS_FILE)
+    weights["Date"] = pd.to_datetime(weights["Date"])
+    weights = weights[weights["Date"] <= pd.Timestamp.now().normalize()]
+    return weights.sort_values(["Date", "Weight", "Ticker"], ascending=[True, False, True])
 
-def get_mega_holdings(df_date):
-    """
-    Derive NDX Mega holdings for a specific date (Strict Selection).
-    """
-    df_date = df_date.sort_values(by='Weight', ascending=False).copy()
-    df_date['CumWeight'] = df_date['Weight'].cumsum()
-    
-    selected_tickers = []
-    curr_sum = 0.0
-    for tick, w, mapped in zip(df_date['Ticker'], df_date['Weight'], df_date['IsMapped']):
-        if curr_sum + w <= MEGA_TARGET_THRESHOLD + 0.01:
-            if mapped:
-                selected_tickers.append(tick)
-            curr_sum += w
-        else:
-            break
-            
-    mega_df = df_date[df_date['Ticker'].isin(selected_tickers)].copy()
-    if mega_df.empty: return pd.DataFrame()
-        
-    mega_df['OriginalWeight'] = mega_df['Weight']
-    w_series = mega_df.set_index('Ticker')['OriginalWeight']
-    final_weights = apply_caps(w_series, SINGLE_STOCK_CAP)
-    
-    mega_df['FinalWeight'] = mega_df['Ticker'].map(final_weights)
-    return mega_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
 
-def get_mega2_holdings(df_date):
-    """
-    Derive NDX Mega 2.0 holdings for a specific date (Strict Selection).
-    """
-    df_date = df_date.sort_values(by='Weight', ascending=False).copy()
-    df_date['CumWeight'] = df_date['Weight'].cumsum()
-    
-    # 1. Standard Selection (40% Target)
-    standard_tickers = []
-    curr_sum = 0.0
-    for tick, w, mapped in zip(df_date['Ticker'], df_date['Weight'], df_date['IsMapped']):
-        if curr_sum + w <= MEGA2_TARGET_THRESHOLD + 0.01:
-            if mapped:
-                standard_tickers.append(tick)
-            curr_sum += w
-        else:
-            break
-            
-    # 2. Minimum Security Rule (9 stocks)
-    selected_tickers = standard_tickers.copy()
-    is_min_security_triggered = False
-    
-    if len(selected_tickers) < MIN_CONSTITUENTS2:
-        is_min_security_triggered = True
-        valid_mapped_all = df_date[df_date['IsMapped'] == True]
-        remaining = valid_mapped_all[~valid_mapped_all['Ticker'].isin(selected_tickers)]
-        needed = MIN_CONSTITUENTS2 - len(selected_tickers)
-        if not remaining.empty:
-            fillers = remaining.head(needed)['Ticker'].tolist()
-            selected_tickers.extend(fillers)
-
-    mega_df = df_date[df_date['Ticker'].isin(selected_tickers)].copy()
-    if mega_df.empty: return pd.DataFrame()
-
-    mega_df['OriginalWeight'] = mega_df['Weight']
-
-    # 3. Weighting Logic
-    if not is_min_security_triggered:
-        w_series = mega_df.set_index('Ticker')['OriginalWeight']
-        final_weights = apply_caps(w_series, SINGLE_STOCK_CAP2)
-    else:
-        # Standard group gets 99%, Fillers get 1% total
-        standard_subset = mega_df[mega_df['Ticker'].isin(standard_tickers)]
-        filler_subset = mega_df[~mega_df['Ticker'].isin(standard_tickers)]
-        
-        if not standard_subset.empty:
-            w_standard = apply_caps(standard_subset.set_index('Ticker')['OriginalWeight'], SINGLE_STOCK_CAP2, total_target=0.99)
-        else:
-            w_standard = pd.Series()
-            
-        if not filler_subset.empty:
-            w_filler = pd.Series(0.01 / len(filler_subset), index=filler_subset['Ticker'])
-        else:
-            w_filler = pd.Series()
-            
-        final_weights = pd.concat([w_standard, w_filler])
-    
-    mega_df['FinalWeight'] = mega_df['Ticker'].map(final_weights)
-    return mega_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
-
-def apply_ndx30_caps(w_series):
-    """NDX30 two-step capping: 22.5% individual + 48% aggregate for >4.5%."""
-    w = w_series.copy()
-    if w.sum() == 0:
-        return w
-    w = w / w.sum()
-
-    # Step 1: Hard individual cap at 22.5%
-    for _ in range(20):
-        over = w[w > NDX30_HARD_CAP]
-        if over.empty:
-            break
-        surplus = (over - NDX30_HARD_CAP).sum()
-        w[w > NDX30_HARD_CAP] = NDX30_HARD_CAP
-        under = w[w < NDX30_HARD_CAP]
-        if under.empty:
-            break
-        w[under.index] = under + surplus * under / under.sum()
-
-    # Step 2: Aggregate constraint — sum(w > 4.5%) <= 48%
-    for _ in range(50):
-        above = w[w > NDX30_SOFT_CAP]
-        if above.empty or above.sum() <= NDX30_AGG_LIMIT + 0.001:
-            break
-        min_t = above.idxmin()
-        excess = w[min_t] - NDX30_SOFT_CAP
-        w[min_t] = NDX30_SOFT_CAP
-        below = w[w < NDX30_SOFT_CAP]
-        if below.empty:
-            break
-        room = NDX30_SOFT_CAP - below
-        total_room = room.sum()
-        if total_room <= excess:
-            w[below.index] = NDX30_SOFT_CAP
-        else:
-            share = excess * (room / total_room)
-            w[below.index] = below + share
-
-    return w
-
-def get_ndx30_holdings(df_date):
-    """
-    Derive NDX30 holdings for a specific date (top 30 by weight, two-step capping).
-    """
-    df_date = df_date.sort_values(by='Weight', ascending=False).copy()
-    mapped = df_date[df_date['IsMapped'] == True]
-    selected_tickers = mapped.head(NDX30_NUM)['Ticker'].tolist()
-
-    ndx30_df = df_date[df_date['Ticker'].isin(selected_tickers)].copy()
-    if ndx30_df.empty:
+def load_history(path):
+    if not os.path.exists(path):
         return pd.DataFrame()
 
-    ndx30_df['OriginalWeight'] = ndx30_df['Weight']
-    w_series = ndx30_df.set_index('Ticker')['OriginalWeight']
-    final_weights = apply_ndx30_caps(w_series)
+    history = pd.read_csv(path)
+    if history.empty:
+        return history
 
-    ndx30_df['FinalWeight'] = ndx30_df['Ticker'].map(final_weights)
-    return ndx30_df.sort_values('FinalWeight', ascending=False)[['Ticker', 'Name', 'FinalWeight', 'OriginalWeight']]
+    history["Date"] = pd.to_datetime(history["Date"])
+    return history.sort_values("Date")
 
-CONST_FILE_M1 = os.path.join(config.RESULTS_DIR, "ndx_mega_constituents.csv")
-CONST_FILE_M2 = os.path.join(config.RESULTS_DIR, "ndx_mega2_constituents.csv")
-CONST_FILE_NDX30 = os.path.join(config.RESULTS_DIR, "ndx30_constituents.csv")
 
-def get_holdings_from_history(history_df, target_date):
-    """
-    Retrieves holdings from backtest history if available.
-    """
-    target_str = target_date.strftime('%Y-%m-%d')
-    match = history_df[history_df['Date'] == target_str]
-    
-    if match.empty:
+def build_ticker_name_map(weights):
+    named = weights[["Ticker", "Name", "Date"]].dropna(subset=["Ticker", "Name"]).copy()
+    if named.empty:
+        return {}
+
+    named = named.sort_values(["Ticker", "Date"])
+    return named.groupby("Ticker")["Name"].last().to_dict()
+
+
+def pick_effective_date(available_dates, requested_date):
+    dates = pd.DatetimeIndex(pd.to_datetime(pd.Series(available_dates).dropna().unique())).sort_values()
+    if dates.empty:
+        return None, "no dates available"
+
+    if requested_date is None:
+        return dates[-1], "latest available"
+
+    requested = pd.Timestamp(requested_date).normalize()
+    exact = dates[dates == requested]
+    if len(exact):
+        return exact[-1], "exact match"
+
+    prior = dates[dates <= requested]
+    if len(prior):
+        return prior[-1], "latest rebalance on or before requested date"
+
+    return dates[0], "earliest available after requested date"
+
+
+def parse_requested_date(value, weights):
+    if value is None:
         return None
-        
-    row = match.iloc[0]
-    if 'Tickers' not in row or pd.isna(row['Tickers']):
+
+    value = value.strip()
+    if not value:
         return None
-        
-    tickers = row['Tickers'].split('|')
-    weights = [float(w) for w in row['Weights'].split('|')]
-    
-    df = pd.DataFrame({'Ticker': tickers, 'FinalWeight': weights})
-    return df
+
+    if value.isdigit() and len(value) == 4:
+        year = int(value)
+        year_dates = pd.DatetimeIndex(weights.loc[weights["Date"].dt.year == year, "Date"].unique()).sort_values()
+        if year_dates.empty:
+            raise ValueError(f"No rebalance dates available for {year}.")
+        return year_dates[-1]
+
+    return pd.Timestamp(value).normalize()
+
+
+def get_weight_slice(weights, requested_date):
+    effective_date, reason = pick_effective_date(weights["Date"], requested_date)
+    if effective_date is None:
+        return pd.DataFrame(), None, reason
+
+    subset = weights[weights["Date"] == effective_date].copy()
+    return subset.sort_values(["Weight", "Ticker"], ascending=[False, True]), effective_date, reason
+
+
+def get_history_snapshot(history, requested_date, ticker_name_map):
+    if history.empty:
+        return None
+
+    effective_date, reason = pick_effective_date(history["Date"], requested_date)
+    if effective_date is None:
+        return None
+
+    row = history.loc[history["Date"] == effective_date].iloc[-1]
+    tickers = [ticker for ticker in str(row.get("Tickers", "")).split("|") if ticker]
+    weights = [float(weight) for weight in str(row.get("Weights", "")).split("|") if weight]
+    count = min(len(tickers), len(weights))
+
+    holdings = pd.DataFrame(
+        {
+            "Ticker": tickers[:count],
+            "Weight": weights[:count],
+        }
+    )
+    holdings["Name"] = holdings["Ticker"].map(ticker_name_map).fillna("Unknown")
+    holdings = holdings.sort_values(["Weight", "Ticker"], ascending=[False, True]).reset_index(drop=True)
+
+    metadata = {
+        key: row[key]
+        for key in history.columns
+        if key not in {"Date", "Tickers", "Weights"} and pd.notna(row[key])
+    }
+
+    return {
+        "effective_date": effective_date,
+        "reason": reason,
+        "holdings": holdings,
+        "metadata": metadata,
+    }
+
+
+def print_table(title, df, weight_col):
+    print(f"\n--- {title} ---")
+    if df.empty:
+        print("No holdings available.")
+        return
+
+    print(f"{'Ticker':<10} {'Name':<42} {'Weight':>10}")
+    print("-" * 68)
+    for _, row in df.iterrows():
+        print(f"{row['Ticker']:<10} {str(row['Name'])[:42]:<42} {row[weight_col]:>9.2%}")
+    print("-" * 68)
+
+
+def print_ndx_top(weights_slice, effective_date, reason, limit):
+    print("\n" + "=" * 72)
+    print("NDX Weight Snapshot")
+    print(f"Using rebalance date: {effective_date.date()} ({reason})")
+    top = weights_slice[["Ticker", "Name", "Weight"]].head(limit).copy()
+    print_table(f"Top {limit}", top, "Weight")
+
+
+def print_strategy_view(strategy_key, snapshot):
+    config_row = HISTORY_FILES[strategy_key]
+    label = config_row["label"]
+
+    if snapshot is None:
+        print("\n" + "=" * 72)
+        print(label)
+        print("No constituent history available.")
+        return
+
+    holdings = snapshot["holdings"]
+    metadata = snapshot["metadata"]
+    effective_date = snapshot["effective_date"]
+    reason = snapshot["reason"]
+
+    print("\n" + "=" * 72)
+    print(label)
+    print(f"Using rebalance date: {effective_date.date()} ({reason})")
+
+    meta_parts = []
+    for key in ["Type", "BufferRule", "Count", "Top"]:
+        if key in metadata:
+            meta_parts.append(f"{key}={metadata[key]}")
+    if meta_parts:
+        print("Metadata: " + ", ".join(meta_parts))
+
+    print(f"Constituents: {len(holdings)} | Weight sum: {holdings['Weight'].sum():.2%}")
+    print_table("Holdings", holdings, "Weight")
+
+
+def interactive_date_prompt(weights):
+    min_date = weights["Date"].min().date()
+    max_date = weights["Date"].max().date()
+    print(f"Weight data available from {min_date} to {max_date}.")
+    print("Enter a rebalance date like 2005-06-20, a calendar date like 2005-07-01,")
+    print("or just a year like 2005 to use the last rebalance in that year.")
+    user_input = input("Date [blank for latest]: ").strip()
+    return parse_requested_date(user_input, weights)
+
+
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="View historical NDX, NDX Mega, NDX Mega 2.0, and NDX30 holdings.",
+    )
+    parser.add_argument(
+        "--date",
+        help="Target date (YYYY-MM-DD) or year (YYYY). Defaults to interactive prompt, or latest if stdin is not a TTY.",
+    )
+    parser.add_argument(
+        "--strategy",
+        choices=["all"] + STRATEGY_ORDER,
+        default="all",
+        help="Which strategy to display. Defaults to all.",
+    )
+    parser.add_argument(
+        "--top",
+        type=int,
+        default=25,
+        help="Number of top NDX names to show from the reconstructed weight snapshot.",
+    )
+    return parser
+
 
 def main():
-    print("Loading data...")
+    parser = build_parser()
+    args = parser.parse_args()
+
     try:
-        df = pd.read_csv(WEIGHTS_FILE)
-        df['Date'] = pd.to_datetime(df['Date'])
-        
-        # Filter future dates (Defense in depth)
-        today = pd.Timestamp.now().normalize()
-        df = df[df['Date'] <= today]
-    except FileNotFoundError:
-        print(f"Error: {WEIGHTS_FILE} not found. Run reconstruct_weights.py first.")
+        weights = load_weights()
+    except FileNotFoundError as exc:
+        print(f"Error: {exc}")
         sys.exit(1)
-        
-    # Load Histories
-    hist_m1 = pd.DataFrame()
-    hist_m2 = pd.DataFrame()
-    hist_ndx30 = pd.DataFrame()
-    try:
-        if os.path.exists(CONST_FILE_M1):
-            hist_m1 = pd.read_csv(CONST_FILE_M1)
-    except: pass
+
+    ticker_name_map = build_ticker_name_map(weights)
+    history = {key: load_history(item["path"]) for key, item in HISTORY_FILES.items()}
 
     try:
-        if os.path.exists(CONST_FILE_M2):
-            hist_m2 = pd.read_csv(CONST_FILE_M2)
-    except: pass
-
-    try:
-        if os.path.exists(CONST_FILE_NDX30):
-            hist_ndx30 = pd.read_csv(CONST_FILE_NDX30)
-    except: pass
-        
-    available_dates = sorted(df['Date'].unique())
-    min_year = available_dates[0].year
-    max_year = available_dates[-1].year
-    
-    print(f"\nData available from {min_year} to {max_year}.")
-    if not hist_m1.empty: print(f"Loaded Mega 1.0 History ({len(hist_m1)} periods)")
-    if not hist_m2.empty: print(f"Loaded Mega 2.0 History ({len(hist_m2)} periods)")
-    if not hist_ndx30.empty: print(f"Loaded NDX30 History ({len(hist_ndx30)} periods)")
-    
-    while True:
-        print("\n" + "="*50)
-        user_input = input(f"Enter Year (e.g. 2005), or 'q' to quit: ").strip().lower()
-        if user_input == 'q': break
-            
-        try:
-            year = int(user_input)
-        except ValueError:
-            print("Invalid year."); continue
-            
-        year_dates = [d for d in available_dates if d.year == year]
-        if not year_dates:
-            print(f"No data found for {year}."); continue
-            
-        print(f"\nAvailable Quarters for {year}:")
-        for i, d in enumerate(year_dates):
-            print(f"{i+1}. {d.date()}")
-            
-        q_idx = input("\nSelect Quarter (1-4) or Enter for last available: ").strip()
-        target_date = year_dates[int(q_idx)-1] if q_idx and q_idx.isdigit() and int(q_idx) <= len(year_dates) else year_dates[-1]
-            
-        print(f"\nAnalyzing funds for {target_date.date()}...")
-        full_slice = df[df['Date'] == target_date].sort_values('Weight', ascending=False)
-        
-        # 1. Full NDX Top 25
-        print(f"\n--- NDX Top 25 Holdings ({target_date.date()}) ---")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
-        print("-" * 65)
-        for _, row in full_slice.head(25).iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['Weight']:.2%}")
-            
-        # 2. NDX Mega 1.0
-        # Try History First
-        m1 = get_holdings_from_history(hist_m1, target_date)
-        source_m1 = "Backtest History (Accurate)"
-        
-        if m1 is None:
-            m1 = get_mega_holdings(full_slice)
-            source_m1 = "Strict Calculation (Approx)"
+        if args.date is not None:
+            requested_date = parse_requested_date(args.date, weights)
+        elif sys.stdin.isatty():
+            requested_date = interactive_date_prompt(weights)
         else:
-            # Join Name
-            m1 = m1.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
-            m1['Name'] = m1['Name'].fillna('Unknown')
-            
-        print(f"\n--- NDX Mega 1.0 Holdings ({target_date.date()}) ---")
-        print(f"Source: {source_m1}")
-        print(f"Constituents: {len(m1)}")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
-        print("-" * 75)
-        for _, row in m1.sort_values('FinalWeight', ascending=False).iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
-        print("-" * 75)
-        
-        # 3. NDX Mega 2.0
-        m2 = get_holdings_from_history(hist_m2, target_date)
-        source_m2 = "Backtest History (Accurate)"
-        
-        if m2 is None:
-            m2 = get_mega2_holdings(full_slice)
-            source_m2 = "Strict Calculation (Approx)"
-        else:
-             m2 = m2.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
-             m2['Name'] = m2['Name'].fillna('Unknown')
+            requested_date = None
+    except Exception as exc:
+        print(f"Error parsing date: {exc}")
+        sys.exit(1)
 
-        print(f"\n--- NDX Mega 2.0 Holdings ({target_date.date()}) ---")
-        print(f"Source: {source_m2}")
-        print(f"Constituents: {len(m2)}")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
-        print("-" * 75)
-        for _, row in m2.sort_values('FinalWeight', ascending=False).iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
-        print("-" * 75)
+    weights_slice, weight_date, weight_reason = get_weight_slice(weights, requested_date)
+    if weights_slice.empty or weight_date is None:
+        print("No weight data available for the requested date.")
+        sys.exit(1)
 
-        # 4. NDX30
-        m3 = get_holdings_from_history(hist_ndx30, target_date)
-        source_m3 = "Backtest History (Accurate)"
+    print_ndx_top(weights_slice, weight_date, weight_reason, args.top)
 
-        if m3 is None:
-            m3 = get_ndx30_holdings(full_slice)
-            source_m3 = "Strict Calculation (Approx)"
-        else:
-            m3 = m3.merge(full_slice[['Ticker', 'Name']], on='Ticker', how='left')
-            m3['Name'] = m3['Name'].fillna('Unknown')
+    requested_keys = STRATEGY_ORDER if args.strategy == "all" else [args.strategy]
+    for key in requested_keys:
+        snapshot = get_history_snapshot(history[key], requested_date, ticker_name_map)
+        print_strategy_view(key, snapshot)
 
-        print(f"\n--- NDX30 Holdings ({target_date.date()}) ---")
-        print(f"Source: {source_m3}")
-        print(f"Constituents: {len(m3)}")
-        print(f"{'Ticker':<10} {'Name':<40} {'Weight':<10}")
-        print("-" * 75)
-        for _, row in m3.sort_values('FinalWeight', ascending=False).iterrows():
-            print(f"{row['Ticker']:<10} {row['Name'][:38]:<40} {row['FinalWeight']:.2%}")
-        print("-" * 75)
 
 if __name__ == "__main__":
     main()

@@ -4,11 +4,9 @@ import numpy as np
 import datetime
 import os
 import sys
-import os
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
 import calendar
-import ndx_parser
 import price_manager
 from official_index_data import get_official_constituents
 
@@ -32,6 +30,11 @@ def apply_mapping_overrides(mapping):
 
 def load_data(): # Load Components
     print(f"Loading {config.COMPONENTS_FILE}...")
+    if not os.path.exists(config.COMPONENTS_FILE):
+        raise FileNotFoundError(
+            f"Missing parsed components file: {config.COMPONENTS_FILE}. "
+            "Run ndx_parser.py or rebuild_all.py without --skip-download."
+        )
     df = pd.read_csv(config.COMPONENTS_FILE)
     df['Date'] = pd.to_datetime(df['Date'])
     
@@ -131,7 +134,6 @@ def reconstruct():
     
     # Resample prices to daily if needed (fill fwd) to handle weekend quarters
     prices = prices.ffill()
-    ndx_parser.process_files()
     
     rebalance_pairs = get_rebalance_dates()
     final_rows = []

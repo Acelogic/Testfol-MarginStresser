@@ -4,12 +4,12 @@ Generates a Charlie Bilello-style corrections table (>5% drawdowns) for the
 NDXMEGASPLIT portfolio vs SPY, with recovery times and market event labels.
 
 Outputs:
-  - PNG chart:  data/results/charts/ndxmegasplit_corrections.png
-  - HTML viewer: data/results/charts/ndxmegasplit_corrections.html
-  - CSV data:   data/results/ndxmegasplit_corrections.csv
+  - PNG chart:  data/results/ad_hoc/ndxmegasplit_corrections.png
+  - HTML viewer: data/results/ad_hoc/ndxmegasplit_corrections.html
+  - CSV data:   data/results/ad_hoc/ndxmegasplit_corrections.csv
 
 Usage:
-  python corrections_analysis.py
+  python data/ndx_simulation/scripts/ad_hoc/corrections_analysis.py
 """
 
 import pandas as pd
@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 warnings.filterwarnings('ignore')
 
 # ── Path setup (same pattern as other scripts) ──────────────────────────
-sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "../../src"))
 import config
 
 # Project root (Testfol-MarginStresser/)
@@ -51,10 +51,10 @@ ALLOCATION = {
 }
 
 # Output paths
-CHARTS_DIR = os.path.join(config.RESULTS_DIR, "charts")
-CSV_OUT = os.path.join(config.RESULTS_DIR, "ndxmegasplit_corrections.csv")
-PNG_OUT = os.path.join(CHARTS_DIR, "ndxmegasplit_corrections.png")
-HTML_OUT = os.path.join(CHARTS_DIR, "ndxmegasplit_corrections.html")
+AD_HOC_RESULTS_DIR = os.path.join(config.RESULTS_DIR, "ad_hoc")
+CSV_OUT = os.path.join(AD_HOC_RESULTS_DIR, "ndxmegasplit_corrections.csv")
+PNG_OUT = os.path.join(AD_HOC_RESULTS_DIR, "ndxmegasplit_corrections.png")
+HTML_OUT = os.path.join(AD_HOC_RESULTS_DIR, "ndxmegasplit_corrections.html")
 
 # ── Market event descriptions ────────────────────────────────────────────
 EVENT_MAP = {
@@ -377,7 +377,7 @@ def export_png(rows, portfolio, episodes):
     ax.text(0.5, fy, footer, fontsize=13, color=text_g, ha="center", va="center", fontfamily="sans-serif")
 
     plt.subplots_adjust(left=0.005, right=0.995, top=0.995, bottom=0.005)
-    os.makedirs(CHARTS_DIR, exist_ok=True)
+    os.makedirs(AD_HOC_RESULTS_DIR, exist_ok=True)
     plt.savefig(PNG_OUT, dpi=150, facecolor=fig.get_facecolor(), bbox_inches="tight", pad_inches=0.3)
     plt.close()
     print(f"  PNG: {PNG_OUT}")

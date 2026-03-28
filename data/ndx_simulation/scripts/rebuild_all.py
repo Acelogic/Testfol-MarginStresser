@@ -23,8 +23,8 @@ def run_script(script_path, desc, env=None):
         if env:
             run_env.update(env)
 
-        # Run with python3
-        result = subprocess.run([sys.executable, script_path], check=True, text=True, env=run_env)
+        # Run with the current interpreter so virtualenv/module resolution stays consistent.
+        subprocess.run([sys.executable, script_path], check=True, text=True, env=run_env)
         logging.info(f"--- Completed: {desc} ---\n")
     except subprocess.CalledProcessError as e:
         logging.error(f"!!! Failed: {desc} (Exit Code: {e.returncode}) !!!")
@@ -36,9 +36,10 @@ def main():
         description='Rebuild NDX/NDXMEGA/NDXMEGA2/NDX30 simulation pipeline.',
         epilog='''
 Examples:
-  python rebuild_all.py                          # Use yfinance (default)
-  python rebuild_all.py --stooq                  # Use Stooq (free, 20+ years)
-  python rebuild_all.py --polygon YOUR_API_KEY   # Use Polygon.io (paid)
+  python rebuild_all.py                                       # Use yfinance (default)
+  python rebuild_all.py --refresh-official-membership         # Also refresh archived Nasdaq membership
+  python rebuild_all.py --stooq                               # Use Stooq (free, 20+ years)
+  python rebuild_all.py --polygon YOUR_API_KEY                # Use Polygon.io (paid)
         '''
     )
     parser.add_argument(
@@ -54,7 +55,7 @@ Examples:
     parser.add_argument(
         '--skip-download',
         action='store_true',
-        help='Skip SEC filing download step (use existing filings)'
+        help='Skip SEC download. Use existing parsed components, or parse cached filings if needed.'
     )
     parser.add_argument(
         '--skip-reconstruct',
@@ -67,21 +68,24 @@ Examples:
         help='DEEP CLEAN: Deletes all downloaded data, caches, and results before running.'
     )
     parser.add_argument(
-        '--skip-official-membership',
+        '--refresh-official-membership',
         action='store_true',
-        help='Skip Nasdaq official membership archive refresh step.'
+        help='Refresh the archived Nasdaq official membership snapshots before reconstruction.'
     )
     args = parser.parse_args()
 
     # Build environment variables to pass to child scripts
     env_vars = {}
+    data_source_label = "yfinance"
     
     if args.polygon:
         env_vars['NDX_DATA_SOURCE'] = 'polygon'
         env_vars['POLYGON_API_KEY'] = args.polygon
+        data_source_label = "Polygon.io"
         logging.info(f"Data Source: Polygon.io (paid)")
     elif args.stooq:
         env_vars['NDX_DATA_SOURCE'] = 'stooq'
+        data_source_label = "Stooq"
         logging.info(f"Data Source: Stooq (free)")
     else:
         env_vars['NDX_DATA_SOURCE'] = 'yfinance'
@@ -100,6 +104,10 @@ Examples:
     assets_dir = os.path.join(data_dir, "assets")
     results_dir = os.path.join(data_dir, "results")
     charts_dir = os.path.join(results_dir, "charts")
+    filings_dir = os.path.join(cache_dir, "ndx_filings")
+    comp_file = os.path.join(assets_dir, "nasdaq_components.csv")
+    weights_file = os.path.join(results_dir, "nasdaq_quarterly_weights.csv")
+    parser_script = os.path.join(src_dir, "ndx_parser.py")
     
     if args.clear_cache:
         logging.warning("!!! --clear-cache SET: Performing Deep Clean !!!")
@@ -115,7 +123,6 @@ Examples:
                     logging.error(f"Error deleting {f}: {e}")
                     
         # 2. NDX Filings (Downloads)
-        filings_dir = os.path.join(cache_dir, "ndx_filings")
         if os.path.exists(filings_dir):
             try:
                 shutil.rmtree(filings_dir)
@@ -124,7 +131,6 @@ Examples:
                 logging.error(f"Error deleting {filings_dir}: {e}")
         
         # 3. Assets (Components CSV)
-        comp_file = os.path.join(assets_dir, "nasdaq_components.csv")
         if os.path.exists(comp_file):
             try:
                 os.remove(comp_file)
@@ -133,13 +139,12 @@ Examples:
                 logging.error(f"Error deleting {comp_file}: {e}")
 
         # 4. Results (Weights)
-        w_file = os.path.join(results_dir, "nasdaq_quarterly_weights.csv")
-        if os.path.exists(w_file):
+        if os.path.exists(weights_file):
             try:
-                os.remove(w_file)
-                logging.info(f"Deleted: {w_file}")
+                os.remove(weights_file)
+                logging.info(f"Deleted: {weights_file}")
             except OSError as e:
-                logging.error(f"Error deleting {w_file}: {e}")
+                logging.error(f"Error deleting {weights_file}: {e}")
         
         # 5. Charts
         if os.path.exists(charts_dir):
@@ -180,10 +185,21 @@ Examples:
         
         # 1.5. Parse Filings (ndx_parser.py is in src/)
         # Must run after download to generate nasdaq_components.csv
-        parser_script = os.path.join(src_dir, "ndx_parser.py")
         run_script(parser_script, "Parse SEC Filings", env_vars)
     else:
-        logging.info("--- Skipped: Download & Parse SEC Filings ---\n")
+        if os.path.exists(comp_file):
+            logging.info(f"--- Skipped: Download SEC Filings (using existing parsed components at {comp_file}) ---\n")
+        elif os.path.isdir(filings_dir) and any(
+            name.endswith((".txt", ".htm", ".html")) for name in os.listdir(filings_dir)
+        ):
+            logging.info("--- Skipped: Download SEC Filings (parsing cached filings because components CSV is missing) ---")
+            run_script(parser_script, "Parse Cached SEC Filings", env_vars)
+        else:
+            logging.error(
+                "Cannot use --skip-download: no parsed components CSV and no cached SEC filings were found."
+            )
+            logging.error("Run without --skip-download, or restore data/ndx_simulation/data/cache/ndx_filings.")
+            sys.exit(1)
     
     # 2. Update Name Mappings (src/mapper.py)
     # This ensures new filings are mapped to tickers before reconstruction
@@ -191,18 +207,24 @@ Examples:
     run_script(mapper_script, "Update Name Mappings", env_vars)
 
     # 2.5. Refresh archived official Nasdaq membership snapshots used by backtests
-    if not args.skip_official_membership:
+    # Default is to skip this slow step unless explicitly requested.
+    if args.refresh_official_membership:
         official_membership_script = os.path.join(scripts_dir, "download_official_membership.py")
         run_script(official_membership_script, "Refresh Official Nasdaq Membership Archive", env_vars)
     else:
-        logging.info("--- Skipped: Refresh Official Nasdaq Membership Archive ---\n")
+        logging.info("--- Skipped: Refresh Official Nasdaq Membership Archive (pass --refresh-official-membership to enable) ---\n")
 
     # 3. Reconstruct Weights (scripts/reconstruct_weights.py)
     if not args.skip_reconstruct:
         reconstruct_script = os.path.join(scripts_dir, "reconstruct_weights.py")
         run_script(reconstruct_script, "Reconstruct Index Weights", env_vars)
     else:
-        logging.info("--- Skipped: Reconstruct Index Weights ---\n")
+        if not os.path.exists(weights_file):
+            logging.error(
+                f"Cannot use --skip-reconstruct: expected existing weights at {weights_file}, but the file is missing."
+            )
+            sys.exit(1)
+        logging.info(f"--- Skipped: Reconstruct Index Weights (using existing weights at {weights_file}) ---\n")
     
     # 3. Backtest Mega 1.0 (scripts/backtest_ndx_mega.py)
     mega1_script = os.path.join(scripts_dir, "backtest_ndx_mega.py")
@@ -222,12 +244,7 @@ Examples:
     
     logging.info("All steps completed successfully.")
     logging.info("Dashboard data (NDXMEGASIM.csv / NDXMEGA2SIM.csv / NDX30SIM.csv) has been updated.")
-    
-    # Summary
-    if args.polygon:
-        logging.info(f"Data source used: Polygon.io")
-    else:
-        logging.info(f"Data source used: yfinance")
+    logging.info(f"Data source used: {data_source_label}")
 
 if __name__ == "__main__":
     main()

@@ -209,11 +209,17 @@ The tool now includes a professional **Monte Carlo Simulation** suite to stress-
 This project includes a powerful engine to reconstruct historical index data from SEC filings. If you need to regenerate the `NDXMEGASIM` or `NDXMEGA2SIM` datasets:
 
 ```bash
-# Run the full reconstruction pipeline
-# (Downloads -> Parse -> Name Map -> Official Membership Archive -> Reconstruct -> Backtest -> Validate)
+# Run the standard reconstruction pipeline
+# (Downloads -> Parse -> Name Map -> Reconstruct -> Backtest -> Validate)
 python3 data/ndx_simulation/scripts/rebuild_all.py
+
+# Skip SEC downloading when filings/components are already on disk
+python3 data/ndx_simulation/scripts/rebuild_all.py --skip-download
+
+# Refresh the archived official Nasdaq membership snapshots too
+python3 data/ndx_simulation/scripts/rebuild_all.py --refresh-official-membership
 ```
-This process uses the self-contained `data/ndx_simulation` module.
+By default, `rebuild_all.py` uses the archived official Nasdaq membership files already stored in `data/ndx_simulation/data/assets/official_membership`. The refresh step is optional because it is materially slower.
 
 ## Disclaimer
 **Educational Use Only.** This software simulates tax and margin mechanics for research. It is not a substitute for profound professional financial or tax advice.
