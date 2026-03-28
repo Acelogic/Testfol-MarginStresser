@@ -703,9 +703,11 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         if df.empty:
             st.info("No corrections >5% found in this period.")
         else:
+            from app.core.calculations.stats import fmt_duration
+
             # Summary metrics
             n_total = len(df)
-            median_decline = df["_decline_raw"].median()
+            median_decline = df["% Decline"].median()
             n_severe = (df["_severity"] == "Severe").sum()
             n_moderate = (df["_severity"] == "Moderate").sum()
             n_ongoing = df["_ongoing"].sum()
@@ -747,16 +749,32 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 filtered = df[df["_severity"] == "Minor"]
 
             # Drop hidden columns for display
-            display_df = filtered[[c for c in filtered.columns if not c.startswith("_")]]
+            display_df = filtered[[c for c in filtered.columns if not c.startswith("_")]].copy()
 
-            # Style function
+            # Format functions for display (raw numeric values stay for sorting)
+            def fmt_duration_col(val):
+                """Format day counts: negative = ongoing, None = N/A."""
+                if val is None or pd.isna(val):
+                    return "N/A"
+                val = int(val)
+                if val < 0:
+                    return f"ongoing ({fmt_duration(-val)})"
+                return fmt_duration(val)
+
+            def fmt_pct(val):
+                if pd.isna(val): return ""
+                return f"{val:.1f}%"
+
+            def fmt_ratio(val):
+                if pd.isna(val): return ""
+                return f"{val:.1f}x"
+
+            # Style function (works on raw numeric values)
             def style_drawdowns(styler):
                 def color_decline(val):
-                    if not isinstance(val, str) or not val.endswith("%"):
-                        return ""
                     try:
-                        v = float(val.replace("%", ""))
-                    except ValueError:
+                        v = float(val)
+                    except (ValueError, TypeError):
                         return ""
                     if abs(v) >= 25: return "color: #ef4444; font-weight: bold"
                     if abs(v) >= 15: return "color: #f97316; font-weight: bold"
@@ -764,32 +782,45 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                     return "color: #94a3b8"
 
                 def color_ratio(val):
-                    if not isinstance(val, str) or not val.endswith("x"):
-                        return ""
                     try:
-                        v = float(val.replace("x", ""))
-                    except ValueError:
+                        v = float(val)
+                    except (ValueError, TypeError):
                         return ""
                     if v < 1.5: return "color: #34d399"
                     if v > 3.0: return "color: #f97316"
                     return ""
 
-                def color_ongoing(val):
-                    if isinstance(val, str) and "ongoing" in val:
-                        return "color: #ef4444; font-weight: bold"
+                def color_duration(val):
+                    try:
+                        v = float(val)
+                    except (ValueError, TypeError):
+                        return ""
+                    if v < 0: return "color: #ef4444; font-weight: bold"
                     return ""
 
-                def color_spy(val):
-                    if not isinstance(val, str) or val == "":
+                def color_spy_duration(val):
+                    if val is None or (isinstance(val, float) and pd.isna(val)):
                         return ""
-                    if "ongoing" in val:
-                        return "color: #ef4444; font-weight: bold"
+                    try:
+                        v = float(val)
+                    except (ValueError, TypeError):
+                        return ""
+                    if v < 0: return "color: #ef4444; font-weight: bold"
+                    return "color: #94a3b8"
+
+                def color_spy_pct(val):
                     return "color: #94a3b8"
 
                 styler.map(color_decline, subset=["% Decline"])
                 styler.map(color_ratio, subset=["Ratio"])
-                styler.map(color_ongoing, subset=["Recovery from Bottom", "Decline + Recovery Time"])
-                styler.map(color_spy, subset=["SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
+                styler.map(color_duration, subset=["Recovery from Bottom", "Decline + Recovery Time"])
+                styler.map(color_spy_pct, subset=["SPY DD"])
+                styler.map(color_spy_duration, subset=["SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
+
+                # Format display values
+                styler.format(fmt_pct, subset=["% Decline", "SPY DD"])
+                styler.format(fmt_ratio, subset=["Ratio"])
+                styler.format(fmt_duration_col, subset=["Recovery from Bottom", "Decline + Recovery Time", "SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
                 return styler
 
             st.dataframe(

@@ -450,7 +450,7 @@ def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.Da
         "Recovery from Bottom", "Decline + Recovery Time",
         "SPY DD", "SPY Recovery from Bottom", "SPY Decline + Recovery Time",
         "Ratio", "Market Event",
-        "_ongoing", "_severity", "_decline_raw", "_spy_dd_raw", "_ratio_raw", "_days_raw", "_peak_date",
+        "_ongoing", "_severity", "_peak_date",
     ]
 
     episodes = find_drawdown_episodes(port_series, threshold=-0.05)
@@ -478,29 +478,29 @@ def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.Da
             spy_trough = sddw.idxmin()
         ratio = abs(pdd / sdd) if sdd != 0 else 0.0
 
-        # Portfolio recovery
+        # Portfolio recovery (store raw days for sortability)
         if recovery:
-            split_recov = fmt_duration((recovery - trough).days)
-            split_total = fmt_duration((recovery - peak).days)
+            split_recov_days = (recovery - trough).days
+            split_total_days = (recovery - peak).days
         else:
-            split_recov = f"ongoing ({fmt_duration((last_date - trough).days)})"
-            split_total = f"ongoing ({fmt_duration((last_date - peak).days)})"
+            split_recov_days = -(last_date - trough).days   # negative = ongoing
+            split_total_days = -(last_date - peak).days     # negative = ongoing
 
-        # SPY recovery
+        # SPY recovery (store raw days for sortability)
         if not sw.empty:
             spy_peak_val = spy_norm.loc[peak]
             spy_after = spy_norm.loc[spy_trough:]
             spy_recovered = spy_after[spy_after >= spy_peak_val]
             if len(spy_recovered) > 0:
                 spy_rd = spy_recovered.index[0]
-                spy_recov = fmt_duration((spy_rd - spy_trough).days)
-                spy_total = fmt_duration((spy_rd - peak).days)
+                spy_recov_days = (spy_rd - spy_trough).days
+                spy_total_days = (spy_rd - peak).days
             else:
-                spy_recov = f"ongoing ({fmt_duration((last_date - spy_trough).days)})"
-                spy_total = f"ongoing ({fmt_duration((last_date - peak).days)})"
+                spy_recov_days = -(last_date - spy_trough).days
+                spy_total_days = -(last_date - peak).days
         else:
-            spy_recov = "N/A"
-            spy_total = "N/A"
+            spy_recov_days = None
+            spy_total_days = None
 
         period = f"{peak.strftime('%b %d, %Y')} - {trough.strftime('%b %d, %Y')}"
         if not recovery:
@@ -509,20 +509,16 @@ def build_drawdown_table(port_series: pd.Series, spy_series: pd.Series) -> pd.Da
         rows.append({
             "Correction Period": period,
             "Days": n_days,
-            "% Decline": f"{pdd:.1f}%",
-            "Recovery from Bottom": split_recov,
-            "Decline + Recovery Time": split_total,
-            "SPY DD": f"{sdd:.1f}%",
-            "SPY Recovery from Bottom": spy_recov,
-            "SPY Decline + Recovery Time": spy_total,
-            "Ratio": f"{ratio:.1f}x",
+            "% Decline": pdd,
+            "Recovery from Bottom": split_recov_days,
+            "Decline + Recovery Time": split_total_days,
+            "SPY DD": sdd,
+            "SPY Recovery from Bottom": spy_recov_days,
+            "SPY Decline + Recovery Time": spy_total_days,
+            "Ratio": ratio,
             "Market Event": get_market_event(peak),
             "_ongoing": bool(recovery is None),
             "_severity": _classify_severity(pdd),
-            "_decline_raw": pdd,
-            "_spy_dd_raw": sdd,
-            "_ratio_raw": ratio,
-            "_days_raw": n_days,
             "_peak_date": peak,
         })
 

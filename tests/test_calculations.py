@@ -248,8 +248,8 @@ def test_build_drawdown_table_basic():
     assert "Market Event" in df.columns
     assert "_severity" in df.columns
     assert "_ongoing" in df.columns
-    # Decline should be around -33%
-    assert df.iloc[0]["_decline_raw"] == pytest.approx(-33.3, abs=5.0)
+    # Decline should be around -33% (raw numeric value)
+    assert df.iloc[0]["% Decline"] == pytest.approx(-33.3, abs=5.0)
 
 
 def test_build_drawdown_table_empty():
@@ -273,5 +273,6 @@ def test_build_drawdown_table_ongoing():
     df = build_drawdown_table(port, spy)
     assert len(df) == 1
     assert df.iloc[0]["_ongoing"] is True
-    assert "ongoing" in df.iloc[0]["Recovery from Bottom"]
-    assert "ongoing" in df.iloc[0]["Decline + Recovery Time"]
+    # Ongoing episodes have negative day counts (or 0 if at trough)
+    assert df.iloc[0]["Recovery from Bottom"] <= 0
+    assert df.iloc[0]["Decline + Recovery Time"] <= 0
