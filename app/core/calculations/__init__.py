@@ -7,6 +7,7 @@ from app.core.calculations.stats import (
     calculate_tax_adjusted_equity,
     process_rebalancing_data,
     generate_stats,
+    find_drawdown_episodes,
 )
 from app.core.calculations.moving_averages import (
     analyze_ma,
@@ -27,6 +28,7 @@ __all__ = [
     "calculate_tax_adjusted_equity",
     "process_rebalancing_data",
     "generate_stats",
+    "find_drawdown_episodes",
     "analyze_ma",
     "analyze_wma",
     "compare_breach_events",

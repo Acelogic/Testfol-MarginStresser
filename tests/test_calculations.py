@@ -9,6 +9,7 @@ from app.core.calculations import (
     calculate_sharpe_ratio,
     generate_stats,
     calculate_pivot_points,
+    find_drawdown_episodes,
 )
 
 
@@ -118,3 +119,57 @@ def test_pivot_points():
     assert prices["Pivot Point 1st Level Support"] == pytest.approx(s1, abs=0.01)
     assert prices["Pivot Point 2nd Level Resistance"] == pytest.approx(r2, abs=0.01)
     assert prices["Pivot Point 2nd Level Support"] == pytest.approx(s2, abs=0.01)
+
+
+# ---------------------------------------------------------------------------
+# find_drawdown_episodes
+# ---------------------------------------------------------------------------
+
+def test_find_drawdown_episodes_basic():
+    """Detects a single drawdown episode with recovery."""
+    dates = pd.bdate_range("2023-01-02", periods=60)
+    values = np.concatenate([
+        np.linspace(100, 120, 15),   # rise
+        np.linspace(120, 80, 15),    # -33% drawdown
+        np.linspace(80, 120, 15),    # recovery
+        np.linspace(120, 130, 15),   # new high
+    ])
+    series = pd.Series(values, index=dates)
+    episodes = find_drawdown_episodes(series, threshold=-0.05)
+    assert len(episodes) == 1
+    ep = episodes[0]
+    assert ep["peak_val"] == pytest.approx(120.0, abs=1.0)
+    assert ep["trough_val"] == pytest.approx(80.0, abs=1.0)
+    assert ep["dd"] == pytest.approx(-1/3, abs=0.05)
+    assert ep["recovery"] is not None
+
+
+def test_find_drawdown_episodes_ongoing():
+    """Detects an ongoing drawdown (no recovery)."""
+    dates = pd.bdate_range("2023-01-02", periods=30)
+    values = np.concatenate([
+        np.linspace(100, 120, 15),
+        np.linspace(120, 90, 15),   # -25% drop, no recovery
+    ])
+    series = pd.Series(values, index=dates)
+    episodes = find_drawdown_episodes(series, threshold=-0.05)
+    assert len(episodes) == 1
+    assert episodes[0]["recovery"] is None
+
+
+def test_find_drawdown_episodes_below_threshold():
+    """Small drawdowns below threshold are ignored."""
+    dates = pd.bdate_range("2023-01-02", periods=30)
+    values = np.concatenate([
+        np.linspace(100, 105, 15),
+        np.linspace(105, 102, 15),  # -2.8% drop, below 5% threshold
+    ])
+    series = pd.Series(values, index=dates)
+    episodes = find_drawdown_episodes(series, threshold=-0.05)
+    assert len(episodes) == 0
+
+
+def test_find_drawdown_episodes_empty():
+    """Empty series returns empty list."""
+    series = pd.Series(dtype=float)
+    assert find_drawdown_episodes(series) == []

@@ -290,3 +290,41 @@ def generate_stats(series: pd.Series) -> dict:
         "calmar": calmar,
         "avg_drawdown": avg_drawdown,
     }
+
+
+def find_drawdown_episodes(series: pd.Series, threshold: float = -0.05) -> list[dict]:
+    """Find all drawdown episodes exceeding threshold.
+
+    Returns list of dicts with keys: peak_date, peak_val, trough_date,
+    trough_val, dd (decimal, e.g. -0.25), recovery (date or None).
+    """
+    if series.empty:
+        return []
+    dd = series / series.cummax() - 1.0
+    episodes = []
+    in_dd = False
+    peak_date = trough_date = None
+    trough_dd = 0.0
+    for date, d in dd.items():
+        if d == 0.0:
+            if in_dd and trough_dd < threshold:
+                episodes.append({
+                    "peak_date": peak_date, "peak_val": series[peak_date],
+                    "trough_date": trough_date, "trough_val": series[trough_date],
+                    "dd": trough_dd, "recovery": date,
+                })
+            in_dd = False
+            peak_date = date
+            trough_dd = 0.0
+        else:
+            in_dd = True
+            if d < trough_dd:
+                trough_dd = d
+                trough_date = date
+    if in_dd and trough_dd < threshold:
+        episodes.append({
+            "peak_date": peak_date, "peak_val": series[peak_date],
+            "trough_date": trough_date, "trough_val": series[trough_date],
+            "dd": trough_dd, "recovery": None,
+        })
+    return episodes
