@@ -328,3 +328,81 @@ def find_drawdown_episodes(series: pd.Series, threshold: float = -0.05) -> list[
             "dd": trough_dd, "recovery": None,
         })
     return episodes
+
+
+def fmt_duration(days: int) -> str:
+    """Format a day count as human-readable duration (e.g. '5.0yr', '3mo', '59d')."""
+    if days >= 365:
+        return f"{days / 365.25:.1f}yr"
+    if days >= 60:
+        return f"{days // 30}mo"
+    return f"{days}d"
+
+
+MARKET_EVENT_MAP: dict[tuple[int, int], str] = {
+    (2000, 7): "Dot-com Bubble Burst, Tech Wreck",
+    (2007, 7): "Subprime Contagion, Quant Blowups",
+    (2007, 11): "GFC: Lehman/AIG/Bear Stearns Collapse",
+    (2010, 11): "Ireland Bailout, EU Debt Contagion",
+    (2011, 2): "Arab Spring, Japan Earthquake/Fukushima",
+    (2011, 4): "EU Debt (Portugal), S&P Warning",
+    (2011, 7): "US Downgrade (AAA->AA+), EU Crisis",
+    (2012, 3): "EU Debt (Spain/Italy), Austerity",
+    (2012, 9): "Fiscal Cliff Fears, Election",
+    (2014, 1): "EM Currency Crisis (Turkey/Argentina)",
+    (2014, 3): "Russia Annexes Crimea, Sanctions",
+    (2014, 7): "Ukraine/MH17, Gaza, ISIS, Ebola",
+    (2014, 9): "Ebola Fears, Oil Price Collapse, ISIS",
+    (2014, 11): "Oil Crash, OPEC Refuses Cut, Ruble",
+    (2015, 3): "Dollar Surge, Rate Hike Fears",
+    (2015, 4): "China Slowdown, Dollar Drag",
+    (2015, 7): "China Devaluation, Yuan Shock, EM Crash",
+    (2015, 11): "Paris Attacks, Rate Hike, Oil <$40",
+    (2015, 12): "China, Oil <$30, Recession Fears",
+    (2016, 10): "Election Uncertainty, Trump Shock",
+    (2017, 6): "Tech/FANG Rotation, Valuation Fears",
+    (2018, 1): "Volmageddon (XIV Blowup), Rate Fears",
+    (2018, 2): "Inflation/Rate Fears, VIX Aftershock",
+    (2018, 3): "Trade War (Tariffs), Facebook Scandal",
+    (2018, 6): "Tariff Escalation, Turkey Lira Crisis",
+    (2018, 7): "Trade War Intensifies, EM Stress",
+    (2018, 8): "Trade War + Fed Hawkish + Housing",
+    (2019, 4): "Trade War, Tariff Tweets, China",
+    (2019, 7): "Yield Curve Inversion, Recession Signal",
+    (2020, 2): "COVID Pandemic, Lockdowns, Depression Fears",
+    (2020, 6): "COVID Second Wave, Reopening Doubts",
+    (2020, 7): "COVID Resurgence, Tech Bubble Talk",
+    (2020, 8): "Softbank Whale, Value Rotation",
+    (2020, 9): "No Stimulus, COVID, Election Uncertainty",
+    (2021, 1): "GameStop/Meme Frenzy, Rate Scare",
+    (2021, 2): "Rate Spike (10Y>1.5%), Value Rotation",
+    (2021, 4): "Inflation Spike (CPI 5%), Tax Plan",
+    (2021, 7): "Delta Variant, China Tech Crackdown",
+    (2021, 9): "Evergrande, Fed Taper, Supply Chain",
+    (2021, 11): "Omicron, Fed Hawkish, Inflation 6.8%",
+    (2023, 7): "Fitch Downgrade, 10Y>4.5%, Higher Longer",
+    (2023, 12): "Rate Cuts Repriced, Strong Economy",
+    (2024, 1): "Rate Cut Delay, Strong Jobs",
+    (2024, 4): "Hot CPI, Rate Cuts Repriced, Iran/Israel",
+    (2024, 7): "Yen Carry Unwind, Japan Hike, Nikkei Crash",
+    (2024, 11): "Post-Election Tariff Fears, Strong $",
+    (2024, 12): "DeepSeek AI Shock, Mag7 Selloff, Tariffs",
+    (2025, 8): "Recession Fears, AI Capex Pullback",
+    (2025, 10): "Tariff Impact, Earnings Downgrades",
+    (2026, 1): "Iran War, Tariff Recession, AI Bubble Fears",
+}
+
+
+def get_market_event(peak_date) -> str:
+    """Look up a market event by peak date, with +/- 2 month fuzzy matching."""
+    key = (peak_date.year, peak_date.month)
+    if key in MARKET_EVENT_MAP:
+        return MARKET_EVENT_MAP[key]
+    for offset in [1, -1, 2, -2]:
+        m = peak_date.month + offset
+        y = peak_date.year
+        if m > 12: m -= 12; y += 1
+        if m < 1: m += 12; y -= 1
+        if (y, m) in MARKET_EVENT_MAP:
+            return MARKET_EVENT_MAP[(y, m)]
+    return ""

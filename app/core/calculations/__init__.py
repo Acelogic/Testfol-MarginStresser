@@ -8,6 +8,9 @@ from app.core.calculations.stats import (
     process_rebalancing_data,
     generate_stats,
     find_drawdown_episodes,
+    fmt_duration,
+    MARKET_EVENT_MAP,
+    get_market_event,
 )
 from app.core.calculations.moving_averages import (
     analyze_ma,
@@ -29,6 +32,9 @@ __all__ = [
     "process_rebalancing_data",
     "generate_stats",
     "find_drawdown_episodes",
+    "fmt_duration",
+    "MARKET_EVENT_MAP",
+    "get_market_event",
     "analyze_ma",
     "analyze_wma",
     "compare_breach_events",

@@ -173,3 +173,50 @@ def test_find_drawdown_episodes_empty():
     """Empty series returns empty list."""
     series = pd.Series(dtype=float)
     assert find_drawdown_episodes(series) == []
+
+
+# ---------------------------------------------------------------------------
+# fmt_duration
+# ---------------------------------------------------------------------------
+
+from app.core.calculations import fmt_duration, get_market_event
+
+
+def test_fmt_duration_years():
+    assert fmt_duration(400) == "1.1yr"
+    assert fmt_duration(730) == "2.0yr"
+
+
+def test_fmt_duration_months():
+    assert fmt_duration(90) == "3mo"
+    assert fmt_duration(60) == "2mo"
+
+
+def test_fmt_duration_days():
+    assert fmt_duration(59) == "59d"
+    assert fmt_duration(1) == "1d"
+
+
+# ---------------------------------------------------------------------------
+# get_market_event
+# ---------------------------------------------------------------------------
+
+def test_get_market_event_exact_match():
+    """Exact (year, month) match returns event string."""
+    date = pd.Timestamp("2020-02-19")
+    event = get_market_event(date)
+    assert "COVID" in event
+
+
+def test_get_market_event_fuzzy_match():
+    """Fuzzy match within +/- 2 months returns event string."""
+    date = pd.Timestamp("2020-04-01")  # 2 months after Feb 2020
+    event = get_market_event(date)
+    assert "COVID" in event
+
+
+def test_get_market_event_no_match():
+    """No match returns empty string."""
+    date = pd.Timestamp("1990-01-01")
+    event = get_market_event(date)
+    assert event == ""
