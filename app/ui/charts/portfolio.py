@@ -69,14 +69,15 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True):
             
         color = colors[i % len(colors)]
         
-        # Use stats directly - they're already accurate for the displayed period
-        # For 'refetched' portfolios: stats came from fresh API call with common_start
-        # For 'rebased' portfolios: stats were calculated locally from TWR (only option)
-        # For non-rebased portfolios: stats are original API stats for that period
+        # Recalculate stats from the clipped series so legend matches the chart
         cagr = stats.get('cagr', 0.0)
         cagr_display = cagr * 100 if abs(cagr) <= 1 else cagr
-        max_dd = stats.get('max_drawdown', 0.0)
-        max_dd_display = max_dd * 100 if abs(max_dd) <= 1 else max_dd
+
+        # Max drawdown from the displayed (clipped) series, not the original
+        clipped_float = series.astype(float)
+        running_max = clipped_float.cummax()
+        max_dd = float((clipped_float / running_max - 1.0).min())
+        max_dd_display = max_dd * 100
 
         label = f"{name} (CAGR: {cagr_display:.2f}%, DD: {max_dd_display:.2f}%)"
         

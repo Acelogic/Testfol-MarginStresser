@@ -397,8 +397,26 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     # Use Stats reported by Testfol API (TWR)
     cagr = stats.get("cagr", 0.0)
-    max_dd = stats.get("max_drawdown", 0.0)
     sharpe = stats.get("sharpe", 0.0)
+
+    # Recalculate max drawdown from the displayed (clipped) series so it matches the chart
+    max_dd_date = None
+    ath_date = None
+    current_dd_from_ath = 0.0
+    avg_dd = 0.0
+    med_dd = 0.0
+    if not port_series.empty:
+        _ps = port_series.astype(float)
+        _dd_series = _ps / _ps.cummax() - 1.0
+        max_dd = float(_dd_series.min()) * 100
+        max_dd_date = _dd_series.idxmin()
+        current_dd_from_ath = float(_dd_series.iloc[-1]) * 100
+        ath_date = _ps.idxmax()
+        _dd_negative = _dd_series[_dd_series < 0]
+        avg_dd = float(_dd_negative.mean()) * 100 if not _dd_negative.empty else 0.0
+        med_dd = float(_dd_negative.median()) * 100 if not _dd_negative.empty else 0.0
+    else:
+        max_dd = stats.get("max_drawdown", 0.0)
 
     # Retrieve Benchmark Stats (use clipped stats if already computed above)
     if bench_stats is None:
@@ -446,7 +464,18 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs {bench_label}", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs {bench_label}", help="Pre-tax risk-adjusted return")
-        m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs {bench_label}", delta_color="inverse")
+        _dd_help = f"Trough: {max_dd_date.strftime('%b %d, %Y')}" if max_dd_date is not None else None
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", f"{diff_dd:+.2f}% vs {bench_label}", delta_color="inverse", help=_dd_help)
+        _dd_parts = []
+        if max_dd_date is not None:
+            _dd_parts.append(max_dd_date.strftime('%b %Y'))
+        if avg_dd != 0.0:
+            _dd_parts.append(f"Avg {avg_dd:.1f}% · Med {med_dd:.1f}%")
+        if current_dd_from_ath != 0.0:
+            _dd_parts.append(f"Now {current_dd_from_ath:.1f}% (peak {ath_date.strftime('%b %Y')})")
+        else:
+            _dd_parts.append("Now ATH")
+        m4.caption(" · ".join(_dd_parts))
         if not final_adj_series.empty and final_adj_series.iloc[-1] != 0:
             m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
         else:
@@ -473,7 +502,18 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", help="Pre-tax risk-adjusted return")
-        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse")
+        _dd_help2 = f"Trough: {max_dd_date.strftime('%b %d, %Y')}" if max_dd_date is not None else None
+        m4.metric("Max Drawdown", f"{max_dd:.2f}%", delta_color="inverse", help=_dd_help2)
+        _dd_parts2 = []
+        if max_dd_date is not None:
+            _dd_parts2.append(max_dd_date.strftime('%b %Y'))
+        if avg_dd != 0.0:
+            _dd_parts2.append(f"Avg {avg_dd:.1f}% · Med {med_dd:.1f}%")
+        if current_dd_from_ath != 0.0:
+            _dd_parts2.append(f"Now {current_dd_from_ath:.1f}% (peak {ath_date.strftime('%b %Y')})")
+        else:
+            _dd_parts2.append("Now ATH")
+        m4.caption(" · ".join(_dd_parts2))
         if not final_adj_series.empty and final_adj_series.iloc[-1] != 0:
             m5.metric("Leverage", f"{(tax_adj_port_series.iloc[-1]/final_adj_series.iloc[-1]):.2f}x")
         else:

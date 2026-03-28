@@ -55,7 +55,9 @@ def validate():
     # Create a full daily date range for the simulation
     full_dates = data.index
     sim_values = pd.Series(index=full_dates, dtype=float)
-    sim_values.iloc[0] = 100.0 # It might not be exactly the first date of weights, but let's assume match for now
+    quarter_dates = sorted(weights['Date'].unique())
+    sim_start = full_dates[full_dates.searchsorted(quarter_dates[0])]  # First trading day on or after first weights date
+    sim_values.loc[sim_start] = 100.0
     
     # Actually, simpler approach:
     # Iterate through quarters.
@@ -484,6 +486,7 @@ def validate_against_real_indexes():
     comparisons = [
         ("NDX Mega 1.0", "NDXMEGASIM", "NASDAQNDXMEGA", "NASDAQNDXMEGAT"),
         ("NDX Mega 2.0", "NDXMEGA2SIM", "NASDAQNDXMEGA2", "NASDAQNDXMEGA2T"),
+        ("NDX30", "NDX30SIM", "NASDAQNDX30", "NASDAQNDX30T"),
     ]
 
     for label, sim_name, fred_price, fred_total in comparisons:
@@ -592,6 +595,8 @@ def validate_against_real_indexes():
             out_img = os.path.join(config.RESULTS_DIR, "charts", f"{chart_name}.png")
             plt.savefig(out_img, dpi=300, bbox_inches='tight')
             print(f"  Attribution chart saved to {out_img}")
+
+
 
 if __name__ == "__main__":
     validate()

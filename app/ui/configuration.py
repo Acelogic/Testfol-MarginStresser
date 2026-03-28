@@ -197,6 +197,7 @@ def render():
             sel = st.session_state.portfolio_selector
             if sel in display_names:
                 new_idx = display_names.index(sel)
+                new_idx = min(new_idx, len(st.session_state.portfolios) - 1)
                 st.session_state.active_tab_idx = new_idx
                 # Explicitly set p_name to target portfolio's name
                 # (fragment widget cache may not pick up the new default)

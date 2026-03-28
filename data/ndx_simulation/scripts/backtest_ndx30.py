@@ -100,7 +100,8 @@ def backtest():
     # Simulation Variables
     dates = sorted(weights_df['Date'].unique())
     ndx30_values = pd.Series(index=data.index, dtype=float)
-    ndx30_values.iloc[0] = 100.0
+    sim_start = data.index[data.index.searchsorted(dates[0])]  # First trading day on or after first weights date
+    ndx30_values.loc[sim_start] = 100.0
     current_value = 100.0
 
     constituents_history = []

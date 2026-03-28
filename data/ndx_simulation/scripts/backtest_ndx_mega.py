@@ -77,7 +77,8 @@ def backtest():
     # Simulation Variables
     dates = sorted(weights_df['Date'].unique())
     mega_values = pd.Series(index=data.index, dtype=float)
-    mega_values.iloc[0] = 100.0 # Index base 100
+    sim_start = data.index[data.index.searchsorted(dates[0])]  # First trading day on or after first weights date
+    mega_values.loc[sim_start] = 100.0  # Index base 100
     current_value = 100.0
     
     # Store constituents count
