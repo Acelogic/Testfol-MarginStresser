@@ -523,6 +523,14 @@ def render_portfolio_allocation(
             hovertemplate="Correlation: %{y:.2f}<extra></extra>",
         ))
 
+        # Dashed zero line for correlation axis
+        fig_lines.add_shape(
+            type="line",
+            x0=0, x1=1, y0=0, y1=0,
+            xref="paper", yref="y2",
+            line=dict(dash="dash", color="rgba(167, 139, 250, 0.3)", width=1),
+        )
+
         if all_declining_mask.any():
             fig_lines.add_trace(go.Scatter(
                 x=[None], y=[None],
@@ -559,10 +567,7 @@ def render_portfolio_allocation(
             tickvals=[-1, -0.5, 0, 0.5, 1],
             titlefont=dict(color="#a78bfa"),
             tickfont=dict(color="#a78bfa"),
-            zeroline=True,
-            zerolinecolor="rgba(167, 139, 250, 0.3)",
-            zerolinewidth=1,
-            zerolinedash="dash",
+            zeroline=False,
         )
     fig_lines.update_layout(**layout_kwargs)
     st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
