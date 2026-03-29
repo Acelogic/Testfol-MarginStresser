@@ -426,9 +426,9 @@ def render_portfolio_allocation(
             key=f"corr_window{key_suffix}",
             help=(
                 "**Purple line** — Rolling average pairwise correlation between all assets.\n\n"
-                "• **+100** = assets move perfectly together (no diversification)\n"
-                "• **0** = no relationship between asset movements\n"
-                "• **-100** = assets move in opposite directions (ideal diversification)"
+                "- **+100** = assets move perfectly together (no diversification)\n\n"
+                "- **0** = no relationship between asset movements\n\n"
+                "- **-100** = assets move in opposite directions (ideal diversification)"
             ),
         )
         corr_window = corr_window_options[corr_window_label]
