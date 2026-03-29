@@ -296,10 +296,61 @@ def render_portfolio_allocation(
     if total_weight <= 0:
         return
 
-    # Get rebalance dates from composition_df
+    # Get rebalance dates from composition_df, filling gaps with synthetic dates.
+    # The shadow backtest may only have composition from when real ETF data starts
+    # (e.g. ZROZ from 2009), but component_prices (SIM) go back further.
     rebal_dates: list[pd.Timestamp] = []
     if not composition_df.empty:
         rebal_dates = sorted(pd.to_datetime(composition_df["Date"].unique()))
+
+    # If composition doesn't cover the full price range, infer the rebalance
+    # frequency from the existing dates and fill the gap with synthetic ones.
+    idx = prices.index
+    if rebal_dates and (rebal_dates[0] - idx[0]).days > 730:
+        # Infer frequency from composition intervals
+        if len(rebal_dates) >= 2:
+            intervals = [(rebal_dates[i+1] - rebal_dates[i]).days for i in range(min(5, len(rebal_dates)-1))]
+            avg_interval = sum(intervals) / len(intervals)
+            if avg_interval < 45:
+                inferred_freq = "Monthly"
+            elif avg_interval < 120:
+                inferred_freq = "Quarterly"
+            else:
+                inferred_freq = "Yearly"
+            # Infer month/day from first composition date
+            rebal_month = rebal_dates[0].month
+            rebal_day = rebal_dates[0].day
+        else:
+            inferred_freq = "Yearly"
+            rebal_month, rebal_day = 1, 1
+
+        # Generate synthetic dates for the gap before composition starts
+        gap_end = rebal_dates[0]
+        synthetic: list[pd.Timestamp] = []
+        if inferred_freq == "Monthly":
+            for yr in range(idx[0].year, gap_end.year + 1):
+                for mo in range(1, 13):
+                    target = pd.Timestamp(yr, mo, min(rebal_day, 28))
+                    if idx[0] < target < gap_end:
+                        loc = idx.searchsorted(target)
+                        if 0 < loc < len(idx):
+                            synthetic.append(idx[loc])
+        elif inferred_freq == "Quarterly":
+            for yr in range(idx[0].year, gap_end.year + 1):
+                for mo in [1, 4, 7, 10]:
+                    target = pd.Timestamp(yr, mo, min(rebal_day, 28))
+                    if idx[0] < target < gap_end:
+                        loc = idx.searchsorted(target)
+                        if 0 < loc < len(idx):
+                            synthetic.append(idx[loc])
+        else:  # Yearly
+            for yr in range(idx[0].year + 1, gap_end.year + 1):
+                target = pd.Timestamp(yr, rebal_month, min(rebal_day, 28))
+                if idx[0] < target < gap_end:
+                    loc = idx.searchsorted(target)
+                    if 0 < loc < len(idx):
+                        synthetic.append(idx[loc])
+        rebal_dates = sorted(set(synthetic + rebal_dates))
 
     # Build segment boundaries: [start, rebal_1, rebal_2, ..., end]
     seg_starts = [prices.index[0]]
