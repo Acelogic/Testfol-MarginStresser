@@ -428,9 +428,7 @@ def render_portfolio_allocation(
                 "**Purple line** — Rolling average pairwise correlation between all assets.\n\n"
                 "• **+100** = assets move perfectly together (no diversification)\n"
                 "• **0** = no relationship between asset movements\n"
-                "• **-100** = assets move in opposite directions (ideal diversification)\n\n"
-                "**Red shading** = periods where ALL assets are declining simultaneously "
-                "(diversification failure)."
+                "• **-100** = assets move in opposite directions (ideal diversification)"
             ),
         )
         corr_window = corr_window_options[corr_window_label]
@@ -443,13 +441,6 @@ def render_portfolio_allocation(
             pair_corrs[f"{a}_{b}"] = ret[a].rolling(corr_window, min_periods=corr_window // 2).corr(ret[b])
         avg_corr = pair_corrs.mean(axis=1).reindex(positions.index)
 
-        # Detect all-assets-declining periods (use shorter of corr window or 63 days)
-        decline_window = min(corr_window, 63)
-        all_declining_mask = pd.Series(True, index=ret.index)
-        for t in available:
-            rolling_ret = ret[t].rolling(decline_window, min_periods=decline_window // 2).sum()
-            all_declining_mask = all_declining_mask & (rolling_ret < 0)
-        all_declining_mask = all_declining_mask.reindex(positions.index, fill_value=False)
 
     # --- Component Performance Chart (line chart showing each position's actual value) ---
     st.subheader("Component Performance")
@@ -495,29 +486,6 @@ def render_portfolio_allocation(
             yanchor="bottom",
         )
 
-    # Red shaded regions for all-declining periods
-    if show_correlation and all_declining_mask.any():
-        in_region = False
-        region_start = None
-        for date, declining in all_declining_mask.items():
-            if declining and not in_region:
-                region_start = date
-                in_region = True
-            elif not declining and in_region:
-                fig_lines.add_vrect(
-                    x0=region_start, x1=date,
-                    fillcolor="rgba(239, 68, 68, 0.10)",
-                    line=dict(color="rgba(239, 68, 68, 0.3)", width=1),
-                    layer="below",
-                )
-                in_region = False
-        if in_region and region_start is not None:
-            fig_lines.add_vrect(
-                x0=region_start, x1=positions.index[-1],
-                fillcolor="rgba(239, 68, 68, 0.10)",
-                line=dict(color="rgba(239, 68, 68, 0.3)", width=1),
-                layer="below",
-            )
 
     # Correlation line on secondary y-axis
     if show_correlation:
