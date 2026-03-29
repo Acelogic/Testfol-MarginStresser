@@ -443,10 +443,11 @@ def render_portfolio_allocation(
             pair_corrs[f"{a}_{b}"] = ret[a].rolling(corr_window, min_periods=corr_window // 2).corr(ret[b])
         avg_corr = pair_corrs.mean(axis=1).reindex(positions.index)
 
-        # Detect all-assets-declining periods
+        # Detect all-assets-declining periods (use shorter of corr window or 63 days)
+        decline_window = min(corr_window, 63)
         all_declining_mask = pd.Series(True, index=ret.index)
         for t in available:
-            rolling_ret = ret[t].rolling(corr_window, min_periods=corr_window // 2).sum()
+            rolling_ret = ret[t].rolling(decline_window, min_periods=decline_window // 2).sum()
             all_declining_mask = all_declining_mask & (rolling_ret < 0)
         all_declining_mask = all_declining_mask.reindex(positions.index, fill_value=False)
 
