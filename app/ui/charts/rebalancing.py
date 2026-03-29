@@ -425,21 +425,45 @@ def render_portfolio_allocation(
             index=3,  # default "1 year"
             key=f"corr_window{key_suffix}",
             help=(
-                "**Purple line** — Rolling average pairwise correlation between all assets.\n\n"
-                "- **+100** = assets move perfectly together (no diversification)\n\n"
-                "- **0** = no relationship between asset movements\n\n"
-                "- **-100** = assets move in opposite directions (ideal diversification)"
+                "**Purple line** — Rolling average correlation of hedges vs equity core.\n\n"
+                "- **+100** = hedges moving with equities (no diversification)\n\n"
+                "- **0** = no relationship between hedges and equities\n\n"
+                "- **-100** = hedges moving opposite to equities (ideal diversification)"
             ),
         )
         corr_window = corr_window_options[corr_window_label]
 
-        # Compute rolling pairwise correlations and average them
+        # Classify assets: equity-like vs hedges/diversifiers
+        _equity_keywords = {
+            "SPY", "SPYSIM", "VOO", "VOOSIM", "VTI", "VTISIM", "QQQ", "QQQSIM",
+            "SSO", "SSOSIM", "UPRO", "UPROSIM", "TQQQ", "TQQQSIM",
+            "NDXMEGASIM", "NDXSIM", "NDX30SIM",
+            "VUG", "VUGSIM", "VTV", "VTVSIM", "VO", "VOSIM",
+            "VB", "VBSIM", "IWM", "IWMSIM",
+        }
+        equity_assets = [t for t in available if t.upper() in _equity_keywords]
+        diversifiers = [t for t in available if t.upper() not in _equity_keywords]
+
+        # Compute rolling correlation: hedges vs equity core
         ret = modified_returns[available].dropna()
-        pairs = [(available[i], available[j]) for i in range(len(available)) for j in range(i+1, len(available))]
-        pair_corrs = pd.DataFrame(index=ret.index)
-        for a, b in pairs:
-            pair_corrs[f"{a}_{b}"] = ret[a].rolling(corr_window, min_periods=corr_window // 2).corr(ret[b])
-        avg_corr = pair_corrs.mean(axis=1).reindex(positions.index)
+        if equity_assets and diversifiers:
+            # Equity core = weight-averaged equity returns
+            eq_total_w = sum(weights.get(t, 1) for t in equity_assets)
+            equity_ret = sum(
+                ret[t] * (weights.get(t, 1) / eq_total_w) for t in equity_assets
+            )
+            # Average each hedge's correlation to equity core
+            hedge_corrs = pd.DataFrame(index=ret.index)
+            for t in diversifiers:
+                hedge_corrs[t] = ret[t].rolling(corr_window, min_periods=corr_window // 2).corr(equity_ret)
+            avg_corr = hedge_corrs.mean(axis=1).reindex(positions.index)
+        else:
+            # Fallback: all pairwise (no clear equity/hedge split)
+            pairs = [(available[i], available[j]) for i in range(len(available)) for j in range(i+1, len(available))]
+            pair_corrs = pd.DataFrame(index=ret.index)
+            for a, b in pairs:
+                pair_corrs[f"{a}_{b}"] = ret[a].rolling(corr_window, min_periods=corr_window // 2).corr(ret[b])
+            avg_corr = pair_corrs.mean(axis=1).reindex(positions.index)
 
 
     # --- Component Performance Chart (line chart showing each position's actual value) ---
@@ -527,7 +551,7 @@ def render_portfolio_allocation(
     )
     if show_correlation:
         layout_kwargs["yaxis2"] = dict(
-            title="Avg Correlation",
+            title="Hedge↔Equity Corr",
             overlaying="y",
             side="right",
             range=[-105, 105],
@@ -541,27 +565,8 @@ def render_portfolio_allocation(
     st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
 
     # --- Per-Asset Correlation Breakdown ---
-    if show_correlation and len(available) >= 3:
-        # Classify assets: equity-like vs diversifiers
-        _equity_keywords = {
-            "SPY", "SPYSIM", "VOO", "VOOSIM", "VTI", "VTISIM", "QQQ", "QQQSIM",
-            "SSO", "SSOSIM", "UPRO", "UPROSIM", "TQQQ", "TQQQSIM",
-            "NDXMEGASIM", "NDXSIM", "NDX30SIM",
-            "VUG", "VUGSIM", "VTV", "VTVSIM", "VO", "VOSIM",
-            "VB", "VBSIM", "IWM", "IWMSIM",
-        }
-        equity_assets = [t for t in available if t.upper() in _equity_keywords]
-        diversifiers = [t for t in available if t.upper() not in _equity_keywords]
-
-        if equity_assets and diversifiers:
-            with st.expander("Per-Asset Correlation vs Equity Core", expanded=False):
-                # Compute equity core return (weight-averaged)
-                eq_total_w = sum(weights.get(t, 1) for t in equity_assets)
-                equity_ret = sum(
-                    ret[t] * (weights.get(t, 1) / eq_total_w) for t in equity_assets
-                )
-
-                # Compute each diversifier's rolling correlation to equity core
+    if show_correlation and equity_assets and diversifiers and len(diversifiers) >= 2:
+        with st.expander("Per-Asset Correlation vs Equity Core", expanded=False):
                 fig_breakdown = go.Figure()
                 for t in diversifiers:
                     corr_vs_eq = ret[t].rolling(corr_window, min_periods=corr_window // 2).corr(equity_ret)
