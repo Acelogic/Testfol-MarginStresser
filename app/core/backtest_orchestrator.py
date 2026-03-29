@@ -218,6 +218,7 @@ def run_single_backtest(
                     start_date=start_date,
                     end_date=end_date,
                     api_port_series=port_series,
+                    prices_df=prices_df if not prices_df.empty else None,
                     rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
                     cashflow=shadow_cashflow,
                     cashflow_freq=cashflow_freq,
