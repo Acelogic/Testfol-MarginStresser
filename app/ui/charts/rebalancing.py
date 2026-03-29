@@ -433,16 +433,26 @@ def render_portfolio_allocation(
         )
         corr_window = corr_window_options[corr_window_label]
 
-        # Classify assets: equity-like vs hedges/diversifiers
-        _equity_keywords = {
-            "SPY", "SPYSIM", "VOO", "VOOSIM", "VTI", "VTISIM", "QQQ", "QQQSIM",
-            "SSO", "SSOSIM", "UPRO", "UPROSIM", "TQQQ", "TQQQSIM",
-            "NDXMEGASIM", "NDXSIM", "NDX30SIM",
-            "VUG", "VUGSIM", "VTV", "VTVSIM", "VO", "VOSIM",
-            "VB", "VBSIM", "IWM", "IWMSIM",
+        # Classify assets: define hedges explicitly, everything else is equity
+        _hedge_keywords = {
+            # Bonds / Treasuries
+            "TLT", "TLTSIM", "ZROZ", "ZROZSIM", "IEF", "IEFSIM", "IEI", "IEISIM",
+            "SHY", "SHYSIM", "BND", "BNDSIM", "TMF", "TMFSIM",
+            "EDV", "EDVSIM", "GOVT", "GOVTSIM", "AGG", "AGGSIM",
+            # Metals
+            "GLD", "GLDSIM", "SLV", "SLVSIM", "IAU", "IAUSIM",
+            # International
+            "VXUS", "VXUSSIM", "EFA", "EFASIM", "VEA", "VEASIM",
+            "VWO", "VWOSIM", "IEMG", "IEMGSIM",
+            # Commodities
+            "GSG", "GSGSIM", "DBC", "DBCSIM", "PDBC", "PDBCSIM",
+            # Managed Futures
+            "DBMF", "DBMFSIM", "KMLM", "KMLMSIM",
+            # Cash / Bills
+            "BIL", "TBILL", "CASHX", "SHV", "SHVSIM",
         }
-        equity_assets = [t for t in available if t.upper() in _equity_keywords]
-        diversifiers = [t for t in available if t.upper() not in _equity_keywords]
+        diversifiers = [t for t in available if t.upper() in _hedge_keywords]
+        equity_assets = [t for t in available if t.upper() not in _hedge_keywords]
 
         # Compute rolling correlation: hedges vs equity core
         ret = modified_returns[available].dropna()
