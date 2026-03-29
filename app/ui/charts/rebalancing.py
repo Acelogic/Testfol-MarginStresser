@@ -540,15 +540,6 @@ def render_portfolio_allocation(
             line=dict(dash="dash", color="rgba(167, 139, 250, 0.3)", width=1),
         )
 
-        if all_declining_mask.any():
-            fig_lines.add_trace(go.Scatter(
-                x=[None], y=[None],
-                name="All Declining",
-                mode="markers",
-                marker=dict(size=10, color="rgba(239, 68, 68, 0.5)", symbol="square"),
-                showlegend=True,
-            ))
-
     layout_kwargs = dict(
         yaxis=dict(
             title="Position Value ($)",
