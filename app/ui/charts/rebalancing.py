@@ -243,6 +243,7 @@ def render_portfolio_allocation(
     start_val: float,
     unique_id: str = "",
     port_series: pd.Series | None = None,
+    rebal_config: dict | None = None,
 ):
     """Render a 100% stacked area chart showing portfolio allocation drift over time."""
     if component_prices.empty or not allocation:
@@ -296,38 +297,26 @@ def render_portfolio_allocation(
     if total_weight <= 0:
         return
 
-    # Get rebalance dates from composition_df, filling gaps with synthetic dates.
+    # Get rebalance dates from composition_df, filling gaps with synthetic dates
+    # generated from the portfolio's rebalance config.
     # The shadow backtest may only have composition from when real ETF data starts
     # (e.g. ZROZ from 2009), but component_prices (SIM) go back further.
     rebal_dates: list[pd.Timestamp] = []
     if not composition_df.empty:
         rebal_dates = sorted(pd.to_datetime(composition_df["Date"].unique()))
 
-    # If composition doesn't cover the full price range, infer the rebalance
-    # frequency from the existing dates and fill the gap with synthetic ones.
+    # If composition doesn't cover the full price range, generate synthetic
+    # rebalance dates from portfolio config for the gap period.
+    rc = rebal_config or {}
     idx = prices.index
     if rebal_dates and (rebal_dates[0] - idx[0]).days > 730:
-        # Infer frequency from composition intervals
-        if len(rebal_dates) >= 2:
-            intervals = [(rebal_dates[i+1] - rebal_dates[i]).days for i in range(min(5, len(rebal_dates)-1))]
-            avg_interval = sum(intervals) / len(intervals)
-            if avg_interval < 45:
-                inferred_freq = "Monthly"
-            elif avg_interval < 120:
-                inferred_freq = "Quarterly"
-            else:
-                inferred_freq = "Yearly"
-            # Infer month/day from first composition date
-            rebal_month = rebal_dates[0].month
-            rebal_day = rebal_dates[0].day
-        else:
-            inferred_freq = "Yearly"
-            rebal_month, rebal_day = 1, 1
+        freq = rc.get("freq", "Yearly")
+        rebal_month = rc.get("month", 1)
+        rebal_day = rc.get("day", 1)
 
-        # Generate synthetic dates for the gap before composition starts
         gap_end = rebal_dates[0]
         synthetic: list[pd.Timestamp] = []
-        if inferred_freq == "Monthly":
+        if freq == "Monthly":
             for yr in range(idx[0].year, gap_end.year + 1):
                 for mo in range(1, 13):
                     target = pd.Timestamp(yr, mo, min(rebal_day, 28))
@@ -335,7 +324,7 @@ def render_portfolio_allocation(
                         loc = idx.searchsorted(target)
                         if 0 < loc < len(idx):
                             synthetic.append(idx[loc])
-        elif inferred_freq == "Quarterly":
+        elif freq == "Quarterly":
             for yr in range(idx[0].year, gap_end.year + 1):
                 for mo in [1, 4, 7, 10]:
                     target = pd.Timestamp(yr, mo, min(rebal_day, 28))
@@ -540,7 +529,7 @@ def render_portfolio_allocation(
     st.plotly_chart(fig, use_container_width=True, key=f"port_alloc_area{key_suffix}")
 
 
-def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None, port_series=None):
+def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None, port_series=None, rebal_config=None):
     if trades_df.empty:
         st.info("No rebalancing events found.")
         return
@@ -834,6 +823,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             start_val=start_val,
             unique_id=unique_id or "",
             port_series=port_series,
+            rebal_config=rebal_config,
         )
 
     # Portfolio Composition

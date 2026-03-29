@@ -690,6 +690,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             retirement_income=retirement_income,
             retirement_year=_retirement_year,
             port_series=port_series,
+            rebal_config=results.get("_reb", {}),
         )
 
     # --- Tax Analysis (charts) within same tax tab ---
