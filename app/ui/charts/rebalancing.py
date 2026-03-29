@@ -426,9 +426,9 @@ def render_portfolio_allocation(
             key=f"corr_window{key_suffix}",
             help=(
                 "**Purple line** — Rolling average pairwise correlation between all assets.\n\n"
-                "• **+1.0** = assets move perfectly together (no diversification)\n"
-                "• **0.0** = no relationship between asset movements\n"
-                "• **-1.0** = assets move in opposite directions (ideal diversification)\n\n"
+                "• **+100** = assets move perfectly together (no diversification)\n"
+                "• **0** = no relationship between asset movements\n"
+                "• **-100** = assets move in opposite directions (ideal diversification)\n\n"
                 "**Red shading** = periods where ALL assets are declining simultaneously "
                 "(diversification failure)."
             ),
@@ -523,13 +523,13 @@ def render_portfolio_allocation(
     if show_correlation:
         fig_lines.add_trace(go.Scatter(
             x=avg_corr.index,
-            y=avg_corr,
+            y=avg_corr * 100,
             name="Avg Correlation",
             mode="lines",
             line=dict(width=1.5, color="#a78bfa"),
             yaxis="y2",
             opacity=0.85,
-            hovertemplate="Correlation: %{y:.2f}<extra></extra>",
+            hovertemplate="Correlation: %{y:.0f}<extra></extra>",
         ))
 
         # Dashed zero line for correlation axis
@@ -571,9 +571,9 @@ def render_portfolio_allocation(
             title="Avg Correlation",
             overlaying="y",
             side="right",
-            range=[-1.05, 1.05],
+            range=[-105, 105],
             showgrid=False,
-            tickvals=[-1, -0.5, 0, 0.5, 1],
+            tickvals=[-100, -50, 0, 50, 100],
             titlefont=dict(color="#a78bfa"),
             tickfont=dict(color="#a78bfa"),
             zeroline=False,
@@ -606,14 +606,14 @@ def render_portfolio_allocation(
                 fig_breakdown = go.Figure()
                 for t in diversifiers:
                     corr_vs_eq = ret[t].rolling(corr_window, min_periods=corr_window // 2).corr(equity_ret)
-                    corr_vs_eq = corr_vs_eq.reindex(positions.index)
+                    corr_vs_eq = corr_vs_eq.reindex(positions.index) * 100
                     fig_breakdown.add_trace(go.Scatter(
                         x=corr_vs_eq.index,
                         y=corr_vs_eq,
                         name=f"{t} ↔ Equities",
                         mode="lines",
                         line=dict(width=1.5, color=cmap.get(t, "#94a3b8")),
-                        hovertemplate=f"{t} corr: %{{y:.2f}}<extra></extra>",
+                        hovertemplate=f"{t} corr: %{{y:.0f}}<extra></extra>",
                     ))
 
                 # Zero line
@@ -626,8 +626,8 @@ def render_portfolio_allocation(
                 fig_breakdown.update_layout(
                     yaxis=dict(
                         title="Correlation to Equity Core",
-                        range=[-1.05, 1.05],
-                        tickvals=[-1, -0.5, 0, 0.5, 1],
+                        range=[-105, 105],
+                        tickvals=[-100, -50, 0, 50, 100],
                         gridcolor="rgba(255,255,255,0.1)",
                     ),
                     xaxis=dict(title="Date", gridcolor="rgba(255,255,255,0.1)"),
