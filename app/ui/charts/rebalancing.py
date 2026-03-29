@@ -409,6 +409,8 @@ def render_portfolio_allocation(
     # Build consistent color map for all charts below (sorted to match composition bar chart)
     cmap = _build_color_map(sorted(available))
 
+    key_suffix = f"_{unique_id}" if unique_id else ""
+
     # --- Correlation Overlay ---
     corr_window_options = {
         "1 month": 21, "3 months": 63, "6 months": 126,
@@ -421,7 +423,7 @@ def render_portfolio_allocation(
             "Correlation Window",
             list(corr_window_options.keys()),
             index=3,  # default "1 year"
-            key=f"corr_window_{unique_id}" if unique_id else "corr_window",
+            key=f"corr_window{key_suffix}",
         )
         corr_window = corr_window_options[corr_window_label]
 
@@ -530,7 +532,6 @@ def render_portfolio_allocation(
                 showlegend=True,
             ))
 
-    key_suffix = f"_{unique_id}" if unique_id else ""
     layout_kwargs = dict(
         yaxis=dict(
             title="Position Value ($)",
@@ -561,6 +562,7 @@ def render_portfolio_allocation(
             zeroline=True,
             zerolinecolor="rgba(167, 139, 250, 0.3)",
             zerolinewidth=1,
+            zerolinedash="dash",
         )
     fig_lines.update_layout(**layout_kwargs)
     st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
