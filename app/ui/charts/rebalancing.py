@@ -409,6 +409,37 @@ def render_portfolio_allocation(
     # Build consistent color map for all charts below (sorted to match composition bar chart)
     cmap = _build_color_map(sorted(available))
 
+    # --- Correlation Overlay ---
+    corr_window_options = {
+        "1 month": 21, "3 months": 63, "6 months": 126,
+        "1 year": 252, "2 years": 504, "3 years": 756, "5 years": 1260,
+    }
+    show_correlation = len(available) >= 2
+
+    if show_correlation:
+        corr_window_label = st.selectbox(
+            "Correlation Window",
+            list(corr_window_options.keys()),
+            index=3,  # default "1 year"
+            key=f"corr_window_{unique_id}" if unique_id else "corr_window",
+        )
+        corr_window = corr_window_options[corr_window_label]
+
+        # Compute rolling pairwise correlations and average them
+        ret = modified_returns[available].dropna()
+        pairs = [(available[i], available[j]) for i in range(len(available)) for j in range(i+1, len(available))]
+        pair_corrs = pd.DataFrame(index=ret.index)
+        for a, b in pairs:
+            pair_corrs[f"{a}_{b}"] = ret[a].rolling(corr_window, min_periods=corr_window // 2).corr(ret[b])
+        avg_corr = pair_corrs.mean(axis=1).reindex(positions.index)
+
+        # Detect all-assets-declining periods
+        all_declining_mask = pd.Series(True, index=ret.index)
+        for t in available:
+            rolling_ret = ret[t].rolling(corr_window, min_periods=corr_window // 2).sum()
+            all_declining_mask = all_declining_mask & (rolling_ret < 0)
+        all_declining_mask = all_declining_mask.reindex(positions.index, fill_value=False)
+
     # --- Component Performance Chart (line chart showing each position's actual value) ---
     st.subheader("Component Performance")
 
@@ -453,8 +484,54 @@ def render_portfolio_allocation(
             yanchor="bottom",
         )
 
+    # Red shaded regions for all-declining periods
+    if show_correlation and all_declining_mask.any():
+        in_region = False
+        region_start = None
+        for date, declining in all_declining_mask.items():
+            if declining and not in_region:
+                region_start = date
+                in_region = True
+            elif not declining and in_region:
+                fig_lines.add_vrect(
+                    x0=region_start, x1=date,
+                    fillcolor="rgba(239, 68, 68, 0.10)",
+                    line=dict(color="rgba(239, 68, 68, 0.3)", width=1),
+                    layer="below",
+                )
+                in_region = False
+        if in_region and region_start is not None:
+            fig_lines.add_vrect(
+                x0=region_start, x1=positions.index[-1],
+                fillcolor="rgba(239, 68, 68, 0.10)",
+                line=dict(color="rgba(239, 68, 68, 0.3)", width=1),
+                layer="below",
+            )
+
+    # Correlation line on secondary y-axis
+    if show_correlation:
+        fig_lines.add_trace(go.Scatter(
+            x=avg_corr.index,
+            y=avg_corr,
+            name="Avg Correlation",
+            mode="lines",
+            line=dict(width=1.5, color="#a78bfa"),
+            yaxis="y2",
+            opacity=0.85,
+            hovertemplate="Correlation: %{y:.2f}<extra></extra>",
+        ))
+
+        if all_declining_mask.any():
+            fig_lines.add_trace(go.Scatter(
+                x=[None], y=[None],
+                name="All Declining",
+                mode="markers",
+                marker=dict(size=10, color="rgba(239, 68, 68, 0.5)", symbol="square"),
+                showlegend=True,
+            ))
+
     key_suffix = f"_{unique_id}" if unique_id else ""
-    fig_lines.update_layout(
+    layout_kwargs = dict(
         yaxis=dict(
             title="Position Value ($)",
             type="log",
@@ -468,9 +545,24 @@ def render_portfolio_allocation(
         height=500,
         showlegend=True,
         hovermode="x unified",
-        margin=dict(l=80, r=20, t=20, b=40),
+        margin=dict(l=80, r=80, t=20, b=40),
         legend=dict(orientation="h", yanchor="bottom", y=-0.25, xanchor="center", x=0.5),
     )
+    if show_correlation:
+        layout_kwargs["yaxis2"] = dict(
+            title="Avg Correlation",
+            overlaying="y",
+            side="right",
+            range=[-1.05, 1.05],
+            showgrid=False,
+            tickvals=[-1, -0.5, 0, 0.5, 1],
+            titlefont=dict(color="#a78bfa"),
+            tickfont=dict(color="#a78bfa"),
+            zeroline=True,
+            zerolinecolor="rgba(167, 139, 250, 0.3)",
+            zerolinewidth=1,
+        )
+    fig_lines.update_layout(**layout_kwargs)
     st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
 
     # --- Percentage Stacked Area Chart ---
