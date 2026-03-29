@@ -581,6 +581,71 @@ def render_portfolio_allocation(
     fig_lines.update_layout(**layout_kwargs)
     st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
 
+    # --- Per-Asset Correlation Breakdown ---
+    if show_correlation and len(available) >= 3:
+        # Classify assets: equity-like vs diversifiers
+        _equity_keywords = {
+            "SPY", "SPYSIM", "VOO", "VOOSIM", "VTI", "VTISIM", "QQQ", "QQQSIM",
+            "SSO", "SSOSIM", "UPRO", "UPROSIM", "TQQQ", "TQQQSIM",
+            "NDXMEGASIM", "NDXSIM", "NDX30SIM",
+            "VUG", "VUGSIM", "VTV", "VTVSIM", "VO", "VOSIM",
+            "VB", "VBSIM", "IWM", "IWMSIM",
+        }
+        equity_assets = [t for t in available if t.upper() in _equity_keywords]
+        diversifiers = [t for t in available if t.upper() not in _equity_keywords]
+
+        if equity_assets and diversifiers:
+            with st.expander("Per-Asset Correlation vs Equity Core", expanded=False):
+                # Compute equity core return (weight-averaged)
+                eq_total_w = sum(weights.get(t, 1) for t in equity_assets)
+                equity_ret = sum(
+                    ret[t] * (weights.get(t, 1) / eq_total_w) for t in equity_assets
+                )
+
+                # Compute each diversifier's rolling correlation to equity core
+                fig_breakdown = go.Figure()
+                for t in diversifiers:
+                    corr_vs_eq = ret[t].rolling(corr_window, min_periods=corr_window // 2).corr(equity_ret)
+                    corr_vs_eq = corr_vs_eq.reindex(positions.index)
+                    fig_breakdown.add_trace(go.Scatter(
+                        x=corr_vs_eq.index,
+                        y=corr_vs_eq,
+                        name=f"{t} ↔ Equities",
+                        mode="lines",
+                        line=dict(width=1.5, color=cmap.get(t, "#94a3b8")),
+                        hovertemplate=f"{t} corr: %{{y:.2f}}<extra></extra>",
+                    ))
+
+                # Zero line
+                fig_breakdown.add_shape(
+                    type="line", x0=0, x1=1, y0=0, y1=0,
+                    xref="paper", yref="y",
+                    line=dict(dash="dash", color="rgba(255,255,255,0.3)", width=1),
+                )
+
+                fig_breakdown.update_layout(
+                    yaxis=dict(
+                        title="Correlation to Equity Core",
+                        range=[-1.05, 1.05],
+                        tickvals=[-1, -0.5, 0, 0.5, 1],
+                        gridcolor="rgba(255,255,255,0.1)",
+                    ),
+                    xaxis=dict(title="Date", gridcolor="rgba(255,255,255,0.1)"),
+                    template="plotly_dark",
+                    height=350,
+                    showlegend=True,
+                    hovermode="x unified",
+                    margin=dict(l=80, r=20, t=20, b=40),
+                    legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
+                )
+                st.plotly_chart(fig_breakdown, use_container_width=True, key=f"corr_breakdown{key_suffix}")
+                st.caption(
+                    "Rolling correlation of each diversifier vs the equity-weighted core. "
+                    "**Positive** = moving with equities (pinned). "
+                    "**Negative** = moving against equities (diversifying). "
+                    f"Equity core: {', '.join(equity_assets)}."
+                )
+
     # --- Percentage Stacked Area Chart ---
     pct = positions.div(row_totals, axis=0) * 100
     pct = pct.fillna(0)
