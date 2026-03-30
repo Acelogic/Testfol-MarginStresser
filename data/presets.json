@@ -28,7 +28,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -238,8 +238,10 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
-            "freq": "Yearly"
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
         }
     },
     {
@@ -348,8 +350,10 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
-            "freq": "Yearly"
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
         }
     },
     {
@@ -369,7 +373,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -386,7 +390,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "None",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -403,7 +407,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "None",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -486,7 +490,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -515,7 +519,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -567,7 +571,7 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"
@@ -650,7 +654,36 @@
             }
         ],
         "rebalance": {
-            "mode": "Standard",
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "60% SSO / 20% VXUS / 20% GLD",
+        "allocation": [
+            {
+                "Ticker": "SPYSIM?L=2",
+                "Weight %": 60.0,
+                "Maint %": 50.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
             "freq": "Yearly",
             "day": 1,
             "month_str": "Jan"

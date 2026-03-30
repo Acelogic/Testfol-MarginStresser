@@ -13,8 +13,17 @@ def render():
     with st.sidebar:
         st.title("📈 Testfol Charting")
 
-        with st.expander("📋 Changelog (v3.5.0)", expanded=False):
+        with st.expander("📋 Changelog (v3.6.0)", expanded=False):
             st.markdown("""
+**v3.6.0** — Fresh Start Returns & Rebalance Timing Fix
+- **Fresh Start** yearly column: per-year backtests for drift-free annual returns
+- **Fresh Start toggle**: switch entire Returns Analysis to use fresh-start data
+- Stitched fresh-start series for quarterly, monthly, daily & drawdown breakdowns
+- **Rebalance timing fix**: Custom mode now correctly triggers on target date (was using end-of-period)
+- Leveraged presets switched from Standard to Custom (Jan 1) rebalancing
+- Single-ticker presets (QLD, QQUP) set to no rebalancing
+- "None" rebalance mode added to UI
+
 **v3.5.0** — Drawdowns Tab & Corrections Analysis
 - New **Drawdowns** tab in Returns Analysis
 - Corrections >5% with SPY comparison, severity filter

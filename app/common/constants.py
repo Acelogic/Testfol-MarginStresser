@@ -8,6 +8,7 @@ class Freq:
 
 
 class RebalMode:
+    NONE = "None"
     STANDARD = "Standard"
     CUSTOM = "Custom"
     THRESHOLD = "Threshold"

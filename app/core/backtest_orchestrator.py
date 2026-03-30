@@ -145,7 +145,8 @@ def run_single_backtest(
         for t in alloc_map
     )
     uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
-    use_local_engine = has_ndxmega or uses_threshold
+    no_rebal = r_mode == RebalMode.NONE
+    use_local_engine = has_ndxmega or uses_threshold or no_rebal
 
     # Cashflow settings
     bt_cashflow = 0.0 if pay_down_margin else cashflow_amount
@@ -260,7 +261,7 @@ def run_single_backtest(
             start_date=start_date,
             end_date=end_date,
             api_port_series=None,
-            rebalance_freq=r_mode if uses_threshold else reb.get("freq", "Yearly"),
+            rebalance_freq="None" if no_rebal else (r_mode if (uses_threshold or r_mode == "Custom") else reb.get("freq", "Yearly")),
             cashflow=shadow_cashflow,
             cashflow_freq=cashflow_freq,
             invest_dividends=invest_div,
@@ -310,6 +311,8 @@ def run_single_backtest(
         "unrealized_pl_df": unrealized_pl_df,
         "component_prices": prices_df,
         "allocation": alloc_map,
+        "maint_pcts": maint_pcts,
+        "rebalance": reb,
         "logs": logs,
         "composition": composition_df,
         "composition_df": composition_df,
@@ -583,7 +586,7 @@ def run_multi_backtest(
                                 start_date=common_start.strftime("%Y-%m-%d"),
                                 end_date=end_date,
                                 api_port_series=None,
-                                rebalance_freq=r_mode if uses_threshold else reb.get("freq", "Yearly"),
+                                rebalance_freq="None" if r_mode == RebalMode.NONE else (r_mode if uses_threshold else reb.get("freq", "Yearly")),
                                 cashflow=shadow_cf,
                                 cashflow_freq=cashflow_freq,
                                 invest_dividends=invest_div,

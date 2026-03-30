@@ -208,11 +208,19 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
             </div>
             """, unsafe_allow_html=True)
 
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None):
-    daily_ret = port_series.pct_change().dropna()
-    monthly_ret = _resample_returns(port_series, "ME")
-    quarterly_ret = _resample_returns(port_series, "QE")
-    annual_ret = _resample_returns(port_series, "YE")
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None, fresh_yearly=None, fresh_series=None):
+    # Toggle: use fresh-start series for period breakdowns
+    has_fresh_data = fresh_yearly and len(fresh_yearly) > 0 and fresh_series is not None
+    use_fresh = False
+    if has_fresh_data:
+        use_fresh = st.toggle("Use Fresh Start returns for period breakdowns", value=False, key=f"fresh_toggle_{unique_id}")
+
+    active_series = fresh_series if use_fresh else port_series
+
+    daily_ret = active_series.pct_change().dropna()
+    monthly_ret = _resample_returns(active_series, "ME")
+    quarterly_ret = _resample_returns(active_series, "QE")
+    annual_ret = _resample_returns(active_series, "YE")
 
     # --- DISTRIBUTION HELPER ---
     def render_distribution(ret_series, period_label, freq_label):
@@ -352,42 +360,49 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         if series.empty: return
         quarterly_ret = _resample_returns(series, "QE")
 
-        
         q_ret = quarterly_ret.to_frame(name="Return")
         q_ret["Year"] = q_ret.index.year
         q_ret["Quarter"] = q_ret.index.quarter
         q_ret["Quarter Name"] = "Q" + q_ret["Quarter"].astype(str)
-        
+
         pivot = q_ret.pivot(index="Year", columns="Quarter", values="Return")
         for i in range(1, 5):
             if i not in pivot.columns: pivot[i] = float("nan")
         pivot = pivot.sort_index(ascending=True)
-        
-
 
         quarter_names = ["Q1", "Q2", "Q3", "Q4"]
         quarterly_avgs = pivot.mean()
         z_data = pivot.values
         z_avgs = quarterly_avgs.values.reshape(1, -1)
         z_combined_main = np.concatenate([z_data, z_avgs], axis=0)
-        
+
         years = pivot.index
         yearly_col = []
         for y in years:
-            # Calculate geometric sum of the quarters for consistency
             row = pivot.loc[y]
             ret = (1 + row.fillna(0)).prod() - 1
             yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
 
+        # Fresh-start yearly column (suppress when toggle is on — whole table is already fresh)
+        has_fresh = fresh_yearly and len(fresh_yearly) > 0 and not use_fresh
+        yearly_label = "Continuous" if has_fresh else "Yearly"
+        if has_fresh:
+            fresh_col = [fresh_yearly.get(y, float("nan")) for y in years]
+            fresh_avg = np.nanmean(fresh_col) if len(fresh_col) > 0 else float("nan")
+            z_combined_fresh = np.array(fresh_col + [fresh_avg]).reshape(-1, 1)
+
         y_labels = [str(y) for y in pivot.index] + ["Average"]
-        
+
         # Scaling
         std_dev_main = np.nanstd(z_combined_main * 100)
         scale_main = 2 * std_dev_main if not np.isnan(std_dev_main) else 10
         std_dev_yearly = np.nanstd(z_combined_yearly * 100)
         scale_yearly = 2 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        if has_fresh:
+            std_dev_fresh = np.nanstd(z_combined_fresh * 100)
+            scale_fresh = 2.0 * std_dev_fresh if not np.isnan(std_dev_fresh) else scale_yearly
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
 
         # Hover Text
@@ -420,22 +435,39 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             val = z_rounded_yearly[i][0]
             val_str = "" if np.isnan(val) else f"{val:+.2f}%"
             if row_label == "Average": hover_yearly.append([f"Average Annual<br>{val_str}"])
-            else: hover_yearly.append([f"Year: {row_label}<br>Annual: {val_str}"])
+            else: hover_yearly.append([f"Year: {row_label}<br>{yearly_label}: {val_str}"])
+
+        if has_fresh:
+            hover_fresh = []
+            z_rounded_fresh = (z_combined_fresh * 100).round(2)
+            for i, row_label in enumerate(y_labels):
+                val = z_rounded_fresh[i][0]
+                val_str = "" if np.isnan(val) else f"{val:+.2f}%"
+                if row_label == "Average": hover_fresh.append([f"Average Fresh<br>{val_str}"])
+                else: hover_fresh.append([f"Year: {row_label}<br>Fresh Start: {val_str}"])
 
         # Plot
         n_years = len(y_labels) - 1
-        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
-            horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=[0.85, 0.15],
+        n_cols = 3 if has_fresh else 2
+        col_widths = [0.75, 0.125, 0.125] if has_fresh else [0.85, 0.15]
+        fig = make_subplots(rows=2, cols=n_cols, shared_xaxes=True, shared_yaxes=True,
+            horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=col_widths,
             row_heights=[n_years/(n_years+1), 1/(n_years+1)]
         )
 
         fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(2), x=quarter_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=[yearly_label], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
         fig.add_trace(go.Heatmap(z=(z_combined_main[-1:] * 100).round(2), x=quarter_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[-1:] * 100).round(2), x=[yearly_label], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+
+        if has_fresh:
+            fig.add_trace(go.Heatmap(z=(z_combined_fresh[:-1] * 100).round(2), x=["Fresh Start"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_fresh, zmax=scale_fresh, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_fresh[:-1], showscale=False), row=1, col=3)
+            fig.add_trace(go.Heatmap(z=(z_combined_fresh[-1:] * 100).round(2), x=["Fresh Start"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_fresh, zmax=scale_fresh, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_fresh[-1:], showscale=False), row=2, col=3)
 
         fig.update_layout(title="Quarterly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
+        if has_fresh:
+            fig.update_yaxes(showticklabels=False, col=3)
         st.plotly_chart(fig, use_container_width=True, key=f"q_hm_{full_suffix}")
         
         st.subheader("Quarterly Returns List")
@@ -457,11 +489,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         if series.empty: return
         m_ret = _resample_returns(series, "ME")
 
-        
         df_monthly = m_ret.to_frame(name="Return")
         df_monthly["Year"] = df_monthly.index.year
         df_monthly["Month"] = df_monthly.index.month
-        
+
         pivot = df_monthly.pivot(index="Year", columns="Month", values="Return")
         for i in range(1, 13):
             if i not in pivot.columns: pivot[i] = float("nan")
@@ -471,27 +502,35 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         z_data = pivot.values
         z_combined_main = np.concatenate([z_data, monthly_avgs.values.reshape(1, -1)], axis=0)
-        
+
         years = pivot.index
         yearly_col = []
         for y in years:
-            # Calculate geometric sum of the months for consistency
-            # This ensures the Yearly column matches the compounded value of the displayed months
             row = pivot.loc[y]
-            # compound: product(1+r) - 1. Treat NaNs as 0 (no return for that period)
             ret = (1 + row.fillna(0)).prod() - 1
             yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
 
+        # Fresh-start yearly column (suppress when toggle is on — whole table is already fresh)
+        has_fresh = fresh_yearly and len(fresh_yearly) > 0 and not use_fresh
+        yearly_label = "Continuous" if has_fresh else "Yearly"
+        if has_fresh:
+            fresh_col = [fresh_yearly.get(y, float("nan")) for y in years]
+            fresh_avg = np.nanmean(fresh_col) if len(fresh_col) > 0 else float("nan")
+            z_combined_fresh = np.array(fresh_col + [fresh_avg]).reshape(-1, 1)
+
         y_labels = [str(y) for y in pivot.index] + ["Average"]
-        
+
         std_dev_main = np.nanstd(z_combined_main * 100)
         scale_main = 2 * std_dev_main if not np.isnan(std_dev_main) else 10
         std_dev_yearly = np.nanstd(z_combined_yearly * 100)
         scale_yearly = 2.0 * std_dev_yearly if not np.isnan(std_dev_yearly) else 10
+        if has_fresh:
+            std_dev_fresh = np.nanstd(z_combined_fresh * 100)
+            scale_fresh = 2.0 * std_dev_fresh if not np.isnan(std_dev_fresh) else scale_yearly
         colorscale_heatmap = [[0, '#E53935'], [0.5, '#FFFFFF'], [1, '#43A047']]
-        
+
         hover_main = []
         z_rounded_main = (z_combined_main * 100).round(2)
         for i, row_label in enumerate(y_labels):
@@ -507,16 +546,26 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         for i, row_label in enumerate(y_labels):
             val = z_rounded_yearly[i][0]
             val_str = "" if np.isnan(val) else f"{val:+.2f}%"
-            hover_yearly.append([f"{row_label} Total<br>{val_str}"])
+            hover_yearly.append([f"{row_label} {yearly_label}<br>{val_str}"])
+
+        if has_fresh:
+            hover_fresh = []
+            z_rounded_fresh = (z_combined_fresh * 100).round(2)
+            for i, row_label in enumerate(y_labels):
+                val = z_rounded_fresh[i][0]
+                val_str = "" if np.isnan(val) else f"{val:+.2f}%"
+                hover_fresh.append([f"{row_label} Fresh Start<br>{val_str}"])
 
         n_years = len(y_labels) - 1
-        fig = make_subplots(rows=2, cols=2, shared_xaxes=True, shared_yaxes=True,
-            horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=[0.85, 0.15],
+        n_cols = 3 if has_fresh else 2
+        col_widths = [0.75, 0.125, 0.125] if has_fresh else [0.85, 0.15]
+        fig = make_subplots(rows=2, cols=n_cols, shared_xaxes=True, shared_yaxes=True,
+            horizontal_spacing=0.03, vertical_spacing=0.02, column_widths=col_widths,
             row_heights=[n_years/(n_years+1), 1/(n_years+1)]
         )
 
         fig.add_trace(go.Heatmap(z=(z_combined_main[:-1] * 100).round(2), x=month_names, y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_main, zmax=scale_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[:-1], showscale=False), row=1, col=1)
-        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=["Yearly"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
+        fig.add_trace(go.Heatmap(z=(z_combined_yearly[:-1] * 100).round(2), x=[yearly_label], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_yearly, zmax=scale_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[:-1], showscale=False), row=1, col=2)
         # Compute tighter color scale for the average row
         avg_monthly_vals = z_combined_main[-1:] * 100
         avg_abs_max = np.nanmax(np.abs(avg_monthly_vals))
@@ -526,10 +575,19 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         scale_avg_yearly = max(avg_yearly_abs * 1.2, 0.5) if not np.isnan(avg_yearly_abs) else scale_yearly
 
         fig.add_trace(go.Heatmap(z=avg_monthly_vals.round(2), x=month_names, y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_main, zmax=scale_avg_main, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_main[-1:], showscale=False), row=2, col=1)
-        fig.add_trace(go.Heatmap(z=avg_yearly_val.round(2), x=["Yearly"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_yearly, zmax=scale_avg_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+        fig.add_trace(go.Heatmap(z=avg_yearly_val.round(2), x=[yearly_label], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_yearly, zmax=scale_avg_yearly, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_yearly[-1:], showscale=False), row=2, col=2)
+
+        if has_fresh:
+            fig.add_trace(go.Heatmap(z=(z_combined_fresh[:-1] * 100).round(2), x=["Fresh Start"], y=y_labels[:-1], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_fresh, zmax=scale_fresh, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_fresh[:-1], showscale=False), row=1, col=3)
+            avg_fresh_val = z_combined_fresh[-1:] * 100
+            avg_fresh_abs = np.nanmax(np.abs(avg_fresh_val))
+            scale_avg_fresh = max(avg_fresh_abs * 1.2, 0.5) if not np.isnan(avg_fresh_abs) else scale_fresh
+            fig.add_trace(go.Heatmap(z=avg_fresh_val.round(2), x=["Fresh Start"], y=y_labels[-1:], colorscale=colorscale_heatmap, zmid=0, zmin=-scale_avg_fresh, zmax=scale_avg_fresh, texttemplate="%{z:+.2f}%", hoverinfo="text", hovertext=hover_fresh[-1:], showscale=False), row=2, col=3)
 
         fig.update_layout(title="Monthly Returns Heatmap (%)", template="plotly_white", height=max(400, (len(y_labels)+1)*30), yaxis=dict(autorange="reversed", type="category"), yaxis3=dict(autorange="reversed", type="category"))
         fig.update_yaxes(showticklabels=False, col=2)
+        if has_fresh:
+            fig.update_yaxes(showticklabels=False, col=3)
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
     
@@ -537,12 +595,12 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
     with tab_summary:
         st.subheader(f"{portfolio_name} Seasonal Summary")
-        render_seasonal_summary(port_series)
+        render_seasonal_summary(active_series)
 
         # Rolling Metrics charts
         from app.ui.charts.rolling import render_rolling_metrics
         render_rolling_metrics(
-            port_series,
+            active_series,
             raw_response=raw_response,
             unique_id=unique_id,
         )
@@ -550,7 +608,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         # Risk & Return Metrics table
         from app.ui.charts.metrics import render_risk_return_metrics
         render_risk_return_metrics(
-            port_series,
+            active_series,
             stats=stats or {},
             raw_response=raw_response,
             unique_id=unique_id,
@@ -558,36 +616,69 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
     
     with tab_annual:
         st.subheader(f"{portfolio_name} Annual Returns")
-        
-        colors = ["#00CC96" if x >= 0 else "#EF553B" for x in annual_ret]
-        fig = go.Figure(go.Bar(
-            x=annual_ret.index.year,
-            y=annual_ret * 100,
-            marker_color=colors,
-            text=(annual_ret * 100).apply(lambda x: f"{x:+.1f}%"),
-            textposition="auto"
-        ))
+
+        has_fresh_annual = fresh_yearly and len(fresh_yearly) > 0 and not use_fresh
+
+        if has_fresh_annual:
+            fig = go.Figure()
+            fig.add_trace(go.Bar(
+                x=annual_ret.index.year,
+                y=annual_ret * 100,
+                name="Continuous Sim",
+                marker_color=["#00CC96" if x >= 0 else "#EF553B" for x in annual_ret],
+                text=(annual_ret * 100).apply(lambda x: f"{x:+.1f}%"),
+                textposition="auto",
+            ))
+            fresh_series = pd.Series(fresh_yearly)
+            fresh_series = fresh_series.reindex(annual_ret.index.year).dropna()
+            fig.add_trace(go.Bar(
+                x=fresh_series.index,
+                y=fresh_series * 100,
+                name="Fresh Start",
+                marker_color=["#42A5F5" if x >= 0 else "#FF7043" for x in fresh_series],
+                text=(fresh_series * 100).apply(lambda x: f"{x:+.1f}%"),
+                textposition="auto",
+                opacity=0.7,
+            ))
+            fig.update_layout(barmode="group")
+        else:
+            colors = ["#00CC96" if x >= 0 else "#EF553B" for x in annual_ret]
+            fig = go.Figure(go.Bar(
+                x=annual_ret.index.year,
+                y=annual_ret * 100,
+                marker_color=colors,
+                text=(annual_ret * 100).apply(lambda x: f"{x:+.1f}%"),
+                textposition="auto"
+            ))
+
         fig.update_layout(
             title="Annual Returns (%)",
             yaxis_title="Return (%)",
             xaxis_title="Year",
             template="plotly_dark",
-            showlegend=False,
             height=400
         )
         st.plotly_chart(fig, use_container_width=True)
 
         annual_bal = port_series.resample("YE").last()
+        ret_col = "Continuous" if has_fresh_annual else "Return"
         df_annual = pd.DataFrame({
             "Year": annual_ret.index.year,
-            "Return": annual_ret.values
+            ret_col: annual_ret.values
         }).sort_values("Year", ascending=False)
+        if has_fresh_annual:
+            df_annual["Fresh Start"] = df_annual["Year"].map(fresh_yearly)
         df_annual["Balance"] = df_annual["Year"].map(
             dict(zip(annual_bal.index.year, annual_bal.values))
         )
 
+        fmt = {ret_col: "{:+.1%}", "Balance": "${:,.2f}"}
+        style_cols = [ret_col]
+        if has_fresh_annual:
+            fmt["Fresh Start"] = "{:+.1%}"
+            style_cols.append("Fresh Start")
         st.dataframe(
-            df_annual.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
+            df_annual.style.format(fmt).map(color_return, subset=style_cols),
             use_container_width=True,
             hide_index=True
         )
@@ -608,7 +699,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         with q_port_ctx:
             st.subheader(f"{portfolio_name} Quarterly Returns")
-            render_quarterly_returns_view(port_series)
+            render_quarterly_returns_view(active_series)
             render_distribution(quarterly_ret, "Quarterly", "Quarters")
 
         if "Benchmark (Comparison)" in qt_tabs:
@@ -635,10 +726,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         with m_port_ctx:
             st.subheader(f"{portfolio_name} Monthly Returns")
-            render_monthly_returns_view(port_series)
+            render_monthly_returns_view(active_series)
 
             st.subheader("Monthly Returns List")
-            monthly_bal = port_series.resample("ME").last()
+            monthly_bal = active_series.resample("ME").last()
             df_monthly_list = monthly_ret.to_frame(name="Return")
             df_monthly_list["Date"] = df_monthly_list.index.strftime("%Y-%m")
             df_monthly_list["Balance"] = monthly_bal.reindex(df_monthly_list.index).values
@@ -668,7 +759,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.subheader("Daily Returns List")
         df_daily_list = daily_ret.to_frame(name="Return")
         df_daily_list["Date"] = df_daily_list.index.date
-        df_daily_list["Balance"] = port_series.reindex(df_daily_list.index).values
+        df_daily_list["Balance"] = active_series.reindex(df_daily_list.index).values
         df_daily_list = df_daily_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
 
         st.dataframe(
@@ -686,19 +777,19 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         from app.services.data_service import fetch_component_data
         from app.core.calculations.stats import build_drawdown_table
 
-        start_date = port_series.index[0].strftime("%Y-%m-%d")
-        end_date = port_series.index[-1].strftime("%Y-%m-%d")
+        start_date = active_series.index[0].strftime("%Y-%m-%d")
+        end_date = active_series.index[-1].strftime("%Y-%m-%d")
 
         try:
             spy_prices = fetch_component_data(["SPYSIM"], start_date, end_date)
             spy_col = spy_prices.columns[0]
-            spy_raw = spy_prices[spy_col].reindex(port_series.index).ffill().bfill()
-            spy_norm = spy_raw / spy_raw.iloc[0] * port_series.iloc[0]
+            spy_raw = spy_prices[spy_col].reindex(active_series.index).ffill().bfill()
+            spy_norm = spy_raw / spy_raw.iloc[0] * active_series.iloc[0]
         except Exception:
-            spy_norm = port_series.copy()
+            spy_norm = active_series.copy()
             st.warning("Could not load SPY benchmark data. SPY columns may be inaccurate.")
 
-        df = build_drawdown_table(port_series, spy_norm)
+        df = build_drawdown_table(active_series, spy_norm)
 
         if df.empty:
             st.info("No corrections >5% found in this period.")

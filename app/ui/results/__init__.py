@@ -19,6 +19,95 @@ from app.ui.results.tabs_monte_carlo import render_monte_carlo_tab
 from app.ui.results.tabs_debug import render_debug_tab
 
 
+def _compute_fresh_yearly_returns(results: dict, port_series: pd.Series, config: dict | None = None) -> tuple[dict, pd.Series | None]:
+    """Run a fresh 1-year backtest per calendar year to get drift-free yearly returns.
+
+    Returns (yearly_dict, stitched_series) where:
+      - yearly_dict: {year: return_float}
+      - stitched_series: chained fresh-start series (normalized) for period breakdowns
+    Returns ({}, None) if params unavailable.
+    """
+    allocation = results.get("allocation")
+    maint_pcts = results.get("maint_pcts")
+    rebalance = results.get("rebalance")
+
+    # Fallback: reconstruct from config if not in results (e.g., cached results)
+    if (not allocation or maint_pcts is None) and config:
+        port_name = results.get("name", "")
+        for p_cfg in config.get("portfolios", []):
+            if p_cfg.get("name") == port_name:
+                adf = p_cfg.get("alloc_df")
+                if adf is not None and not adf.empty:
+                    allocation = dict(zip(adf["Ticker"], adf["Weight %"]))
+                    maint_pcts = {
+                        row["Ticker"].split("?")[0]: float(row.get("Maint %", 25.0))
+                        for _, row in adf.iterrows()
+                    }
+                reb = p_cfg.get("rebalance", {})
+                rebalance = dict(reb)
+                break
+
+    if not allocation or maint_pcts is None:
+        return {}, None
+
+    # No drift on non-rebalanced portfolios — continuous == fresh start
+    reb_mode = (rebalance or {}).get("mode", "Standard")
+    if reb_mode == "None":
+        return {}, None
+
+    from app.core.backtest_orchestrator import run_single_backtest
+
+    years = sorted(port_series.index.year.unique())
+    # Pad end date beyond last trading day to avoid SIM ticker data truncation
+    last_date = port_series.index[-1] + pd.Timedelta(days=7)
+    fresh = {}
+    year_series = []  # (year, normalized_series) for stitching
+
+    for y in years:
+        start = f"{y}-01-01"
+        end = last_date.strftime("%Y-%m-%d") if y == years[-1] else f"{y}-12-31"
+
+        try:
+            res = run_single_backtest(
+                allocation=allocation,
+                maint_pcts=maint_pcts,
+                rebalance=rebalance,
+                start_date=start,
+                end_date=end,
+                start_val=100000.0,
+                cashflow_amount=0.0,
+                cashflow_freq="Monthly",
+                invest_div=True,
+                pay_down_margin=False,
+                tax_config={},
+                bearer_token=None,
+                name=f"Fresh_{y}",
+            )
+            s = res.get("series")
+            if s is None:
+                s = res.get("port_series")
+            if s is not None and len(s) >= 2:
+                fresh[y] = (s.iloc[-1] / s.iloc[0]) - 1
+                year_series.append(s)
+        except Exception:
+            pass  # skip years that fail
+
+    # Stitch per-year series into one continuous series (each year normalized)
+    stitched = None
+    if year_series:
+        pieces = []
+        running_value = port_series.iloc[0]  # start at same value as main series
+        for s in year_series:
+            normalized = s / s.iloc[0] * running_value
+            pieces.append(normalized)
+            running_value = normalized.iloc[-1]
+        stitched = pd.concat(pieces)
+        stitched = stitched[~stitched.index.duplicated(keep='last')]
+        stitched = stitched.sort_index()
+
+    return fresh, stitched
+
+
 def render(results: dict, config: dict, portfolio_name: str = "", clip_start_date=None) -> None:
     """
     Renders the results section, including metrics and charts.
@@ -644,6 +733,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         else:
             st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
 
+        # Compute fresh per-year returns for drift-free yearly column
+        fresh_yearly, fresh_series = _compute_fresh_yearly_returns(results, tax_adj_port_series, config=config)
+
         charts.render_returns_analysis(
             tax_adj_port_series,
             bench_series=bench_aligned if bench_series is not None else None,
@@ -654,6 +746,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             raw_port_series=port_series,
             stats=stats,
             raw_response=raw_response,
+            fresh_yearly=fresh_yearly,
+            fresh_series=fresh_series,
         )
 
     # --- Rebalancing Tab (inline, small) ---

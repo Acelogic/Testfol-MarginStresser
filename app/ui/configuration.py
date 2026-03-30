@@ -264,7 +264,7 @@ def render():
 
             # --- Rebalancing Strategy ---
             with st.expander("📅 Rebalancing Strategy", expanded=False):
-                mode_options = ["Standard", "Custom", "Threshold", "Threshold+Calendar"]
+                mode_options = ["None", "Standard", "Custom", "Threshold", "Threshold+Calendar"]
                 try:
                     mode_idx = mode_options.index(p["rebalance"]["mode"])
                 except (ValueError, KeyError):
@@ -274,7 +274,10 @@ def render():
 
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
 
-                if r_mode == "Custom":
+                if r_mode == "None":
+                    st.caption("No rebalancing — positions will drift with market returns.")
+
+                elif r_mode == "Custom":
                     with c_r1:
                         freq_opts = ["Yearly", "Quarterly", "Monthly"]
                         try: f_idx = freq_opts.index(p["rebalance"]["freq"])
