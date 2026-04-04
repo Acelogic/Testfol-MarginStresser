@@ -217,11 +217,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
     active_series = fresh_series if use_fresh else port_series
 
-    daily_ret = active_series.pct_change().dropna()
-    monthly_ret = _resample_returns(active_series, "ME")
-    quarterly_ret = _resample_returns(active_series, "QE")
-    annual_ret = _resample_returns(active_series, "YE")
-
     # --- DISTRIBUTION HELPER ---
     def render_distribution(ret_series, period_label, freq_label):
         """Render histogram + summary stats for a returns series."""
@@ -590,14 +585,20 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             fig.update_yaxes(showticklabels=False, col=3)
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
-    
-    tab_summary, tab_annual, tab_quarterly, tab_monthly, tab_daily, tab_drawdowns = st.tabs(["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 Drawdowns"])
+    view_key = unique_id or portfolio_name or "returns"
+    returns_views = ["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 Drawdowns"]
+    selected_view = st.segmented_control(
+        "Returns View",
+        returns_views,
+        default=returns_views[0],
+        key=f"returns_view_{view_key}",
+        label_visibility="collapsed",
+    )
 
-    with tab_summary:
+    if selected_view == returns_views[0]:
         st.subheader(f"{portfolio_name} Seasonal Summary")
         render_seasonal_summary(active_series)
 
-        # Rolling Metrics charts
         from app.ui.charts.rolling import render_rolling_metrics
         render_rolling_metrics(
             active_series,
@@ -605,7 +606,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             unique_id=unique_id,
         )
 
-        # Risk & Return Metrics table
         from app.ui.charts.metrics import render_risk_return_metrics
         render_risk_return_metrics(
             active_series,
@@ -613,8 +613,9 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             raw_response=raw_response,
             unique_id=unique_id,
         )
-    
-    with tab_annual:
+
+    elif selected_view == returns_views[1]:
+        annual_ret = _resample_returns(active_series, "YE")
         st.subheader(f"{portfolio_name} Annual Returns")
 
         has_fresh_annual = fresh_yearly and len(fresh_yearly) > 0 and not use_fresh
@@ -629,14 +630,14 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 text=(annual_ret * 100).apply(lambda x: f"{x:+.1f}%"),
                 textposition="auto",
             ))
-            fresh_series = pd.Series(fresh_yearly)
-            fresh_series = fresh_series.reindex(annual_ret.index.year).dropna()
+            fresh_series_for_year = pd.Series(fresh_yearly)
+            fresh_series_for_year = fresh_series_for_year.reindex(annual_ret.index.year).dropna()
             fig.add_trace(go.Bar(
-                x=fresh_series.index,
-                y=fresh_series * 100,
+                x=fresh_series_for_year.index,
+                y=fresh_series_for_year * 100,
                 name="Fresh Start",
-                marker_color=["#42A5F5" if x >= 0 else "#FF7043" for x in fresh_series],
-                text=(fresh_series * 100).apply(lambda x: f"{x:+.1f}%"),
+                marker_color=["#42A5F5" if x >= 0 else "#FF7043" for x in fresh_series_for_year],
+                text=(fresh_series_for_year * 100).apply(lambda x: f"{x:+.1f}%"),
                 textposition="auto",
                 opacity=0.7,
             ))
@@ -648,7 +649,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 y=annual_ret * 100,
                 marker_color=colors,
                 text=(annual_ret * 100).apply(lambda x: f"{x:+.1f}%"),
-                textposition="auto"
+                textposition="auto",
             ))
 
         fig.update_layout(
@@ -656,7 +657,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             yaxis_title="Return (%)",
             xaxis_title="Year",
             template="plotly_dark",
-            height=400
+            height=400,
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -664,7 +665,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         ret_col = "Continuous" if has_fresh_annual else "Return"
         df_annual = pd.DataFrame({
             "Year": annual_ret.index.year,
-            ret_col: annual_ret.values
+            ret_col: annual_ret.values,
         }).sort_values("Year", ascending=False)
         if has_fresh_annual:
             df_annual["Fresh Start"] = df_annual["Year"].map(fresh_yearly)
@@ -680,51 +681,59 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.dataframe(
             df_annual.style.format(fmt).map(color_return, subset=style_cols),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
 
         render_distribution(annual_ret, "Annual", "Years")
 
-    with tab_quarterly:
-        qt_tabs = []
-        if comparison_series is not None and not comparison_series.empty: qt_tabs.append("Benchmark (Comparison)")
-        if bench_series is not None and not bench_series.empty: qt_tabs.append("Benchmark (Primary)")
+    elif selected_view == returns_views[2]:
+        quarterly_views = [portfolio_name]
+        if comparison_series is not None and not comparison_series.empty:
+            quarterly_views.append("Benchmark (Comparison)")
+        if bench_series is not None and not bench_series.empty:
+            quarterly_views.append("Benchmark (Primary)")
 
-        if qt_tabs:
-            qt_tabs.insert(0, portfolio_name)
-            q_view_tabs = st.tabs(qt_tabs)
-            q_port_ctx = q_view_tabs[0]
-        else:
-            q_port_ctx = st.container()
+        selected_quarterly_view = quarterly_views[0]
+        if len(quarterly_views) > 1:
+            selected_quarterly_view = st.segmented_control(
+                "Quarterly View",
+                quarterly_views,
+                default=quarterly_views[0],
+                key=f"quarterly_view_{view_key}",
+                label_visibility="collapsed",
+            )
 
-        with q_port_ctx:
+        if selected_quarterly_view == portfolio_name:
+            quarterly_ret = _resample_returns(active_series, "QE")
             st.subheader(f"{portfolio_name} Quarterly Returns")
             render_quarterly_returns_view(active_series)
             render_distribution(quarterly_ret, "Quarterly", "Quarters")
-
-        if "Benchmark (Comparison)" in qt_tabs:
-            with q_view_tabs[qt_tabs.index("Benchmark (Comparison)")]:
-                st.subheader("Standard Rebalance (Comparison) Quarterly Returns")
-                render_quarterly_returns_view(comparison_series, suffix="_comp")
-
-        if "Benchmark (Primary)" in qt_tabs:
-             with q_view_tabs[qt_tabs.index("Benchmark (Primary)")]:
-                st.subheader("Primary Benchmark Quarterly Returns")
-                render_quarterly_returns_view(bench_series, suffix="_bench")
-
-    with tab_monthly:
-        hm_tabs = []
-        if comparison_series is not None and not comparison_series.empty: hm_tabs.append("Benchmark (Comparison)")
-        if bench_series is not None and not bench_series.empty: hm_tabs.append("Benchmark (Primary)")
-
-        if hm_tabs:
-            hm_tabs.insert(0, portfolio_name)
-            m_view_tabs = st.tabs(hm_tabs)
-            m_port_ctx = m_view_tabs[0]
+        elif selected_quarterly_view == "Benchmark (Comparison)":
+            st.subheader("Standard Rebalance (Comparison) Quarterly Returns")
+            render_quarterly_returns_view(comparison_series, suffix="_comp")
         else:
-            m_port_ctx = st.container()
+            st.subheader("Primary Benchmark Quarterly Returns")
+            render_quarterly_returns_view(bench_series, suffix="_bench")
 
-        with m_port_ctx:
+    elif selected_view == returns_views[3]:
+        monthly_views = [portfolio_name]
+        if comparison_series is not None and not comparison_series.empty:
+            monthly_views.append("Benchmark (Comparison)")
+        if bench_series is not None and not bench_series.empty:
+            monthly_views.append("Benchmark (Primary)")
+
+        selected_monthly_view = monthly_views[0]
+        if len(monthly_views) > 1:
+            selected_monthly_view = st.segmented_control(
+                "Monthly View",
+                monthly_views,
+                default=monthly_views[0],
+                key=f"monthly_view_{view_key}",
+                label_visibility="collapsed",
+            )
+
+        if selected_monthly_view == portfolio_name:
+            monthly_ret = _resample_returns(active_series, "ME")
             st.subheader(f"{portfolio_name} Monthly Returns")
             render_monthly_returns_view(active_series)
 
@@ -734,21 +743,22 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             df_monthly_list["Date"] = df_monthly_list.index.strftime("%Y-%m")
             df_monthly_list["Balance"] = monthly_bal.reindex(df_monthly_list.index).values
             df_monthly_list = df_monthly_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
-            st.dataframe(df_monthly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]), use_container_width=True, hide_index=True)
+            st.dataframe(
+                df_monthly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
+                use_container_width=True,
+                hide_index=True,
+            )
 
             render_distribution(monthly_ret, "Monthly", "Months")
+        elif selected_monthly_view == "Benchmark (Comparison)":
+            st.subheader("Standard Rebalance (Comparison) Monthly Returns")
+            render_monthly_returns_view(comparison_series, suffix="_comp")
+        else:
+            st.subheader("Primary Benchmark Monthly Returns")
+            render_monthly_returns_view(bench_series, suffix="_bench")
 
-        if "Benchmark (Comparison)" in hm_tabs:
-            with m_view_tabs[hm_tabs.index("Benchmark (Comparison)")]:
-                st.subheader("Standard Rebalance (Comparison) Monthly Returns")
-                render_monthly_returns_view(comparison_series, suffix="_comp")
-
-        if "Benchmark (Primary)" in hm_tabs:
-             with m_view_tabs[hm_tabs.index("Benchmark (Primary)")]:
-                st.subheader("Primary Benchmark Monthly Returns")
-                render_monthly_returns_view(bench_series, suffix="_bench")
-
-    with tab_daily:
+    elif selected_view == returns_views[4]:
+        daily_ret = active_series.pct_change().dropna()
         st.subheader(f"{portfolio_name} Daily Returns")
 
         c1, c2, c3 = st.columns(3)
@@ -765,15 +775,14 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         st.dataframe(
             df_daily_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
-            hide_index=True
+            hide_index=True,
         )
 
         render_distribution(daily_ret, "Daily", "Days")
 
-    with tab_drawdowns:
+    else:
         st.subheader(f"{portfolio_name} Corrections >5%")
 
-        # Fetch SPYSIM for market comparison
         from app.services.data_service import fetch_component_data
         from app.core.calculations.stats import build_drawdown_table
 
@@ -796,7 +805,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         else:
             from app.core.calculations.stats import fmt_duration
 
-            # Summary metrics
             n_total = len(df)
             median_decline = df["% Decline"].median()
             n_severe = (df["_severity"] == "Severe").sum()
@@ -810,7 +818,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             c4.metric("Moderate (15-25%)", n_moderate)
             c5.metric("Ongoing", n_ongoing)
 
-            # Severity filter
             n_mild = (df["_severity"] == "Mild").sum()
             n_minor = (df["_severity"] == "Minor").sum()
             filter_options = [
@@ -828,7 +835,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 key=f"dd_filter_{unique_id}",
             )
 
-            # Apply filter
             filtered = df
             if "Severe" in selected and "All" not in selected:
                 filtered = df[df["_severity"] == "Severe"]
@@ -839,10 +845,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             elif "Minor" in selected and "All" not in selected:
                 filtered = df[df["_severity"] == "Minor"]
 
-            # Drop hidden columns for display
             display_df = filtered[[c for c in filtered.columns if not c.startswith("_")]].copy()
 
-            # Format functions for display (raw numeric values stay for sorting)
             def fmt_duration_col(val):
                 """Format day counts: negative = ongoing, None = N/A."""
                 if val is None or pd.isna(val):
@@ -853,23 +857,27 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 return fmt_duration(val)
 
             def fmt_pct(val):
-                if pd.isna(val): return ""
+                if pd.isna(val):
+                    return ""
                 return f"{val:.1f}%"
 
             def fmt_ratio(val):
-                if pd.isna(val): return ""
+                if pd.isna(val):
+                    return ""
                 return f"{val:.1f}x"
 
-            # Style function (works on raw numeric values)
             def style_drawdowns(styler):
                 def color_decline(val):
                     try:
                         v = float(val)
                     except (ValueError, TypeError):
                         return ""
-                    if abs(v) >= 25: return "color: #ef4444; font-weight: bold"
-                    if abs(v) >= 15: return "color: #f97316; font-weight: bold"
-                    if abs(v) >= 10: return "color: #eab308"
+                    if abs(v) >= 25:
+                        return "color: #ef4444; font-weight: bold"
+                    if abs(v) >= 15:
+                        return "color: #f97316; font-weight: bold"
+                    if abs(v) >= 10:
+                        return "color: #eab308"
                     return "color: #94a3b8"
 
                 def color_ratio(val):
@@ -877,8 +885,10 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                         v = float(val)
                     except (ValueError, TypeError):
                         return ""
-                    if v < 1.5: return "color: #34d399"
-                    if v > 3.0: return "color: #f97316"
+                    if v < 1.5:
+                        return "color: #34d399"
+                    if v > 3.0:
+                        return "color: #f97316"
                     return ""
 
                 def color_duration(val):
@@ -886,7 +896,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                         v = float(val)
                     except (ValueError, TypeError):
                         return ""
-                    if v < 0: return "color: #ef4444; font-weight: bold"
+                    if v < 0:
+                        return "color: #ef4444; font-weight: bold"
                     return ""
 
                 def color_spy_duration(val):
@@ -896,7 +907,8 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                         v = float(val)
                     except (ValueError, TypeError):
                         return ""
-                    if v < 0: return "color: #ef4444; font-weight: bold"
+                    if v < 0:
+                        return "color: #ef4444; font-weight: bold"
                     return "color: #94a3b8"
 
                 def color_spy_pct(val):
@@ -907,8 +919,6 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 styler.map(color_duration, subset=["Recovery from Bottom", "Decline + Recovery Time"])
                 styler.map(color_spy_pct, subset=["SPY DD"])
                 styler.map(color_spy_duration, subset=["SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
-
-                # Format display values
                 styler.format(fmt_pct, subset=["% Decline", "SPY DD"])
                 styler.format(fmt_ratio, subset=["Ratio"])
                 styler.format(fmt_duration_col, subset=["Recovery from Bottom", "Decline + Recovery Time", "SPY Recovery from Bottom", "SPY Decline + Recovery Time"])
@@ -920,5 +930,3 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 hide_index=True,
                 height=min(800, 35 * (len(display_df) + 1) + 38),
             )
-
-

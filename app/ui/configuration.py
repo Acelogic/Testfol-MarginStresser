@@ -1,10 +1,63 @@
 import streamlit as st
 import pandas as pd
+import json
+import os
 from app.common import utils
 from app.core import tax_library
 from app.services import testfol_api as api
 from . import asset_explorer
 from . import ndx_scanner
+
+
+def clear_runtime_caches(session_state=None) -> dict[str, int]:
+    """Clear Streamlit/in-memory caches without deleting anything under data/."""
+    state = session_state if session_state is not None else st.session_state
+    removed_session_keys = 0
+
+    st.cache_data.clear()
+    st.cache_resource.clear()
+
+    for key in ("ae_cache", "ae_future"):
+        if key in state:
+            del state[key]
+            removed_session_keys += 1
+
+    try:
+        from app.services.price_providers import reset_provider
+        reset_provider()
+    except Exception:
+        pass
+
+    try:
+        from app.services import testfol_auth
+        testfol_auth._token_cache.clear()
+    except Exception:
+        pass
+
+    try:
+        tax_library._STATE_TAX_TABLES.clear()
+    except Exception:
+        pass
+
+    return {
+        "streamlit_data": 1,
+        "streamlit_resource": 1,
+        "session_keys_removed": removed_session_keys,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _load_presets():
+    """Load and sort preset names from disk (cached)."""
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    preset_path = os.path.join(base_dir, "../../data/presets.json")
+    if not os.path.exists(preset_path):
+        return [], []
+    with open(preset_path, "r") as f:
+        presets = json.load(f)
+    ndx = sorted([p["name"] for p in presets if p["name"].upper().startswith("NDX")])
+    other = sorted([p["name"] for p in presets if not p["name"].upper().startswith("NDX")])
+    return ndx + other, presets
 
 def render():
     """Renders the configuration tabs and returns a config dictionary."""
@@ -15,16 +68,17 @@ def render():
 
     config = {}
 
-    # Per-portfolio widget keys — stable across tab switches, popped on switch
-    _PF_KEYS = [
+    # Per-portfolio widget key bases — suffixed with portfolio id at runtime
+    _PF_KEY_BASES = [
         "p_name", "p_rmode", "p_rfreq", "p_rmon", "p_rday", "p_cmp",
         "p_rthresh", "p_rfreq_tc", "p_rthresh_tc", "p_rfreq_std",
         "p_editor",
     ]
 
-    def _pop_pf_keys():
-        for k in _PF_KEYS:
-            st.session_state.pop(k, None)
+    def _pop_pf_keys(pid):
+        """Clear widget keys for a specific portfolio id."""
+        for base in _PF_KEY_BASES:
+            st.session_state.pop(f"{base}_{pid}", None)
 
     def _portfolio_fragment():
         # --- initialize state ---
@@ -56,11 +110,13 @@ def render():
         if "active_tab_idx" not in st.session_state:
             st.session_state.active_tab_idx = 0
 
-        # Sync active portfolio name from the stable text_input key
-        if "p_name" in st.session_state:
-            _aidx = st.session_state.active_tab_idx
-            if _aidx < len(st.session_state.portfolios):
-                st.session_state.portfolios[_aidx]["name"] = st.session_state["p_name"]
+        # Sync active portfolio name from its text_input key
+        _aidx = st.session_state.active_tab_idx
+        if _aidx < len(st.session_state.portfolios):
+            _active_pid = st.session_state.portfolios[_aidx]["id"]
+            _name_key = f"p_name_{_active_pid}"
+            if _name_key in st.session_state:
+                st.session_state.portfolios[_aidx]["name"] = st.session_state[_name_key]
 
         portfolio_names = [port["name"] for port in st.session_state.portfolios]
 
@@ -116,26 +172,12 @@ def render():
                     })
                     st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                     st.session_state.pop("portfolio_selector", None)
-                    _pop_pf_keys()
-                    st.session_state["p_name"] = f"Portfolio {len(st.session_state.portfolios)}"
                     st.rerun()
                 else:
                     st.warning("Max 5 portfolios.")
 
-        import json
-        import os
         try:
-            base_dir = os.path.dirname(os.path.abspath(__file__))
-            preset_path = os.path.join(base_dir, "../../data/presets.json")
-            preset_names = []
-            presets = []
-            if os.path.exists(preset_path):
-                with open(preset_path, "r") as f:
-                    presets = json.load(f)
-                # Sort: NDX presets first, then alphabetical
-                ndx_presets = sorted([p["name"] for p in presets if p["name"].upper().startswith("NDX")])
-                other_presets = sorted([p["name"] for p in presets if not p["name"].upper().startswith("NDX")])
-                preset_names = ndx_presets + other_presets
+            preset_names, presets = _load_presets()
 
             with c_tool2:
                 selected_preset = st.selectbox(
@@ -177,8 +219,6 @@ def render():
                             })
                             st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                             st.session_state.pop("portfolio_selector", None)
-                            _pop_pf_keys()
-                            st.session_state["p_name"] = p_data["name"]
                             st.rerun()
                         else:
                             st.warning("Max 5 portfolios.")
@@ -189,22 +229,11 @@ def render():
 
         # --- Portfolio Selector (outside fragment — tab switch = full rerun) ---
         def _on_tab_change():
-            # Save current portfolio's name before switching
-            old_idx = st.session_state.active_tab_idx
-            if "p_name" in st.session_state and old_idx < len(st.session_state.portfolios):
-                st.session_state.portfolios[old_idx]["name"] = st.session_state["p_name"]
-            # Resolve new tab
             sel = st.session_state.portfolio_selector
             if sel in display_names:
                 new_idx = display_names.index(sel)
                 new_idx = min(new_idx, len(st.session_state.portfolios) - 1)
                 st.session_state.active_tab_idx = new_idx
-                # Explicitly set p_name to target portfolio's name
-                # (fragment widget cache may not pick up the new default)
-                _pop_pf_keys()
-                st.session_state["p_name"] = st.session_state.portfolios[new_idx]["name"]
-            else:
-                _pop_pf_keys()
 
         # Ensure selector is valid before rendering
         _sel = st.session_state.get("portfolio_selector")
@@ -224,12 +253,15 @@ def render():
             idx = st.session_state.active_tab_idx
             p = st.session_state.portfolios[idx]
 
+            pid = p["id"]
+
             with st.container():
                 c_name, c_save, c_del = st.columns([6, 1, 1])
                 with c_name:
-                    if "p_name" not in st.session_state:
-                        st.session_state["p_name"] = p["name"]
-                    p["name"] = st.text_input("Portfolio Name", key="p_name", label_visibility="collapsed")
+                    _nk = f"p_name_{pid}"
+                    if _nk not in st.session_state:
+                        st.session_state[_nk] = p["name"]
+                    p["name"] = st.text_input("Portfolio Name", key=_nk, label_visibility="collapsed")
 
                 with c_save:
                     if st.button("💾", key="p_save", help="Save as new Preset", use_container_width=True):
@@ -246,18 +278,19 @@ def render():
                         month_map_inv = {1:"Jan", 2:"Feb", 3:"Mar", 4:"Apr", 5:"May", 6:"Jun", 7:"Jul", 8:"Aug", 9:"Sep", 10:"Oct", 11:"Nov", 12:"Dec"}
                         preset_data["rebalance"]["month_str"] = month_map_inv.get(p["rebalance"].get("month", 1), "Jan")
                         utils.save_preset(preset_data)
+                        _load_presets.clear()  # invalidate cached presets
                         st.success(f"Saved!")
                         st.rerun(scope="app")
 
                 with c_del:
                     if st.button("🗑️", key="p_del", help="Delete Portfolio", use_container_width=True):
                         if len(st.session_state.portfolios) > 1:
+                            deleted_pid = p["id"]
                             st.session_state.portfolios.pop(idx)
                             new_idx = max(0, idx-1)
                             st.session_state.active_tab_idx = new_idx
                             st.session_state.pop("portfolio_selector", None)
-                            _pop_pf_keys()
-                            st.session_state["p_name"] = st.session_state.portfolios[new_idx]["name"]
+                            _pop_pf_keys(deleted_pid)
                             st.rerun(scope="app")
                         else:
                             st.warning("Last portfolio")
@@ -269,7 +302,7 @@ def render():
                     mode_idx = mode_options.index(p["rebalance"]["mode"])
                 except (ValueError, KeyError):
                     mode_idx = 0
-                r_mode = st.radio("Mode", mode_options, index=mode_idx, key="p_rmode", horizontal=True, label_visibility="collapsed")
+                r_mode = st.radio("Mode", mode_options, index=mode_idx, key=f"p_rmode_{pid}", horizontal=True, label_visibility="collapsed")
                 p["rebalance"]["mode"] = r_mode
 
                 c_r1, c_r2, c_r3, c_r4 = st.columns(4)
@@ -282,28 +315,28 @@ def render():
                         freq_opts = ["Yearly", "Quarterly", "Monthly"]
                         try: f_idx = freq_opts.index(p["rebalance"]["freq"])
                         except (ValueError, KeyError): f_idx = 0
-                        p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key="p_rfreq")
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", freq_opts, index=f_idx, key=f"p_rfreq_{pid}")
 
                     with c_r2:
                         if p["rebalance"]["freq"] == "Yearly":
-                            p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key="p_rmon")
+                            p["rebalance"]["month"] = st.selectbox("Rebalance Month", range(1, 13), index=p["rebalance"]["month"]-1, format_func=lambda x: pd.to_datetime(f"2024-{x}-1").strftime("%b"), key=f"p_rmon_{pid}")
                         else:
                             p["rebalance"]["month"] = 1
                             st.markdown("")
 
                     with c_r3:
-                        p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key="p_rday")
+                        p["rebalance"]["day"] = st.number_input("Day of Month", 1, 31, p["rebalance"]["day"], key=f"p_rday_{pid}")
 
                     with c_r4:
                         st.markdown("<br>", unsafe_allow_html=True)
-                        p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key="p_cmp")
+                        p["rebalance"]["compare_std"] = st.checkbox("Compare vs Standard", p["rebalance"]["compare_std"], key=f"p_cmp_{pid}")
 
                 elif r_mode == "Threshold":
                     with c_r1:
                         p["rebalance"]["threshold_pct"] = st.number_input(
                             "Drift Threshold (%)", 1.0, 50.0,
                             float(p["rebalance"].get("threshold_pct", 5.0)),
-                            step=1.0, key="p_rthresh",
+                            step=1.0, key=f"p_rthresh_{pid}",
                             help="Rebalance when any position drifts more than X pp from target. Checked daily."
                         )
                     p["rebalance"]["freq"] = "Yearly"
@@ -315,12 +348,12 @@ def render():
                         freq_opts = ["Yearly", "Quarterly", "Monthly"]
                         try: f_idx = freq_opts.index(p["rebalance"]["freq"])
                         except (ValueError, KeyError): f_idx = 0
-                        p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key="p_rfreq_tc")
+                        p["rebalance"]["freq"] = st.selectbox("Check Frequency", freq_opts, index=f_idx, key=f"p_rfreq_tc_{pid}")
                     with c_r2:
                         p["rebalance"]["threshold_pct"] = st.number_input(
                             "Drift Threshold (%)", 1.0, 50.0,
                             float(p["rebalance"].get("threshold_pct", 5.0)),
-                            step=1.0, key="p_rthresh_tc",
+                            step=1.0, key=f"p_rthresh_tc_{pid}",
                             help="Only rebalance at scheduled check dates if drift exceeds threshold."
                         )
                     p["rebalance"]["month"] = 1
@@ -328,7 +361,7 @@ def render():
 
                 else: # Standard Mode
                     with c_r1:
-                        p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key="p_rfreq_std")
+                        p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"p_rfreq_std_{pid}")
                     p["rebalance"]["month"] = 1
                     p["rebalance"]["day"] = 1
 
@@ -338,7 +371,7 @@ def render():
                 p["alloc_df"]["PM Maint %"] = 0.0
             new_alloc_df = st.data_editor(
                 p["alloc_df"],
-                key="p_editor",
+                key=f"p_editor_{pid}",
                 num_rows="dynamic",
                 column_order=["Ticker", "Weight %", "Maint %", "PM Maint %"],
                 column_config={
@@ -673,33 +706,13 @@ def render():
             
             st.markdown("---")
             st.markdown("**Cache Management**")
-            if st.button("🗑️ Clear All Caches", help="Purge all local data including API responses and downloaded ETF filings."):
-                import shutil
-                import os
-                
-                # 1. API Cache
-                api_cache_dir = "data/api_cache"
-                cleared = False
-                if os.path.exists(api_cache_dir):
-                    shutil.rmtree(api_cache_dir)
-                    os.makedirs(api_cache_dir, exist_ok=True)
-                    cleared = True
-                    
-                # 2. ETF Filings Cache
-                etf_cache_dir = "data/etf_xray/cache/etf_filings"
-                if os.path.exists(etf_cache_dir):
-                    shutil.rmtree(etf_cache_dir)
-                    os.makedirs(etf_cache_dir, exist_ok=True)
-                    cleared = True
-                
-                # 3. Streamlit Data Cache (NDX Scanner, etc.)
-                st.cache_data.clear()
-                cleared = True
-                
-                if cleared:
-                    st.success("All caches cleared!")
-                else:
-                    st.info("Caches are already empty.")
+            if st.button("🧹 Clear Runtime Caches", help="Clears Streamlit and in-memory app caches only. Leaves everything under data/ untouched."):
+                summary = clear_runtime_caches()
+                st.success(
+                    "Runtime caches cleared "
+                    f"(data={summary['streamlit_data']}, resources={summary['streamlit_resource']}, "
+                    f"session={summary['session_keys_removed']})."
+                )
 
     with tab_settings:
         _settings_fragment()

@@ -11,6 +11,8 @@ and run_shadow_backtest via the `fetch_backtest_fn` / `run_shadow_fn` params.
 
 import datetime
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import pandas as pd
 import requests
@@ -22,6 +24,7 @@ from app.services.data_service import fetch_component_data
 from app.services.testfol_api import fetch_backtest as _default_fetch
 
 logger = logging.getLogger(__name__)
+MAX_ORCHESTRATOR_WORKERS = 8
 
 
 def calc_rebal_offset(reb: dict, r_freq: str) -> int:
@@ -44,6 +47,341 @@ def calc_rebal_offset(reb: dict, r_freq: str) -> int:
         return 0
 
 
+def _base_tickers(tickers) -> list[str]:
+    """Return unique base tickers while preserving order."""
+    return list(dict.fromkeys(str(ticker).split("?")[0] for ticker in tickers))
+
+
+def _orchestrator_worker_count(task_count: int) -> int:
+    """Cap parallelism to avoid oversubscribing the process."""
+    if task_count <= 1:
+        return 1
+    cpu_count = os.cpu_count() or 4
+    return min(task_count, max(2, min(MAX_ORCHESTRATOR_WORKERS, cpu_count)))
+
+
+def _slice_prefetched_component_prices(
+    prefetched_component_prices: pd.DataFrame | None,
+    tickers,
+    start_date,
+    end_date,
+) -> pd.DataFrame | None:
+    """Return the requested component subset or None if the shared fetch is incomplete."""
+    if prefetched_component_prices is None or prefetched_component_prices.empty:
+        return None
+
+    expected_cols = _base_tickers(tickers)
+    missing_cols = [ticker for ticker in expected_cols if ticker not in prefetched_component_prices.columns]
+    if missing_cols:
+        return None
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    sliced = prefetched_component_prices.loc[:, expected_cols]
+    return sliced.loc[start_ts:end_ts]
+
+
+def _prefetch_component_universe(
+    tickers,
+    start_date,
+    end_date,
+    *,
+    purpose: str,
+) -> pd.DataFrame | None:
+    """Best-effort shared component fetch for multi-portfolio runs."""
+    unique_bases = _base_tickers(tickers)
+    if not unique_bases:
+        return None
+
+    try:
+        return fetch_component_data(unique_bases, start_date, end_date)
+    except Exception as exc:
+        logger.warning("Failed shared component fetch for %s: %s", purpose, exc)
+        return None
+
+
+def _run_pass1_portfolio(
+    index: int,
+    portfolio: dict,
+    *,
+    start_date: str,
+    end_date: str,
+    start_val: float,
+    cashflow_amount: float,
+    cashflow_freq: str,
+    invest_div: bool,
+    pay_down_margin: bool,
+    tax_config: dict,
+    bearer_token: str | None,
+    fetch_fn,
+    shadow_fn,
+    pm_config: dict | None,
+    prefetched_component_prices: pd.DataFrame | None,
+):
+    """Execute one pass-1 portfolio and its optional comparison benchmark."""
+    raw = run_single_backtest(
+        allocation=portfolio["allocation"],
+        maint_pcts=portfolio.get("maint_pcts", {}),
+        rebalance=portfolio.get("rebalance", {}),
+        start_date=start_date,
+        end_date=end_date,
+        start_val=start_val,
+        cashflow_amount=cashflow_amount,
+        cashflow_freq=cashflow_freq,
+        invest_div=invest_div,
+        pay_down_margin=pay_down_margin,
+        tax_config=tax_config,
+        bearer_token=bearer_token,
+        name=portfolio.get("name", "Portfolio"),
+        fetch_backtest_fn=fetch_fn,
+        run_shadow_fn=shadow_fn,
+        pm_maint_pcts=portfolio.get("pm_maint_pcts"),
+        pm_config=pm_config,
+        prefetched_component_prices=prefetched_component_prices,
+    )
+
+    bench_series = None
+    reb = portfolio.get("rebalance", {})
+    if reb.get("compare_std", False) and reb.get("mode") == "Custom":
+        try:
+            bench_series, _, _ = fetch_fn(
+                start_date=start_date,
+                end_date=end_date,
+                start_val=start_val,
+                cashflow=0.0 if pay_down_margin else cashflow_amount,
+                cashfreq=cashflow_freq,
+                rolling=60,
+                invest_div=invest_div,
+                rebalance="Yearly",
+                allocation=portfolio["allocation"],
+                return_raw=False,
+                bearer_token=bearer_token,
+            )
+            bench_series.name = f"{portfolio.get('name')} (Standard)"
+        except Exception as exc:
+            logger.warning("Failed standard comparison: %s", exc)
+
+    return index, raw, bench_series
+
+
+def _rerun_result_for_common_start(
+    index: int,
+    res: dict,
+    *,
+    common_start,
+    end_date: str,
+    global_start_val: float,
+    cashflow_amount: float,
+    cashflow_freq: str,
+    invest_div: bool,
+    pay_down_margin: bool,
+    tax_config: dict,
+    bearer_token: str | None,
+    fetch_fn,
+    shadow_fn,
+    pm_config: dict | None,
+    pm_draw_start_date,
+    pm_retirement_date,
+    prefetched_component_prices: pd.DataFrame | None,
+):
+    """Apply common-start alignment logic for a single result."""
+    series = res.get("series")
+    if series is None or series.empty:
+        return index, res
+    if series.index[0] >= common_start - pd.Timedelta(days=3):
+        return index, res
+
+    alloc_map = res["allocation"]
+    reb = res["_reb"]
+    r_mode = res["_r_mode"]
+    r_freq = reb.get("freq", "Yearly")
+    r_threshold = reb.get("threshold_pct", 5.0)
+    uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
+
+    if not res.get("is_local", False):
+        rebal_offset = calc_rebal_offset(reb, r_freq)
+        try:
+            new_series, new_stats, new_extra = fetch_fn(
+                start_date=common_start.strftime("%Y-%m-%d"),
+                end_date=end_date,
+                start_val=global_start_val,
+                cashflow=0.0 if pay_down_margin else cashflow_amount,
+                cashfreq=cashflow_freq,
+                rolling=60,
+                invest_div=invest_div,
+                rebalance=r_freq,
+                rebalance_offset=rebal_offset,
+                allocation=alloc_map,
+                return_raw=False,
+                include_raw=True,
+                bearer_token=bearer_token,
+            )
+            if not new_series.empty:
+                res["series"] = new_series
+                res["port_series"] = new_series
+                res["original_api_stats"] = res.get("stats", {})
+                res["stats"] = new_stats
+                res["raw_response"] = new_extra
+                logger.debug(
+                    "Re-fetched %s from %s - CAGR: %s",
+                    res["name"],
+                    common_start.date(),
+                    new_stats.get("cagr"),
+                )
+
+                try:
+                    shadow_cf = 0.0 if pay_down_margin else cashflow_amount
+                    _pm_cfg_p2 = pm_config or {}
+                    new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_p2_rest = shadow_fn(
+                        allocation=alloc_map,
+                        start_val=global_start_val,
+                        start_date=common_start.strftime("%Y-%m-%d"),
+                        end_date=end_date,
+                        api_port_series=new_series,
+                        rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
+                        cashflow=shadow_cf,
+                        cashflow_freq=cashflow_freq,
+                        invest_dividends=invest_div,
+                        pay_down_margin=pay_down_margin,
+                        tax_config=tax_config,
+                        custom_rebal_config=reb if r_mode == "Custom" else {},
+                        rebalance_month=reb.get("month", 1),
+                        rebalance_day=reb.get("day", 1),
+                        custom_freq=reb.get("freq", "Yearly"),
+                        threshold_pct=r_threshold,
+                        pm_buy_block=_pm_cfg_p2.get("pm_buy_block", False),
+                        pm_buy_block_threshold=_pm_cfg_p2.get("pm_buy_block_threshold", 100000.0),
+                        starting_loan=_pm_cfg_p2.get("starting_loan", 0.0),
+                        margin_rate_annual=_pm_cfg_p2.get("margin_rate_annual", 8.0),
+                        draw_monthly=_pm_cfg_p2.get("draw_monthly", 0.0),
+                        draw_start_date=pm_draw_start_date,
+                        draw_monthly_retirement=_pm_cfg_p2.get("draw_monthly_retirement", 0.0),
+                        retirement_date=pm_retirement_date,
+                        dca_in_retirement=_pm_cfg_p2.get("dca_in_retirement", True),
+                        loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
+                        loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
+                    )
+                    res["trades_df"] = new_trades
+                    res["trades"] = new_trades
+                    res["pl_by_year"] = new_pl
+                    res["composition_df"] = new_comp
+                    res["composition"] = new_comp
+                    res["unrealized_pl_df"] = new_unrealized
+                    res["logs"] = new_logs
+                    res["twr_series"] = new_twr
+                    if _p2_rest:
+                        res["pm_blocked_dates"] = list(_p2_rest[0]) if _p2_rest[0] else []
+
+                    new_extra = res.get("raw_response")
+                    if new_extra and "daily_returns" in new_extra:
+                        d_rets = new_extra["daily_returns"]
+                        if d_rets:
+                            try:
+                                df_tmp = pd.DataFrame(d_rets, columns=["Date", "Pct", "Val"])
+                                df_tmp["Date"] = pd.to_datetime(df_tmp["Date"])
+                                df_tmp = df_tmp.set_index("Date").sort_index()
+                                api_twr = (1 + df_tmp["Pct"] / 100.0).cumprod()
+                                api_twr.name = "TWR (API)"
+                                res["twr_series"] = api_twr
+                            except Exception:
+                                pass
+                    res["shadow_range"] = f"{common_start.date()} to {end_date}"
+                except Exception as shadow_exc:
+                    logger.warning("Failed to re-run shadow for %s: %s", res["name"], shadow_exc)
+
+        except Exception as exc:
+            logger.warning("Failed to re-fetch %s: %s", res["name"], exc)
+            twr = res.get("twr_series")
+            if twr is not None and not twr.empty:
+                twr_slice = twr[twr.index >= common_start]
+                if not twr_slice.empty:
+                    scale = twr_slice / twr_slice.iloc[0]
+                    res["series"] = scale * global_start_val
+                    res["port_series"] = res["series"]
+                    res["stats"] = calculations.generate_stats(res["series"])
+        return index, res
+
+    twr = res.get("twr_series")
+    if twr is not None and not twr.empty:
+        twr_slice = twr[twr.index >= common_start]
+        if not twr_slice.empty:
+            new_series = (twr_slice / twr_slice.iloc[0]) * global_start_val
+            res["series"] = new_series
+            res["port_series"] = new_series
+            res["stats"] = calculations.generate_stats(new_series)
+
+            try:
+                prices_df_new = _slice_prefetched_component_prices(
+                    prefetched_component_prices,
+                    alloc_map.keys(),
+                    common_start.strftime("%Y-%m-%d"),
+                    end_date,
+                )
+                if prices_df_new is None:
+                    prices_df_new = fetch_component_data(
+                        list(alloc_map.keys()),
+                        common_start.strftime("%Y-%m-%d"),
+                        end_date,
+                    )
+                shadow_cf = 0.0 if pay_down_margin else cashflow_amount
+                _pm_cfg2 = pm_config or {}
+                new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_p2_rest2 = shadow_fn(
+                    allocation=alloc_map,
+                    start_val=global_start_val,
+                    start_date=common_start.strftime("%Y-%m-%d"),
+                    end_date=end_date,
+                    api_port_series=None,
+                    rebalance_freq="None" if r_mode == RebalMode.NONE else (r_mode if uses_threshold else reb.get("freq", "Yearly")),
+                    cashflow=shadow_cf,
+                    cashflow_freq=cashflow_freq,
+                    invest_dividends=invest_div,
+                    pay_down_margin=pay_down_margin,
+                    tax_config=tax_config,
+                    custom_rebal_config=reb if r_mode == "Custom" else {},
+                    prices_df=prices_df_new,
+                    rebalance_month=reb.get("month", 1),
+                    rebalance_day=reb.get("day", 1),
+                    custom_freq=reb.get("freq", "Yearly"),
+                    threshold_pct=r_threshold,
+                    pm_buy_block=_pm_cfg2.get("pm_buy_block", False),
+                    pm_buy_block_threshold=_pm_cfg2.get("pm_buy_block_threshold", 100000.0),
+                    starting_loan=_pm_cfg2.get("starting_loan", 0.0),
+                    margin_rate_annual=_pm_cfg2.get("margin_rate_annual", 8.0),
+                    draw_monthly=_pm_cfg2.get("draw_monthly", 0.0),
+                    draw_start_date=pm_draw_start_date,
+                    draw_monthly_retirement=_pm_cfg2.get("draw_monthly_retirement", 0.0),
+                    retirement_date=pm_retirement_date,
+                    dca_in_retirement=_pm_cfg2.get("dca_in_retirement", True),
+                    loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
+                    loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
+                )
+                res["trades_df"] = new_trades
+                res["trades"] = new_trades
+                res["pl_by_year"] = new_pl
+                res["composition_df"] = new_comp
+                res["composition"] = new_comp
+                res["unrealized_pl_df"] = new_unrealized
+                res["logs"] = new_logs
+                res["twr_series"] = new_twr
+                if _p2_rest2:
+                    res["pm_blocked_dates"] = list(_p2_rest2[0]) if _p2_rest2[0] else []
+                res["shadow_range"] = f"{common_start.date()} to {end_date}"
+                if new_port is not None and not new_port.empty:
+                    res["series"] = new_port
+                    res["port_series"] = new_port
+                elif new_twr is not None and not new_twr.empty:
+                    synced = (new_twr / new_twr.iloc[0]) * global_start_val
+                    res["series"] = synced
+                    res["port_series"] = synced
+                res["stats"] = calculations.generate_stats(
+                    new_twr if new_twr is not None and not new_twr.empty else new_series
+                )
+            except Exception as shadow_exc:
+                logger.warning("Failed to re-run shadow for local %s: %s", res["name"], shadow_exc)
+
+    return index, res
+
+
 def run_single_backtest(
     allocation: dict,
     maint_pcts: dict,
@@ -62,6 +400,7 @@ def run_single_backtest(
     run_shadow_fn=None,
     pm_maint_pcts: dict | None = None,
     pm_config: dict | None = None,
+    prefetched_component_prices: pd.DataFrame | None = None,
 ) -> dict:
     """
     Run a single portfolio backtest (API or local engine).
@@ -74,6 +413,12 @@ def run_single_backtest(
     shadow_fn = run_shadow_fn or _default_shadow
 
     alloc_map = allocation
+    shared_prices_df = _slice_prefetched_component_prices(
+        prefetched_component_prices,
+        alloc_map.keys(),
+        start_date,
+        end_date,
+    )
 
     # Weighted maintenance
     total_w = sum(alloc_map.values())
@@ -205,11 +550,14 @@ def run_single_backtest(
                         logger.warning(f"Failed to build API TWR: {e}")
 
             # Fetch component prices for cheat sheet
-            try:
-                prices_df = fetch_component_data(list(alloc_map.keys()), start_date, end_date)
-            except Exception as e:
-                logger.warning(f"Failed to fetch component prices: {e}")
-                prices_df = pd.DataFrame()
+            if shared_prices_df is not None:
+                prices_df = shared_prices_df
+            else:
+                try:
+                    prices_df = fetch_component_data(list(alloc_map.keys()), start_date, end_date)
+                except Exception as e:
+                    logger.warning(f"Failed to fetch component prices: {e}")
+                    prices_df = pd.DataFrame()
 
             # Run shadow backtest (tax tracking)
             if not port_series.empty:
@@ -253,7 +601,10 @@ def run_single_backtest(
     if use_local_engine:
         # --- Pure Local Path (NDXMEGASIM, threshold rebalancing, or API failover) ---
         tickers = list(alloc_map.keys())
-        prices_df = fetch_component_data(tickers, start_date, end_date)
+        if shared_prices_df is not None:
+            prices_df = shared_prices_df
+        else:
+            prices_df = fetch_component_data(tickers, start_date, end_date)
 
         _shadow_result = shadow_fn(
             allocation=alloc_map,
@@ -355,53 +706,67 @@ def run_multi_backtest(
     fetch_fn = fetch_backtest_fn or _default_fetch
     shadow_fn = run_shadow_fn or _default_shadow
 
-    results_list: list[dict] = []
-    bench_series_list: list = []
+    results_list: list[dict] = [None] * len(portfolios)
+    bench_by_index: list = [None] * len(portfolios)
 
-    # --- Pass 1: Run each portfolio ---
-    for p in portfolios:
-        raw = run_single_backtest(
-            allocation=p["allocation"],
-            maint_pcts=p.get("maint_pcts", {}),
-            rebalance=p.get("rebalance", {}),
-            start_date=start_date,
-            end_date=end_date,
-            start_val=start_val,
-            cashflow_amount=cashflow_amount,
-            cashflow_freq=cashflow_freq,
-            invest_div=invest_div,
-            pay_down_margin=pay_down_margin,
-            tax_config=tax_config,
-            bearer_token=bearer_token,
-            name=p.get("name", "Portfolio"),
-            fetch_backtest_fn=fetch_fn,
-            run_shadow_fn=shadow_fn,
-            pm_maint_pcts=p.get("pm_maint_pcts"),
-            pm_config=pm_config,
-        )
-        results_list.append(raw)
+    pass1_component_prices = _prefetch_component_universe(
+        [ticker for portfolio in portfolios for ticker in portfolio.get("allocation", {})],
+        start_date,
+        end_date,
+        purpose="pass1",
+    )
 
-        # Comparison (vs Standard)
-        reb = p.get("rebalance", {})
-        if reb.get("compare_std", False) and reb.get("mode") == "Custom":
-            try:
-                std_series, std_stats, _ = fetch_fn(
+    pass1_workers = _orchestrator_worker_count(len(portfolios))
+    if pass1_workers == 1:
+        for index, portfolio in enumerate(portfolios):
+            _, raw, bench_series = _run_pass1_portfolio(
+                index,
+                portfolio,
+                start_date=start_date,
+                end_date=end_date,
+                start_val=start_val,
+                cashflow_amount=cashflow_amount,
+                cashflow_freq=cashflow_freq,
+                invest_div=invest_div,
+                pay_down_margin=pay_down_margin,
+                tax_config=tax_config,
+                bearer_token=bearer_token,
+                fetch_fn=fetch_fn,
+                shadow_fn=shadow_fn,
+                pm_config=pm_config,
+                prefetched_component_prices=pass1_component_prices,
+            )
+            results_list[index] = raw
+            bench_by_index[index] = bench_series
+    else:
+        with ThreadPoolExecutor(max_workers=pass1_workers) as executor:
+            futures = [
+                executor.submit(
+                    _run_pass1_portfolio,
+                    index,
+                    portfolio,
                     start_date=start_date,
                     end_date=end_date,
                     start_val=start_val,
-                    cashflow=0.0 if pay_down_margin else cashflow_amount,
-                    cashfreq=cashflow_freq,
-                    rolling=60,
+                    cashflow_amount=cashflow_amount,
+                    cashflow_freq=cashflow_freq,
                     invest_div=invest_div,
-                    rebalance="Yearly",
-                    allocation=p["allocation"],
-                    return_raw=False,
+                    pay_down_margin=pay_down_margin,
+                    tax_config=tax_config,
                     bearer_token=bearer_token,
+                    fetch_fn=fetch_fn,
+                    shadow_fn=shadow_fn,
+                    pm_config=pm_config,
+                    prefetched_component_prices=pass1_component_prices,
                 )
-                std_series.name = f"{p.get('name')} (Standard)"
-                bench_series_list.append(std_series)
-            except Exception as e:
-                logger.warning(f"Failed standard comparison: {e}")
+                for index, portfolio in enumerate(portfolios)
+            ]
+            for future in as_completed(futures):
+                index, raw, bench_series = future.result()
+                results_list[index] = raw
+                bench_by_index[index] = bench_series
+
+    bench_series_list = [bench for bench in bench_by_index if bench is not None]
 
     # --- Pass 2: Common start date alignment ---
     start_dates = []
@@ -446,195 +811,80 @@ def run_multi_backtest(
     pm_draw_monthly_retirement = _p2_cfg.get("draw_monthly_retirement", 0.0)
 
     if common_start:
-        for i, res in enumerate(results_list):
-            series = res.get("series")
-            if series is None or series.empty:
-                continue
-            if series.index[0] >= common_start - pd.Timedelta(days=3):
-                continue
+        local_pass2_component_prices = _prefetch_component_universe(
+            [
+                ticker
+                for res in results_list
+                if res.get("is_local", False)
+                and res.get("series") is not None
+                and not res["series"].empty
+                and res["series"].index[0] < common_start - pd.Timedelta(days=3)
+                for ticker in res.get("allocation", {})
+            ],
+            common_start.strftime("%Y-%m-%d"),
+            end_date,
+            purpose="pass2",
+        )
 
-            alloc_map = res["allocation"]
-            reb = res["_reb"]
-            r_mode = res["_r_mode"]
-            r_freq = reb.get("freq", "Yearly")
-            r_threshold = reb.get("threshold_pct", 5.0)
-            uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
+        rerun_candidates = [
+            (index, res)
+            for index, res in enumerate(results_list)
+            if res.get("series") is not None
+            and not res["series"].empty
+            and res["series"].index[0] < common_start - pd.Timedelta(days=3)
+        ]
 
-            if not res.get("is_local", False):
-                # --- API Portfolio: Re-fetch with common_start ---
-                rebal_offset = calc_rebal_offset(reb, r_freq)
-                try:
-                    new_series, new_stats, new_extra = fetch_fn(
-                        start_date=common_start.strftime("%Y-%m-%d"),
+        pass2_workers = _orchestrator_worker_count(len(rerun_candidates))
+        if pass2_workers == 1:
+            for index, res in rerun_candidates:
+                _, updated_res = _rerun_result_for_common_start(
+                    index,
+                    res,
+                    common_start=common_start,
+                    end_date=end_date,
+                    global_start_val=global_start_val,
+                    cashflow_amount=cashflow_amount,
+                    cashflow_freq=cashflow_freq,
+                    invest_div=invest_div,
+                    pay_down_margin=pay_down_margin,
+                    tax_config=tax_config,
+                    bearer_token=bearer_token,
+                    fetch_fn=fetch_fn,
+                    shadow_fn=shadow_fn,
+                    pm_config=pm_config,
+                    pm_draw_start_date=pm_draw_start_date,
+                    pm_retirement_date=pm_retirement_date,
+                    prefetched_component_prices=local_pass2_component_prices,
+                )
+                results_list[index] = updated_res
+        else:
+            with ThreadPoolExecutor(max_workers=pass2_workers) as executor:
+                futures = [
+                    executor.submit(
+                        _rerun_result_for_common_start,
+                        index,
+                        res,
+                        common_start=common_start,
                         end_date=end_date,
-                        start_val=global_start_val,
-                        cashflow=0.0 if pay_down_margin else cashflow_amount,
-                        cashfreq=cashflow_freq,
-                        rolling=60,
+                        global_start_val=global_start_val,
+                        cashflow_amount=cashflow_amount,
+                        cashflow_freq=cashflow_freq,
                         invest_div=invest_div,
-                        rebalance=r_freq,
-                        rebalance_offset=rebal_offset,
-                        allocation=alloc_map,
-                        return_raw=False,
-                        include_raw=True,
+                        pay_down_margin=pay_down_margin,
+                        tax_config=tax_config,
                         bearer_token=bearer_token,
+                        fetch_fn=fetch_fn,
+                        shadow_fn=shadow_fn,
+                        pm_config=pm_config,
+                        pm_draw_start_date=pm_draw_start_date,
+                        pm_retirement_date=pm_retirement_date,
+                        prefetched_component_prices=local_pass2_component_prices,
                     )
-                    if not new_series.empty:
-                        res["series"] = new_series
-                        res["port_series"] = new_series
-                        res["original_api_stats"] = res.get("stats", {})
-                        res["stats"] = new_stats
-                        res["raw_response"] = new_extra
-                        logger.debug(f"Re-fetched {res['name']} from {common_start.date()} - CAGR: {new_stats.get('cagr')}")
-
-                        # Re-run shadow backtest aligned
-                        try:
-                            shadow_cf = 0.0 if pay_down_margin else cashflow_amount
-                            _pm_cfg_p2 = pm_config or {}
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, _, new_twr, *_p2_rest = shadow_fn(
-                                allocation=alloc_map,
-                                start_val=global_start_val,
-                                start_date=common_start.strftime("%Y-%m-%d"),
-                                end_date=end_date,
-                                api_port_series=new_series,
-                                rebalance_freq="Custom" if r_mode == "Custom" else r_freq,
-                                cashflow=shadow_cf,
-                                cashflow_freq=cashflow_freq,
-                                invest_dividends=invest_div,
-                                pay_down_margin=pay_down_margin,
-                                tax_config=tax_config,
-                                custom_rebal_config=reb if r_mode == "Custom" else {},
-                                rebalance_month=reb.get("month", 1),
-                                rebalance_day=reb.get("day", 1),
-                                custom_freq=reb.get("freq", "Yearly"),
-                                threshold_pct=r_threshold,
-                                pm_buy_block=_pm_cfg_p2.get("pm_buy_block", False),
-                                pm_buy_block_threshold=_pm_cfg_p2.get("pm_buy_block_threshold", 100000.0),
-                                starting_loan=_pm_cfg_p2.get("starting_loan", 0.0),
-                                margin_rate_annual=_pm_cfg_p2.get("margin_rate_annual", 8.0),
-                                draw_monthly=_pm_cfg_p2.get("draw_monthly", 0.0),
-                                draw_start_date=pm_draw_start_date,
-                                draw_monthly_retirement=_pm_cfg_p2.get("draw_monthly_retirement", 0.0),
-                                retirement_date=pm_retirement_date,
-                                dca_in_retirement=_pm_cfg_p2.get("dca_in_retirement", True),
-                                loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
-                                loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
-                            )
-                            res["trades_df"] = new_trades
-                            res["trades"] = new_trades
-                            res["pl_by_year"] = new_pl
-                            res["composition_df"] = new_comp
-                            res["composition"] = new_comp
-                            res["unrealized_pl_df"] = new_unrealized
-                            res["logs"] = new_logs
-                            res["twr_series"] = new_twr
-                            if _p2_rest:
-                                res["pm_blocked_dates"] = list(_p2_rest[0]) if _p2_rest[0] else []
-                            # Rebuild API TWR from re-fetched response
-                            new_extra = res.get("raw_response")
-                            if new_extra and "daily_returns" in new_extra:
-                                d_rets = new_extra["daily_returns"]
-                                if d_rets:
-                                    try:
-                                        df_tmp = pd.DataFrame(d_rets, columns=["Date", "Pct", "Val"])
-                                        df_tmp["Date"] = pd.to_datetime(df_tmp["Date"])
-                                        df_tmp = df_tmp.set_index("Date").sort_index()
-                                        api_twr = (1 + df_tmp["Pct"] / 100.0).cumprod()
-                                        api_twr.name = "TWR (API)"
-                                        res["twr_series"] = api_twr
-                                    except Exception:
-                                        pass
-                            res["shadow_range"] = f"{common_start.date()} to {end_date}"
-                        except Exception as shadow_e:
-                            logger.warning(f"Failed to re-run shadow for {res['name']}: {shadow_e}")
-
-                except Exception as e:
-                    logger.warning(f"Failed to re-fetch {res['name']}: {e}")
-                    # Fallback: TWR-based rebasing
-                    twr = res.get("twr_series")
-                    if twr is not None and not twr.empty:
-                        twr_slice = twr[twr.index >= common_start]
-                        if not twr_slice.empty:
-                            scale = twr_slice / twr_slice.iloc[0]
-                            res["series"] = scale * global_start_val
-                            res["port_series"] = res["series"]
-                            res["stats"] = calculations.generate_stats(res["series"])
-            else:
-                # --- Local Portfolio (NDXMEGASIM): TWR-based rebasing ---
-                twr = res.get("twr_series")
-                if twr is not None and not twr.empty:
-                    twr_slice = twr[twr.index >= common_start]
-                    if not twr_slice.empty:
-                        scale = twr_slice / twr_slice.iloc[0]
-                        new_series = scale * global_start_val
-                        res["series"] = new_series
-                        res["port_series"] = new_series
-                        res["stats"] = calculations.generate_stats(new_series)
-
-                        # Re-run shadow for local portfolio
-                        try:
-                            prices_df_new = fetch_component_data(
-                                list(alloc_map.keys()),
-                                common_start.strftime("%Y-%m-%d"),
-                                end_date,
-                            )
-                            shadow_cf = 0.0 if pay_down_margin else cashflow_amount
-                            _pm_cfg2 = pm_config or {}
-                            new_trades, new_pl, new_comp, new_unrealized, new_logs, new_port, new_twr, *_p2_rest2 = shadow_fn(
-                                allocation=alloc_map,
-                                start_val=global_start_val,
-                                start_date=common_start.strftime("%Y-%m-%d"),
-                                end_date=end_date,
-                                api_port_series=None,
-                                rebalance_freq="None" if r_mode == RebalMode.NONE else (r_mode if uses_threshold else reb.get("freq", "Yearly")),
-                                cashflow=shadow_cf,
-                                cashflow_freq=cashflow_freq,
-                                invest_dividends=invest_div,
-                                pay_down_margin=pay_down_margin,
-                                tax_config=tax_config,
-                                custom_rebal_config=reb if r_mode == "Custom" else {},
-                                prices_df=prices_df_new,
-                                rebalance_month=reb.get("month", 1),
-                                rebalance_day=reb.get("day", 1),
-                                custom_freq=reb.get("freq", "Yearly"),
-                                threshold_pct=r_threshold,
-                                pm_buy_block=_pm_cfg2.get("pm_buy_block", False),
-                                pm_buy_block_threshold=_pm_cfg2.get("pm_buy_block_threshold", 100000.0),
-                                starting_loan=_pm_cfg2.get("starting_loan", 0.0),
-                                margin_rate_annual=_pm_cfg2.get("margin_rate_annual", 8.0),
-                                draw_monthly=_pm_cfg2.get("draw_monthly", 0.0),
-                                draw_start_date=pm_draw_start_date,
-                                draw_monthly_retirement=_pm_cfg2.get("draw_monthly_retirement", 0.0),
-                                retirement_date=pm_retirement_date,
-                                dca_in_retirement=_pm_cfg2.get("dca_in_retirement", True),
-                                loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
-                                loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
-                            )
-                            res["trades_df"] = new_trades
-                            res["trades"] = new_trades
-                            res["pl_by_year"] = new_pl
-                            res["composition_df"] = new_comp
-                            res["composition"] = new_comp
-                            res["unrealized_pl_df"] = new_unrealized
-                            res["logs"] = new_logs
-                            res["twr_series"] = new_twr
-                            if _p2_rest2:
-                                res["pm_blocked_dates"] = list(_p2_rest2[0]) if _p2_rest2[0] else []
-                            res["shadow_range"] = f"{common_start.date()} to {end_date}"
-                            # Use port_series (includes cashflows) for chart,
-                            # TWR (strips cashflows) for stats
-                            if new_port is not None and not new_port.empty:
-                                res["series"] = new_port
-                                res["port_series"] = new_port
-                            elif new_twr is not None and not new_twr.empty:
-                                synced = (new_twr / new_twr.iloc[0]) * global_start_val
-                                res["series"] = synced
-                                res["port_series"] = synced
-                            res["stats"] = calculations.generate_stats(
-                                new_twr if new_twr is not None and not new_twr.empty else new_series
-                            )
-                        except Exception as shadow_e:
-                            logger.warning(f"Failed to re-run shadow for local {res['name']}: {shadow_e}")
+                    for index, res in rerun_candidates
+                ]
+                for future in as_completed(futures):
+                    index, updated_res = future.result()
+                    results_list[index] = updated_res
 
     # Align benchmarks to common_start (Bug 11 fix)
     if common_start:

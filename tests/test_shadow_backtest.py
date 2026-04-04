@@ -96,3 +96,36 @@ def test_return_structure(flat_prices, sample_allocation):
     assert isinstance(trades_df, pd.DataFrame)
     assert isinstance(logs, list)
     assert isinstance(port_series, pd.Series)
+
+
+def test_monthly_rebalance_keeps_running_lot_basis_consistent():
+    """Selling at rebalance should update realized gains and unrealized basis correctly."""
+    dates = pd.to_datetime(["2023-01-27", "2023-01-30", "2023-01-31", "2023-02-01", "2023-02-02"])
+    prices = pd.DataFrame(
+        {
+            "A": [100.0, 100.0, 110.0, 110.0, 110.0],
+            "B": [100.0, 100.0, 100.0, 100.0, 100.0],
+        },
+        index=dates,
+    )
+
+    trades_df, _, _, unrealized_pl_df, _, port_series, _, *_ = run_shadow_backtest(
+        allocation={"A": 50.0, "B": 50.0},
+        start_val=100.0,
+        start_date="2023-01-27",
+        end_date="2023-02-02",
+        prices_df=prices,
+        rebalance_freq="Monthly",
+    )
+
+    assert port_series.loc[pd.Timestamp("2023-01-31")] == pytest.approx(105.0)
+
+    sell_trade = trades_df[(trades_df["Ticker"] == "A") & (trades_df["Trade Amount"] < 0)].iloc[0]
+    buy_trade = trades_df[(trades_df["Ticker"] == "B") & (trades_df["Trade Amount"] > 0)].iloc[0]
+
+    assert sell_trade["Trade Amount"] == pytest.approx(-2.5)
+    assert sell_trade["Realized ST P&L"] == pytest.approx(0.2272727273, rel=1e-6)
+    assert buy_trade["Trade Amount"] == pytest.approx(2.5)
+
+    jan_unrealized = unrealized_pl_df.loc[pd.Timestamp("2023-01-31"), "Unrealized P&L"]
+    assert jan_unrealized == pytest.approx(4.7727272727, rel=1e-6)

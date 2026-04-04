@@ -56,14 +56,20 @@ def render_chart_tab(
     pm_blocked_dates: list | None = None,
 ) -> None:
     with tab:
-        chart_subtabs = st.tabs(["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📊 Munger200WMA", "📜 Cheat Sheet"])
+        chart_views = ["🧮 Margin Calcs", "📉 200DMA", "📉 150MA", "📊 Munger200WMA", "📜 Cheat Sheet"]
+        selected_view = st.segmented_control(
+            "Chart View",
+            chart_views,
+            default=chart_views[0],
+            key=f"chart_view_{portfolio_name}",
+            label_visibility="collapsed",
+        )
 
-        # Parse withdrawal events from logs for chart markers
-        draw_events_df = _parse_events(logs) if logs else pd.DataFrame()
-        draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "Draw", "Date"]) if not draw_events_df.empty else []
-        ret_draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "RetDraw", "Date"]) if not draw_events_df.empty else []
+        if selected_view == chart_views[0]:
+            draw_events_df = _parse_events(logs) if logs else pd.DataFrame()
+            draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "Draw", "Date"]) if not draw_events_df.empty else []
+            ret_draw_dates = list(draw_events_df.loc[draw_events_df["Type"] == "RetDraw", "Date"]) if not draw_events_df.empty else []
 
-        with chart_subtabs[0]:
             if chart_style == "Classic (Combined)":
                 series_opts = ["Portfolio", "Equity", "Loan", "Margin usage %"]
                 charts.render_classic_chart(
@@ -124,17 +130,13 @@ def render_chart_tab(
                     pm_blocked_dates=pm_blocked_dates,
                     total_dca_margin=_dca_total,
                 )
-
-        with chart_subtabs[1]:
+        elif selected_view == chart_views[1]:
             charts.render_ma_analysis_tab(port_series, portfolio_name, portfolio_name, window=200, show_stage_analysis=False)
-
-        with chart_subtabs[2]:
+        elif selected_view == chart_views[2]:
             charts.render_ma_analysis_tab(port_series, portfolio_name, portfolio_name, window=150, show_stage_analysis=True)
-
-        with chart_subtabs[3]:
+        elif selected_view == chart_views[3]:
             charts.render_munger_wma_tab(port_series, portfolio_name, portfolio_name, window=200)
-
-        with chart_subtabs[4]:
+        else:
             charts.render_cheat_sheet(
                 port_series,
                 portfolio_name,

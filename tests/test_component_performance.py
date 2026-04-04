@@ -4,6 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from app.ui.charts.rebalancing import (
+    _build_portfolio_allocation_data,
+    _get_cached_portfolio_allocation_data,
+    render_portfolio_allocation,
+)
+
 
 def _compute_positions(raw_prices, allocation, start_val, rebal_dates=None):
     """
@@ -257,6 +263,27 @@ class TestEdgeCases:
         spy_expected = 7000 * (1 + spy_mod_ret) ** 99
         gld_expected = 3000 * (1.0005) ** 99
         expected = spy_expected + gld_expected
-
         assert abs(totals.iloc[-1] - expected) / expected < 0.005, \
             f"Expected ~{expected:.0f}, got {totals.iloc[-1]:.0f}"
+
+
+class TestRebalancingAllocationHelper:
+    def test_helper_matches_expected_growth_without_rebalances(self):
+        dates, prices_arr = _make_prices(daily_return=0.001, n_days=100)
+        raw = pd.DataFrame({"SPY": prices_arr}, index=dates)
+
+        result = _build_portfolio_allocation_data(
+            component_prices=raw,
+            allocation={"SPY": 100.0},
+            composition_df=pd.DataFrame(),
+            start_val=10000,
+        )
+
+        assert result is not None
+        totals = result["row_totals"]
+        expected_final = 10000 * (1.001) ** 99
+        assert abs(totals.iloc[-1] - expected_final) / expected_final < 0.001
+
+    def test_only_helper_is_cached(self):
+        assert hasattr(_get_cached_portfolio_allocation_data, "__wrapped__")
+        assert not hasattr(render_portfolio_allocation, "__wrapped__")

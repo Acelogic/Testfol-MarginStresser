@@ -236,50 +236,55 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         )
 
 
-def render_portfolio_allocation(
+def _parse_allocation_modifiers(allocation: dict) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+    """Collapse allocation by base ticker and extract leverage/expense modifiers."""
+    weights: dict[str, float] = {}
+    leverage: dict[str, float] = {}
+    expense_ratio: dict[str, float] = {}
+
+    for full_tk, weight in allocation.items():
+        base = full_tk.split("?")[0]
+        weights[base] = weights.get(base, 0) + weight
+        if "?" not in full_tk:
+            continue
+
+        query = full_tk.split("?", 1)[1]
+        for pair in query.split("&"):
+            if "=" not in pair:
+                continue
+            k, v = pair.split("=", 1)
+            try:
+                if k.upper() == "L":
+                    leverage[base] = float(v)
+                elif k.upper() in ("E", "D"):
+                    expense_ratio[base] = float(v)
+            except ValueError:
+                pass
+
+    return weights, leverage, expense_ratio
+
+
+def _build_portfolio_allocation_data(
     component_prices: pd.DataFrame,
     allocation: dict,
     composition_df: pd.DataFrame,
     start_val: float,
-    unique_id: str = "",
     port_series: pd.Series | None = None,
     rebal_config: dict | None = None,
 ):
-    """Render a 100% stacked area chart showing portfolio allocation drift over time."""
+    """Build derived allocation data used by the rebalancing charts."""
     if component_prices.empty or not allocation:
-        return
+        return None
 
-    # Map full tickers (e.g. AAPL?L=2) to base tickers used in component_prices columns
-    # Also extract leverage and expense ratio modifiers per base ticker
-    weights: dict[str, float] = {}
-    leverage: dict[str, float] = {}
-    expense_ratio: dict[str, float] = {}
-    for full_tk, weight in allocation.items():
-        base = full_tk.split("?")[0]
-        weights[base] = weights.get(base, 0) + weight
-        # Parse modifiers
-        if "?" in full_tk:
-            query = full_tk.split("?", 1)[1]
-            for pair in query.split("&"):
-                if "=" in pair:
-                    k, v = pair.split("=", 1)
-                    try:
-                        if k.upper() == "L":
-                            leverage[base] = float(v)
-                        elif k.upper() in ("E", "D"):
-                            expense_ratio[base] = float(v)
-                    except ValueError:
-                        pass
-
+    weights, leverage, expense_ratio = _parse_allocation_modifiers(allocation)
     available = [t for t in weights if t in component_prices.columns]
     if not available:
-        return
+        return None
 
     raw_prices = component_prices[available].dropna(how="all").ffill().dropna(how="any")
     if raw_prices.empty or len(raw_prices) < 2:
-        return
+        return None
 
-    # Apply leverage and expense ratio to daily returns to get modified prices
     daily_returns = raw_prices.pct_change()
     modified_returns = daily_returns.copy()
     for t in available:
@@ -289,24 +294,17 @@ def render_portfolio_allocation(
         if lev != 1.0 or daily_er > 0:
             modified_returns[t] = daily_returns[t] * lev - daily_er
 
-    # Reconstruct modified price series from returns
     prices = (1 + modified_returns).cumprod() * raw_prices.iloc[0]
-    prices.iloc[0] = raw_prices.iloc[0]  # anchor first row
+    prices.iloc[0] = raw_prices.iloc[0]
 
     total_weight = sum(weights[t] for t in available)
     if total_weight <= 0:
-        return
+        return None
 
-    # Get rebalance dates from composition_df, filling gaps with synthetic dates
-    # generated from the portfolio's rebalance config.
-    # The shadow backtest may only have composition from when real ETF data starts
-    # (e.g. ZROZ from 2009), but component_prices (SIM) go back further.
     rebal_dates: list[pd.Timestamp] = []
     if not composition_df.empty:
         rebal_dates = sorted(pd.to_datetime(composition_df["Date"].unique()))
 
-    # If composition doesn't cover the full price range, generate synthetic
-    # rebalance dates from portfolio config for the gap period.
     rc = rebal_config or {}
     idx = prices.index
     if rebal_dates and (rebal_dates[0] - idx[0]).days > 730:
@@ -314,8 +312,8 @@ def render_portfolio_allocation(
         rebal_month = rc.get("month", 1)
         rebal_day = rc.get("day", 1)
 
-        gap_end = rebal_dates[0]
         synthetic: list[pd.Timestamp] = []
+        gap_end = rebal_dates[0]
         if freq == "Monthly":
             for yr in range(idx[0].year, gap_end.year + 1):
                 for mo in range(1, 13):
@@ -332,7 +330,7 @@ def render_portfolio_allocation(
                         loc = idx.searchsorted(target)
                         if 0 < loc < len(idx):
                             synthetic.append(idx[loc])
-        else:  # Yearly
+        else:
             for yr in range(idx[0].year + 1, gap_end.year + 1):
                 target = pd.Timestamp(yr, rebal_month, min(rebal_day, 28))
                 if idx[0] < target < gap_end:
@@ -341,70 +339,108 @@ def render_portfolio_allocation(
                         synthetic.append(idx[loc])
         rebal_dates = sorted(set(synthetic + rebal_dates))
 
-    # Build segment boundaries: [start, rebal_1, rebal_2, ..., end]
     seg_starts = [prices.index[0]]
     for rd in rebal_dates:
-        # Snap to nearest trading day in prices
         idx_loc = prices.index.searchsorted(rd)
         if 0 < idx_loc < len(prices.index):
             snapped = prices.index[idx_loc]
             if snapped > seg_starts[-1]:
                 seg_starts.append(snapped)
 
-    # Compute daily position values segment by segment
     all_positions = []
+    alloc_values = pd.Series(
+        {t: start_val * (weights[t] / total_weight) for t in available},
+        index=available,
+        dtype=float,
+    )
     for i, seg_start in enumerate(seg_starts):
         seg_end = seg_starts[i + 1] if i + 1 < len(seg_starts) else prices.index[-1]
-
         if i + 1 < len(seg_starts):
-            seg_prices = prices.loc[seg_start:seg_end].iloc[:-1]  # exclude next segment start
+            seg_prices = prices.loc[seg_start:seg_end].iloc[:-1]
         else:
             seg_prices = prices.loc[seg_start:]
 
         if seg_prices.empty:
             continue
 
-        # Determine total value at segment start
-        if i == 0:
-            total_val = start_val
-        else:
-            # Use end of previous segment's total value
-            prev_end = all_positions[-1].iloc[-1] if all_positions else None
-            total_val = prev_end.sum() if prev_end is not None else start_val
+        if i > 0:
+            alloc_values = all_positions[-1].iloc[-1].reindex(available).fillna(0.0)
 
-        # Vectorized: position(t) = (alloc_value / start_price) * price(t)
-        start_prices = seg_prices.iloc[0]
-        seg_pos = pd.DataFrame(index=seg_prices.index, columns=available, dtype=float)
-        for t in available:
-            if start_prices[t] > 0:
-                alloc_val = total_val * (weights[t] / total_weight)
-                seg_pos[t] = alloc_val * (seg_prices[t] / start_prices[t])
-            else:
-                seg_pos[t] = 0.0
-
+        start_prices = seg_prices.iloc[0].reindex(available).replace(0, np.nan)
+        seg_scale = (alloc_values / start_prices).replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        seg_pos = seg_prices.mul(seg_scale, axis=1)
         all_positions.append(seg_pos)
 
     if not all_positions:
-        return
+        return None
 
     positions = pd.concat(all_positions)
-    # Remove any duplicate indices (shouldn't happen but safety)
     positions = positions[~positions.index.duplicated(keep="first")]
-
     row_totals = positions.sum(axis=1)
 
-    # Scale positions to match actual gross portfolio value (port_series).
-    # The position tracking from component_prices approximates leveraged growth,
-    # but may diverge from the actual backtest due to data source differences,
-    # dividend handling, etc.  Scaling preserves the relative allocation
-    # proportions while anchoring the total to the real portfolio value.
     if port_series is not None and not port_series.empty:
         aligned_port = port_series.reindex(positions.index).ffill().bfill()
-        scale = aligned_port / row_totals.replace(0, np.nan)
-        scale = scale.fillna(1.0)
-        for t in available:
-            positions[t] = positions[t] * scale
+        scale = (aligned_port / row_totals.replace(0, np.nan)).fillna(1.0)
+        positions = positions.mul(scale, axis=0)
         row_totals = positions.sum(axis=1)
+
+    return {
+        "available": available,
+        "weights": {t: weights[t] for t in available},
+        "modified_returns": modified_returns[available],
+        "positions": positions,
+        "row_totals": row_totals,
+        "seg_starts": seg_starts,
+    }
+
+
+@st.cache_data(show_spinner=False)
+def _get_cached_portfolio_allocation_data(
+    component_prices: pd.DataFrame,
+    allocation: dict,
+    composition_df: pd.DataFrame,
+    start_val: float,
+    port_series: pd.Series | None = None,
+    rebal_config: dict | None = None,
+):
+    """Cache the expensive derived series used by the allocation chart."""
+    return _build_portfolio_allocation_data(
+        component_prices=component_prices,
+        allocation=allocation,
+        composition_df=composition_df,
+        start_val=start_val,
+        port_series=port_series,
+        rebal_config=rebal_config,
+    )
+
+
+def render_portfolio_allocation(
+    component_prices: pd.DataFrame,
+    allocation: dict,
+    composition_df: pd.DataFrame,
+    start_val: float,
+    unique_id: str = "",
+    port_series: pd.Series | None = None,
+    rebal_config: dict | None = None,
+):
+    """Render a 100% stacked area chart showing portfolio allocation drift over time."""
+    allocation_data = _get_cached_portfolio_allocation_data(
+        component_prices=component_prices,
+        allocation=allocation,
+        composition_df=composition_df,
+        start_val=start_val,
+        port_series=port_series,
+        rebal_config=rebal_config,
+    )
+    if allocation_data is None:
+        return
+
+    available = allocation_data["available"]
+    weights = allocation_data["weights"]
+    modified_returns = allocation_data["modified_returns"]
+    positions = allocation_data["positions"]
+    row_totals = allocation_data["row_totals"]
+    seg_starts = allocation_data["seg_starts"]
 
     # Build consistent color map for all charts below (sorted to match composition bar chart)
     cmap = _build_color_map(sorted(available))

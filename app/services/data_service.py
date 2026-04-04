@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import os
 import subprocess
@@ -8,11 +9,20 @@ import warnings
 
 import pandas as pd
 
+from app.common.cache import cache_get, cache_key, cache_set
 from app.common.constants import Tickers
 from app.services import testfol_api as api
 from app.services.price_providers import get_price_provider
 
 logger = logging.getLogger(__name__)
+
+COMPONENT_DATA_CACHE_TTL = 86400
+COMPONENT_DATA_CACHE_PREFIX = "component_prices"
+
+
+def _normalize_date_str(value) -> str:
+    """Return a stable YYYY-MM-DD-style string for cache/provider keys."""
+    return value.strftime("%Y-%m-%d") if hasattr(value, "strftime") else str(value)
 
 
 def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFrame:
@@ -20,43 +30,87 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
     Fetches historical data for each ticker individually via Testfol API (or local).
     Handles composite tickers like NDXMEGASIM by splicing local CSVs with live data.
     """
-    combined_prices = pd.DataFrame()
-    unique_tickers = list(set(tickers))
+    if not tickers:
+        return pd.DataFrame()
 
-    for ticker in unique_tickers:
+    unique_tickers = list(dict.fromkeys(tickers))
+    unique_bases = list(dict.fromkeys(ticker.split("?")[0] for ticker in unique_tickers))
+    sd_str = _normalize_date_str(start_date)
+    ed_str = _normalize_date_str(end_date)
+
+    cache_payload = json.dumps(
+        {
+            "tickers": unique_tickers,
+            "start_date": sd_str,
+            "end_date": ed_str,
+        },
+        sort_keys=True,
+    )
+    ck = cache_key(cache_payload)
+    cached = cache_get(ck, prefix=COMPONENT_DATA_CACHE_PREFIX, ttl=COMPONENT_DATA_CACHE_TTL)
+    if cached is not None:
+        return cached
+
+    combined_prices: dict[str, pd.Series] = {}
+    provider = get_price_provider()
+    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
+
+    proxy_tickers: list[str] = []
+    if Tickers.NDX30SIM in unique_bases:
+        proxy_tickers.append("QTOP")
+    if any(base in (Tickers.NDXMEGASIM, Tickers.NDXMEGA2SIM) for base in unique_bases):
+        proxy_tickers.append(Tickers.QBIG)
+
+    proxy_prices = pd.DataFrame()
+    if proxy_tickers:
         try:
-            # Parse Ticker
-            base = ticker.split("?")[0]
-            if base in combined_prices.columns:
-                continue
+            proxy_prices = provider.fetch_prices(sorted(set(proxy_tickers)), "2000-01-01", today_str)
+        except Exception as e:
+            warnings.warn(f"Failed to fetch proxy data for synthetic tickers: {e}")
+            proxy_prices = pd.DataFrame()
 
+    from app.core.shadow_backtest import parse_ticker
+
+    mapped_provider_tickers: dict[str, str] = {}
+    for base in unique_bases:
+        is_sim_request = base.upper().endswith("SIM") or base.upper().endswith("TR")
+        if not is_sim_request:
+            mapped_ticker, _ = parse_ticker(base)
+            mapped_provider_tickers[base] = mapped_ticker
+
+    batched_provider_prices = pd.DataFrame()
+    if mapped_provider_tickers:
+        try:
+            batched_provider_prices = provider.fetch_prices(
+                sorted(set(mapped_provider_tickers.values())),
+                sd_str,
+                ed_str,
+            )
+        except Exception as e:
+            warnings.warn(f"Failed batched provider fetch: {e}")
+            batched_provider_prices = pd.DataFrame()
+
+    for base in unique_bases:
+        try:
             # SPECIAL: NDX30SIM — load simulation CSV + splice with QTOP
             if base == Tickers.NDX30SIM:
                 try:
-                    # 1. Load Simulation CSV
                     csv_path = f"data/{base}.csv"
                     df_sim = pd.Series(dtype=float)
                     if os.path.exists(csv_path):
                         _df = pd.read_csv(csv_path)
-                        if 'Date' in _df.columns:
-                            _df['Date'] = pd.to_datetime(_df['Date'])
-                            _df = _df.set_index('Date')
-                        if 'Close' in _df.columns:
-                            df_sim = _df['Close'].sort_index()
+                        if "Date" in _df.columns:
+                            _df["Date"] = pd.to_datetime(_df["Date"])
+                            _df = _df.set_index("Date")
+                        if "Close" in _df.columns:
+                            df_sim = _df["Close"].sort_index()
                     else:
                         warnings.warn(f"{base} requested but {csv_path} not found.")
 
-                    # 2. Fetch QTOP (Live ETF) via provider chain
                     qtop_series = pd.Series(dtype=float)
-                    try:
-                        provider = get_price_provider()
-                        qtop_prices = provider.fetch_prices(["QTOP"], "2000-01-01", pd.Timestamp.now().strftime("%Y-%m-%d"))
-                        if not qtop_prices.empty and "QTOP" in qtop_prices.columns:
-                            qtop_series = qtop_prices["QTOP"].dropna().sort_index()
-                    except Exception as e:
-                        warnings.warn(f"Failed to fetch QTOP data: {e}")
+                    if not proxy_prices.empty and "QTOP" in proxy_prices.columns:
+                        qtop_series = proxy_prices["QTOP"].dropna().sort_index()
 
-                    # 3. Splice
                     if not qtop_series.empty and not df_sim.empty:
                         splice_date = qtop_series.index[0]
                         sim_part = df_sim[df_sim.index < splice_date]
@@ -64,8 +118,7 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                             sim_end_val = sim_part.iloc[-1]
                             qtop_start_val = qtop_series.iloc[0]
                             scale_factor = qtop_start_val / sim_end_val if sim_end_val != 0 else 1.0
-                            sim_part_scaled = sim_part * scale_factor
-                            combined_prices[base] = pd.concat([sim_part_scaled, qtop_series])
+                            combined_prices[base] = pd.concat([sim_part * scale_factor, qtop_series])
                         else:
                             combined_prices[base] = qtop_series
                     elif not df_sim.empty:
@@ -74,14 +127,12 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                         combined_prices[base] = qtop_series
 
                     continue
-
                 except Exception as e:
                     raise RuntimeError(f"Failed to load/splice NDX30SIM: {e}")
 
-            # SPECIAL: Load NDX Mega simulations from local CSV + Splice with QBIG
+            # SPECIAL: Load NDX Mega simulations from local CSV + splice with QBIG
             if base in [Tickers.NDXMEGASIM, Tickers.NDXMEGA2SIM]:
                 try:
-                    # 1. Load Simulation Data (dynamic path based on ticker)
                     csv_path = f"data/{base}.csv"
                     df_sim = pd.DataFrame()
                     if os.path.exists(csv_path):
@@ -94,110 +145,75 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                                 try:
                                     subprocess.run([sys.executable, rebuild_script], check=True, timeout=1800)
                                     logger.info("Rebuild complete. Reloading data.")
-                                    df_sim = pd.read_csv(csv_path) # Retry load
+                                    df_sim = pd.read_csv(csv_path)
                                 except Exception as rebuild_err:
                                     raise RuntimeError(f"Rebuild failed: {rebuild_err}")
                             else:
                                 raise FileNotFoundError(f"Cannot rebuild: Script not found at {rebuild_script}")
 
-                        if 'Date' in df_sim.columns:
-                            df_sim['Date'] = pd.to_datetime(df_sim['Date'])
-                            df_sim = df_sim.set_index('Date')
-                        if 'Close' not in df_sim.columns:
+                        if "Date" in df_sim.columns:
+                            df_sim["Date"] = pd.to_datetime(df_sim["Date"])
+                            df_sim = df_sim.set_index("Date")
+                        if "Close" not in df_sim.columns:
                             warnings.warn(f"{base}.csv missing 'Close' column")
                             df_sim = pd.DataFrame()
                         else:
-                            df_sim = df_sim['Close'].sort_index() # Convert to Series
+                            df_sim = df_sim["Close"].sort_index()
                     else:
                         warnings.warn(f"{base} requested but {csv_path} not found.")
 
-                    # 2. Fetch QBIG (Live Proxy) via provider chain
-                    try:
-                        provider = get_price_provider()
-                        qbig_prices = provider.fetch_prices([Tickers.QBIG], "2000-01-01", pd.Timestamp.now().strftime("%Y-%m-%d"))
-                        qbig_series = pd.Series(dtype=float)
-                        if not qbig_prices.empty and Tickers.QBIG in qbig_prices.columns:
-                            qbig_series = qbig_prices[Tickers.QBIG].dropna().sort_index()
-                    except Exception as e:
-                        warnings.warn(f"Failed to fetch QBIG data: {e}")
-                        qbig_series = pd.Series(dtype=float)
+                    qbig_series = pd.Series(dtype=float)
+                    if not proxy_prices.empty and Tickers.QBIG in proxy_prices.columns:
+                        qbig_series = proxy_prices[Tickers.QBIG].dropna().sort_index()
 
-                    # 3. Splice
                     if not qbig_series.empty and not df_sim.empty:
-                        # Find splice point (Start of QBIG)
                         splice_date = qbig_series.index[0]
-
-                        # Get Sim Data UP TO Splice Date
                         sim_part = df_sim[df_sim.index < splice_date]
 
                         if not sim_part.empty:
-                            # Align Sim End to QBIG Start
                             sim_end_val = sim_part.iloc[-1]
                             qbig_start_val = qbig_series.iloc[0]
                             scale_factor = qbig_start_val / sim_end_val if sim_end_val != 0 else 1.0
-
-                            sim_part_scaled = sim_part * scale_factor
-
-                            combined = pd.concat([sim_part_scaled, qbig_series])
-                            combined_prices[base] = combined
+                            combined_prices[base] = pd.concat([sim_part * scale_factor, qbig_series])
                         else:
-                             combined_prices[base] = qbig_series
-
+                            combined_prices[base] = qbig_series
                     elif not df_sim.empty:
                         combined_prices[base] = df_sim
                     elif not qbig_series.empty:
                         combined_prices[base] = qbig_series
 
                     continue
-
                 except Exception as e:
                     raise RuntimeError(f"Failed to load/splice local {base}: {e}")
 
-            # Standard ticker fetch via provider chain (Polygon → yfinance)
-            # SIM tickers need extended history from Testfol, not real-ticker history
             is_sim_request = base.upper().endswith("SIM") or base.upper().endswith("TR")
+            mapped_ticker = mapped_provider_tickers.get(base)
 
-            if not is_sim_request:
-                try:
-                    from app.core.shadow_backtest import parse_ticker
-                    mapped_ticker, _ = parse_ticker(base)
+            if mapped_ticker and not batched_provider_prices.empty:
+                if mapped_ticker in batched_provider_prices.columns and not batched_provider_prices[mapped_ticker].dropna().empty:
+                    combined_prices[base] = batched_provider_prices[mapped_ticker]
+                    continue
 
-                    sd_str = start_date.strftime("%Y-%m-%d") if hasattr(start_date, 'strftime') else str(start_date)
-                    ed_str = end_date.strftime("%Y-%m-%d") if hasattr(end_date, 'strftime') else str(end_date)
-
-                    provider = get_price_provider()
-                    prices = provider.fetch_prices([mapped_ticker], sd_str, ed_str)
-                    if not prices.empty and mapped_ticker in prices.columns and not prices[mapped_ticker].dropna().empty:
-                        combined_prices[base] = prices[mapped_ticker]
-                        continue
-                except Exception:
-                    pass  # Fall through to Testfol API
-
-            # Testfol API fallback (for SIM tickers or provider chain failures)
+            # Testfol API fallback (for SIM tickers or provider chain misses)
             try:
-                broad_start = "1900-01-01"
-                broad_end = pd.Timestamp.now().strftime("%Y-%m-%d")
-
                 series, _, _ = api.fetch_backtest(
-                    start_date=broad_start,
-                    end_date=broad_end,
+                    start_date="1900-01-01",
+                    end_date=today_str,
                     start_val=10000,
                     cashflow=0,
                     cashfreq="Monthly",
                     rolling=1,
                     invest_div=True,
                     rebalance="Yearly",
-                    allocation={base: 100.0}
+                    allocation={base: 100.0},
                 )
                 combined_prices[base] = series
             except Exception as api_err:
                 # Last resort: try provider chain even for SIM tickers
                 if is_sim_request:
                     try:
-                        from app.core.shadow_backtest import parse_ticker
                         mapped_ticker, _ = parse_ticker(base)
-                        provider = get_price_provider()
-                        prices = provider.fetch_prices([mapped_ticker], str(start_date), str(end_date))
+                        prices = provider.fetch_prices([mapped_ticker], sd_str, ed_str)
                         if not prices.empty and mapped_ticker in prices.columns:
                             combined_prices[base] = prices[mapped_ticker]
                             continue
@@ -206,9 +222,13 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
                 raise api_err
 
         except Exception as e:
-            warnings.warn(f"Failed to fetch data for {ticker}: {e}")
+            warnings.warn(f"Failed to fetch data for {base}: {e}")
 
-    return combined_prices
+    result = pd.DataFrame(combined_prices)
+    if not result.empty:
+        result = result.sort_index()
+    cache_set(ck, result, prefix=COMPONENT_DATA_CACHE_PREFIX)
+    return result
 
 import time
 

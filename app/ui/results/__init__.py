@@ -19,19 +19,12 @@ from app.ui.results.tabs_monte_carlo import render_monte_carlo_tab
 from app.ui.results.tabs_debug import render_debug_tab
 
 
-def _compute_fresh_yearly_returns(results: dict, port_series: pd.Series, config: dict | None = None) -> tuple[dict, pd.Series | None]:
-    """Run a fresh 1-year backtest per calendar year to get drift-free yearly returns.
-
-    Returns (yearly_dict, stitched_series) where:
-      - yearly_dict: {year: return_float}
-      - stitched_series: chained fresh-start series (normalized) for period breakdowns
-    Returns ({}, None) if params unavailable.
-    """
+def _extract_backtest_params(results: dict, config: dict | None) -> tuple[dict | None, dict | None, dict | None]:
+    """Extract allocation, maint_pcts, rebalance from results (or config fallback)."""
     allocation = results.get("allocation")
     maint_pcts = results.get("maint_pcts")
     rebalance = results.get("rebalance")
 
-    # Fallback: reconstruct from config if not in results (e.g., cached results)
     if (not allocation or maint_pcts is None) and config:
         port_name = results.get("name", "")
         for p_cfg in config.get("portfolios", []):
@@ -47,27 +40,33 @@ def _compute_fresh_yearly_returns(results: dict, port_series: pd.Series, config:
                 rebalance = dict(reb)
                 break
 
-    if not allocation or maint_pcts is None:
-        return {}, None
+    return allocation, maint_pcts, rebalance
 
-    # No drift on non-rebalanced portfolios — continuous == fresh start
-    reb_mode = (rebalance or {}).get("mode", "Standard")
-    if reb_mode == "None":
-        return {}, None
 
+@st.cache_data(show_spinner=False)
+def _compute_fresh_yearly_returns(
+    allocation: dict, maint_pcts: dict, rebalance: dict,
+    series_start: str, series_end: str, series_start_val: float,
+    year_list: tuple[int, ...],
+) -> tuple[dict, pd.Series | None]:
+    """Run a fresh 1-year backtest per calendar year to get drift-free yearly returns (cached)."""
+    import time
     from app.core.backtest_orchestrator import run_single_backtest
 
-    years = sorted(port_series.index.year.unique())
-    # Pad end date beyond last trading day to avoid SIM ticker data truncation
-    last_date = port_series.index[-1] + pd.Timedelta(days=7)
-    fresh = {}
-    year_series = []  # (year, normalized_series) for stitching
+    _log = logging.getLogger("fresh_returns")
+    _log.info("Fresh yearly returns: computing %d years (%d–%d)...", len(year_list), year_list[0], year_list[-1])
+    t0 = time.perf_counter()
 
-    for y in years:
+    last_date = pd.Timestamp(series_end) + pd.Timedelta(days=7)
+    fresh = {}
+    year_series = []
+
+    for i, y in enumerate(year_list, 1):
         start = f"{y}-01-01"
-        end = last_date.strftime("%Y-%m-%d") if y == years[-1] else f"{y}-12-31"
+        end = last_date.strftime("%Y-%m-%d") if y == year_list[-1] else f"{y}-12-31"
 
         try:
+            t_y = time.perf_counter()
             res = run_single_backtest(
                 allocation=allocation,
                 maint_pcts=maint_pcts,
@@ -89,14 +88,16 @@ def _compute_fresh_yearly_returns(results: dict, port_series: pd.Series, config:
             if s is not None and len(s) >= 2:
                 fresh[y] = (s.iloc[-1] / s.iloc[0]) - 1
                 year_series.append(s)
-        except Exception:
-            pass  # skip years that fail
+                _log.info("  [%d/%d] %d: %.2f%% (%.1fs)", i, len(year_list), y, fresh[y] * 100, time.perf_counter() - t_y)
+            else:
+                _log.warning("  [%d/%d] %d: no data", i, len(year_list), y)
+        except Exception as e:
+            _log.warning("  [%d/%d] %d: failed (%s)", i, len(year_list), y, e)
 
-    # Stitch per-year series into one continuous series (each year normalized)
     stitched = None
     if year_series:
         pieces = []
-        running_value = port_series.iloc[0]  # start at same value as main series
+        running_value = series_start_val
         for s in year_series:
             normalized = s / s.iloc[0] * running_value
             pieces.append(normalized)
@@ -105,7 +106,82 @@ def _compute_fresh_yearly_returns(results: dict, port_series: pd.Series, config:
         stitched = stitched[~stitched.index.duplicated(keep='last')]
         stitched = stitched.sort_index()
 
+    _log.info("Fresh yearly returns: done in %.1fs (%d years computed)", time.perf_counter() - t0, len(fresh))
     return fresh, stitched
+
+
+@st.cache_data(show_spinner=False)
+def _cached_tax_calculations(
+    pl_by_year: pd.DataFrame, other_income: float, filing_status: str,
+    tax_method: str, use_std_deduction: bool, state_code: str,
+    retirement_income, retirement_year, retirement_date,
+):
+    """Cached federal + state tax calculation."""
+    import time
+    _log = logging.getLogger("results")
+    _log.info("Tax calculations: computing federal + state (%s, %s)...", tax_method, filing_status)
+    t0 = time.perf_counter()
+    fed = tax_library.calculate_tax_series_with_carryforward(
+        pl_by_year, other_income, filing_status,
+        method=tax_method, use_standard_deduction=use_std_deduction,
+        retirement_income=retirement_income, retirement_year=retirement_year,
+        retirement_date=retirement_date,
+    )
+    state = tax_library.calculate_state_tax_series_with_carryforward(
+        pl_by_year, other_income, state_code, filing_status,
+        use_standard_deduction=use_std_deduction,
+        retirement_income=retirement_income, retirement_year=retirement_year,
+        retirement_date=retirement_date,
+    )
+    _log.info("Tax calculations: done in %.1fs (fed=$%.0f, state=$%.0f)", time.perf_counter() - t0, fed.sum(), state.sum())
+    return fed, state
+
+
+@st.cache_data(show_spinner=False)
+def _cached_simulate_margin(
+    port_series: pd.Series, starting_loan: float, rate_annual,
+    draw_monthly: float, wmaint: float,
+    tax_series: pd.Series | None, repayment_series: pd.Series | None,
+    draw_start_date, draw_monthly_retirement: float, retirement_date,
+    dca_series: pd.Series | None, fund_dca_margin: bool,
+):
+    """Cached margin simulation."""
+    import time
+    _log = logging.getLogger("results")
+    _log.info("Margin simulation: loan=$%.0f rate=%s draw=$%.0f/mo...", starting_loan, rate_annual, draw_monthly)
+    t0 = time.perf_counter()
+    result = api.simulate_margin(
+        port_series, starting_loan, rate_annual, draw_monthly, wmaint,
+        tax_series=tax_series, repayment_series=repayment_series,
+        draw_start_date=draw_start_date,
+        draw_monthly_retirement=draw_monthly_retirement,
+        retirement_date=retirement_date,
+        dca_series=dca_series, fund_dca_margin=fund_dca_margin,
+    )
+    _log.info("Margin simulation: done in %.1fs", time.perf_counter() - t0)
+    return result
+
+
+@st.cache_data(show_spinner=False)
+def _cached_resample_all(
+    tax_adj_port_series: pd.Series, final_adj_series: pd.Series,
+    loan_series: pd.Series, usage_series: pd.Series,
+    equity_pct_series: pd.Series, rate_series: pd.Series,
+    timeframe: str,
+):
+    """Cached batch resampling of all 6 display series."""
+    import time
+    _log = logging.getLogger("results")
+    _log.info("Resampling: 6 series at %s...", timeframe)
+    t0 = time.perf_counter()
+    ohlc = utils.resample_data(tax_adj_port_series, timeframe, method="ohlc")
+    equity = utils.resample_data(final_adj_series, timeframe, method="last")
+    loan = utils.resample_data(loan_series, timeframe, method="last")
+    usage = utils.resample_data(usage_series, timeframe, method="max")
+    equity_pct = utils.resample_data(equity_pct_series, timeframe, method="last")
+    rate = utils.resample_data(rate_series, timeframe, method="last")
+    _log.info("Resampling: done in %.1fs", time.perf_counter() - t0)
+    return ohlc, equity, loan, usage, equity_pct, rate
 
 
 def render(results: dict, config: dict, portfolio_name: str = "", clip_start_date=None) -> None:
@@ -246,25 +322,10 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     state_tax_series = pd.Series(dtype=float)
 
     if not pl_by_year.empty:
-        # Federal Tax
-        fed_tax_series = tax_library.calculate_tax_series_with_carryforward(
-            pl_by_year,
-            other_income,
-            filing_status,
-            method=tax_method,
-            use_standard_deduction=use_std_deduction,
-            retirement_income=retirement_income,
-            retirement_year=_retirement_year,
-            retirement_date=retirement_date,
-        )
-
-        # State Tax (progressive brackets)
-        state_tax_series = tax_library.calculate_state_tax_series_with_carryforward(
-            pl_by_year, other_income, state_code, filing_status,
-            use_standard_deduction=use_std_deduction,
-            retirement_income=retirement_income,
-            retirement_year=_retirement_year,
-            retirement_date=retirement_date,
+        fed_tax_series, state_tax_series = _cached_tax_calculations(
+            pl_by_year, other_income, filing_status, tax_method,
+            use_std_deduction, state_code,
+            retirement_income, _retirement_year, retirement_date,
         )
     else:
         # No realized P&L = No Tax
@@ -356,7 +417,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     _log.info("Margin sim inputs: loan=$%.0f draw=$%.0f/mo ret_draw=$%.0f/mo draw_start=%s ret_date=%s pay_tax_cash=%s",
               eff_loan, eff_draw, eff_draw_ret, draw_start_date, retirement_date, pay_tax_cash)
 
-    loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = api.simulate_margin(
+    loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = _cached_simulate_margin(
         port_series, eff_loan,
         eff_rate, eff_draw, wmaint,
         tax_series=sim_tax_series,
@@ -452,12 +513,11 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         valid_pm = max_loan_pm > 0
         tax_adj_pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
 
-    ohlc_data = utils.resample_data(tax_adj_port_series, timeframe, method="ohlc")
-    equity_resampled = utils.resample_data(final_adj_series, timeframe, method="last")
-    loan_resampled = utils.resample_data(loan_series, timeframe, method="last")
-    usage_resampled = utils.resample_data(tax_adj_usage_series, timeframe, method="max")
-    equity_pct_resampled = utils.resample_data(tax_adj_equity_pct_series, timeframe, method="last")
-    effective_rate_resampled = utils.resample_data(effective_rate_series, timeframe, method="last")
+    ohlc_data, equity_resampled, loan_resampled, usage_resampled, equity_pct_resampled, effective_rate_resampled = _cached_resample_all(
+        tax_adj_port_series, final_adj_series, loan_series,
+        tax_adj_usage_series, tax_adj_equity_pct_series, effective_rate_series,
+        timeframe,
+    )
 
 
 
@@ -639,93 +699,67 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     st.markdown("---")
 
     # =========================================================================
-    # Tabs
+    # Results View
     # =========================================================================
-    res_tab_chart, res_tab_returns, res_tab_rebal, res_tab_tax, res_tab_xray, res_tab_mc, res_tab_debug, res_tab_withdrawals = st.tabs(
-        ["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔍 X-Ray", "🔮 Monte Carlo", "🔧 Debug", "💰 Withdrawals"]
+    results_views = ["📈 Chart", "📊 Returns Analysis", "⚖️ Rebalancing", "💸 Tax Analysis", "🔍 X-Ray", "🔮 Monte Carlo", "🔧 Debug", "💰 Withdrawals"]
+    selected_results_view = st.segmented_control(
+        "Results View",
+        results_views,
+        default=results_views[0],
+        key=f"results_view_{portfolio_name or 'default'}",
+        label_visibility="collapsed",
     )
 
-    # --- Tax Impact Tab ---
-    render_tax_impact_tab(
-        res_tab_tax,
-        pl_by_year=pl_by_year,
-        config=config,
-        port_series=port_series,
-        equity_series=equity_series,
-        loan_series=loan_series,
-        final_adj_series=final_adj_series,
-        annual_total_tax=annual_total_tax,
-        tax_payment_series=tax_payment_series,
-        pay_tax_margin=pay_tax_margin,
-        pay_tax_cash=pay_tax_cash,
-        rate_annual=rate_annual,
-        draw_monthly=draw_monthly,
-        starting_loan=starting_loan,
-        wmaint=wmaint,
-        repayment_series=repayment_series,
-        twr_series=results.get("twr_series"),
-        stats=stats,
-        draw_start_date=draw_start_date,
-    )
+    if selected_results_view == "📈 Chart":
+        render_chart_tab(
+            st.container(),
+            chart_style=chart_style,
+            tax_adj_port_series=tax_adj_port_series,
+            final_adj_series=final_adj_series,
+            loan_series=loan_series,
+            tax_adj_equity_pct_series=tax_adj_equity_pct_series,
+            tax_adj_usage_series=tax_adj_usage_series,
+            equity_series=equity_series,
+            usage_series=usage_series,
+            equity_pct_series=equity_pct_series,
+            effective_rate_series=effective_rate_series,
+            ohlc_data=ohlc_data,
+            equity_resampled=equity_resampled,
+            loan_resampled=loan_resampled,
+            usage_resampled=usage_resampled,
+            equity_pct_resampled=equity_pct_resampled,
+            effective_rate_resampled=effective_rate_resampled,
+            bench_resampled=bench_resampled,
+            comp_resampled=comp_resampled,
+            port_series=port_series,
+            component_prices=component_prices,
+            portfolio_name=portfolio_name,
+            log_scale=log_scale,
+            show_range_slider=show_range_slider,
+            show_volume=show_volume,
+            timeframe=timeframe,
+            wmaint=wmaint,
+            stats=stats,
+            config=config,
+            pay_tax_cash=pay_tax_cash,
+            draw_monthly=draw_monthly,
+            draw_monthly_retirement=draw_monthly_retirement,
+            draw_start_date=draw_start_date,
+            retirement_date=retirement_date,
+            logs=logs,
+            final_tax_series=final_tax_series,
+            tax_payment_series=tax_payment_series,
+            start_val=start_val,
+            rate_annual=rate_annual,
+            pm_enabled=pm_enabled,
+            pm_mode=pm_mode,
+            pm_usage_series=tax_adj_pm_usage_series,
+            wmaint_pm=wmaint_pm,
+            pm_threshold=pm_threshold,
+            pm_blocked_dates=pm_blocked_dates,
+        )
 
-    # --- Debug Tab ---
-    render_debug_tab(res_tab_debug, logs, raw_response, portfolio_name)
-
-    # --- Withdrawals Tab ---
-    from app.ui.results.tabs_withdrawals import render_withdrawals_tab
-    render_withdrawals_tab(res_tab_withdrawals, logs, draw_monthly, draw_start_date, loan_series=loan_series)
-
-    # --- Chart Tab ---
-    render_chart_tab(
-        res_tab_chart,
-        chart_style=chart_style,
-        tax_adj_port_series=tax_adj_port_series,
-        final_adj_series=final_adj_series,
-        loan_series=loan_series,
-        tax_adj_equity_pct_series=tax_adj_equity_pct_series,
-        tax_adj_usage_series=tax_adj_usage_series,
-        equity_series=equity_series,
-        usage_series=usage_series,
-        equity_pct_series=equity_pct_series,
-        effective_rate_series=effective_rate_series,
-        ohlc_data=ohlc_data,
-        equity_resampled=equity_resampled,
-        loan_resampled=loan_resampled,
-        usage_resampled=usage_resampled,
-        equity_pct_resampled=equity_pct_resampled,
-        effective_rate_resampled=effective_rate_resampled,
-        bench_resampled=bench_resampled,
-        comp_resampled=comp_resampled,
-        port_series=port_series,
-        component_prices=component_prices,
-        portfolio_name=portfolio_name,
-        log_scale=log_scale,
-        show_range_slider=show_range_slider,
-        show_volume=show_volume,
-        timeframe=timeframe,
-        wmaint=wmaint,
-        stats=stats,
-        config=config,
-        pay_tax_cash=pay_tax_cash,
-        draw_monthly=draw_monthly,
-        draw_monthly_retirement=draw_monthly_retirement,
-        draw_start_date=draw_start_date,
-        retirement_date=retirement_date,
-        logs=logs,
-        final_tax_series=final_tax_series,
-        tax_payment_series=tax_payment_series,
-        start_val=start_val,
-        rate_annual=rate_annual,
-        pm_enabled=pm_enabled,
-        pm_mode=pm_mode,
-        pm_usage_series=tax_adj_pm_usage_series,
-        wmaint_pm=wmaint_pm,
-        pm_threshold=pm_threshold,
-        pm_blocked_dates=pm_blocked_dates,
-    )
-
-    # --- Returns Tab (inline, small) ---
-    with res_tab_returns:
+    elif selected_results_view == "📊 Returns Analysis":
         if pay_tax_cash:
             st.info("ℹ️ **Note:** Returns are **Net of Tax** (simulated as cash withdrawals).")
         elif pay_tax_margin:
@@ -734,7 +768,18 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             st.info("ℹ️ **Note:** Returns are **Gross** (Pre-Tax).")
 
         # Compute fresh per-year returns for drift-free yearly column
-        fresh_yearly, fresh_series = _compute_fresh_yearly_returns(results, tax_adj_port_series, config=config)
+        fresh_yearly, fresh_series = {}, None
+        _alloc, _maint, _rebal = _extract_backtest_params(results, config)
+        if _alloc and _maint is not None:
+            _reb_mode = (_rebal or {}).get("mode", "Standard")
+            if _reb_mode != "None":
+                fresh_yearly, fresh_series = _compute_fresh_yearly_returns(
+                    allocation=_alloc, maint_pcts=_maint, rebalance=_rebal,
+                    series_start=tax_adj_port_series.index[0].strftime("%Y-%m-%d"),
+                    series_end=tax_adj_port_series.index[-1].strftime("%Y-%m-%d"),
+                    series_start_val=float(tax_adj_port_series.iloc[0]),
+                    year_list=tuple(sorted(tax_adj_port_series.index.year.unique())),
+                )
 
         charts.render_returns_analysis(
             tax_adj_port_series,
@@ -750,8 +795,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             fresh_series=fresh_series,
         )
 
-    # --- Rebalancing Tab (inline, small) ---
-    with res_tab_rebal:
+    elif selected_results_view == "⚖️ Rebalancing":
         st.warning("⚠️ **Note:** These trade calculations assume **Gross** portfolio values. Tax payments are NOT deducted by selling shares in this view (assumes taxes paid via margin or external cash).")
         rebal_freq_for_chart = config.get('rebalance', 'Yearly')
 
@@ -787,22 +831,43 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             rebal_config=results.get("_reb", {}),
         )
 
-    # --- Tax Analysis (charts) within same tax tab ---
-    with res_tab_tax:
-        charts.render_tax_analysis(
-            pl_by_year, other_income, filing_status, state_code,
-            tax_method=tax_method,
-            use_standard_deduction=use_std_deduction,
-            unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
-            trades_df=trades_df,
-            pay_tax_cash=pay_tax_cash,
+    elif selected_results_view == "💸 Tax Analysis":
+        tax_container = st.container()
+        render_tax_impact_tab(
+            tax_container,
+            pl_by_year=pl_by_year,
+            config=config,
+            port_series=port_series,
+            equity_series=equity_series,
+            loan_series=loan_series,
+            final_adj_series=final_adj_series,
+            annual_total_tax=annual_total_tax,
+            tax_payment_series=tax_payment_series,
             pay_tax_margin=pay_tax_margin,
-            retirement_income=retirement_income,
-            retirement_year=_retirement_year,
+            pay_tax_cash=pay_tax_cash,
+            rate_annual=rate_annual,
+            draw_monthly=draw_monthly,
+            starting_loan=starting_loan,
+            wmaint=wmaint,
+            repayment_series=repayment_series,
+            twr_series=results.get("twr_series"),
+            stats=stats,
+            draw_start_date=draw_start_date,
         )
+        with tax_container:
+            charts.render_tax_analysis(
+                pl_by_year, other_income, filing_status, state_code,
+                tax_method=tax_method,
+                use_standard_deduction=use_std_deduction,
+                unrealized_pl_df=results.get("unrealized_pl_df", pd.DataFrame()),
+                trades_df=trades_df,
+                pay_tax_cash=pay_tax_cash,
+                pay_tax_margin=pay_tax_margin,
+                retirement_income=retirement_income,
+                retirement_year=_retirement_year,
+            )
 
-    # --- X-Ray Tab (inline, small) ---
-    with res_tab_xray:
+    elif selected_results_view == "🔍 X-Ray":
         if not composition_df.empty:
             latest_date = composition_df['Date'].max()
             latest_df = composition_df[composition_df['Date'] == latest_date]
@@ -816,42 +881,47 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         else:
             st.info("No composition data available for X-Ray.")
 
-    # --- Monte Carlo Tab ---
-    # Prepare daily_rets and source_label before delegation
-    extended_series = results.get("port_series")
-    tax_twr_series = results.get("twr_series")
+    elif selected_results_view == "🔮 Monte Carlo":
+        extended_series = results.get("port_series")
+        tax_twr_series = results.get("twr_series")
 
-    daily_rets = pd.Series(dtype=float)
-    source_label = "Unknown"
+        daily_rets = pd.Series(dtype=float)
+        source_label = "Unknown"
+        use_extended = False
 
-    use_extended = False
+        if extended_series is not None and not extended_series.empty:
+            if tax_twr_series is not None and not tax_twr_series.empty:
+                if extended_series.index[0] < tax_twr_series.index[0]:
+                    use_extended = True
+                    source_label = "Extended Chart Data (Simulated)"
+                else:
+                    daily_rets = tax_twr_series.pct_change()
+                    source_label = "Tax TWR Data (Real)"
+            else:
+                use_extended = True
+                source_label = "Extended Chart Data (Simulated)"
+        elif tax_twr_series is not None and not tax_twr_series.empty:
+            daily_rets = tax_twr_series.pct_change()
+            source_label = "Tax TWR Data (Real)"
 
-    if extended_series is not None and not extended_series.empty:
-        if tax_twr_series is not None and not tax_twr_series.empty:
-             if extended_series.index[0] < tax_twr_series.index[0]:
-                 use_extended = True
-                 source_label = "Extended Chart Data (Simulated)"
-             else:
-                 daily_rets = tax_twr_series.pct_change()
-                 source_label = "Tax TWR Data (Real)"
-        else:
-             use_extended = True
-             source_label = "Extended Chart Data (Simulated)"
-    elif tax_twr_series is not None and not tax_twr_series.empty:
-         daily_rets = tax_twr_series.pct_change()
-         source_label = "Tax TWR Data (Real)"
+        if use_extended:
+            daily_rets = extended_series.pct_change()
 
-    if use_extended:
-         daily_rets = extended_series.pct_change()
+        render_monte_carlo_tab(
+            st.container(),
+            results=results,
+            config=config,
+            portfolio_name=portfolio_name,
+            daily_rets=daily_rets,
+            source_label=source_label,
+        )
 
-    render_monte_carlo_tab(
-        res_tab_mc,
-        results=results,
-        config=config,
-        portfolio_name=portfolio_name,
-        daily_rets=daily_rets,
-        source_label=source_label,
-    )
+    elif selected_results_view == "🔧 Debug":
+        render_debug_tab(st.container(), logs, raw_response, portfolio_name)
+
+    else:
+        from app.ui.results.tabs_withdrawals import render_withdrawals_tab
+        render_withdrawals_tab(st.container(), logs, draw_monthly, draw_start_date, loan_series=loan_series)
 
     # -------------------------------------------------------------------------
     # Post-Tabs (Charts Controls & Report)

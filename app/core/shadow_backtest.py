@@ -2,6 +2,7 @@ import contextlib
 import io
 import logging
 import os
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, timedelta
 
@@ -235,6 +236,19 @@ def _check_drift(positions, allocation, threshold_pct):
     return max_drift > threshold_pct, max_drift, drifter
 
 
+def _check_drift_fast(position_values, target_weights_pct, threshold_pct, tickers):
+    """Array-based drift check used by the hot rebalance path."""
+    total_val = float(position_values.sum())
+    if total_val <= 0:
+        return False, 0.0, ""
+
+    current_weights_pct = (position_values / total_val) * 100.0
+    drifts = np.abs(current_weights_pct - target_weights_pct)
+    drift_idx = int(np.argmax(drifts))
+    max_drift = float(drifts[drift_idx])
+    return max_drift > threshold_pct, max_drift, tickers[drift_idx]
+
+
 def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly"):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
@@ -253,11 +267,15 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     """
 
     tickers = list(allocation.keys())
+    total_alloc = sum(allocation.values())
+    target_weight_fractions = np.array([allocation[ticker] / total_alloc for ticker in tickers], dtype=float)
+    target_weight_pcts = target_weight_fractions * 100.0
+    tax_treatments = {ticker: get_tax_treatment(ticker) for ticker in tickers}
 
     # Initialize logs
     logs = []
     log.info("Shadow Backtest started: %d tickers, %s to %s", len(tickers), start_date, end_date)
-    log.info("Config: loan=$%,.0f rate=%.2f%% draw=$%,.0f/mo ret_draw=$%,.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
+    log.info("Config: loan=$%.0f rate=%.2f%% draw=$%.0f/mo ret_draw=$%.0f/mo draw_start=%s ret_date=%s dca_in_ret=%s",
              starting_loan, margin_rate_annual, draw_monthly, draw_monthly_retirement,
              draw_start_date, retirement_date, dca_in_retirement)
     logs.append(f"Starting Shadow Backtest for {len(tickers)} tickers.")
@@ -440,18 +458,8 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         
     sim_start_date = valid_returns.index[0]
     logs.append(f"First valid data found at: {sim_start_date.date()}")
-    
+
     # Initialize Portfolio
-    positions = {} # Current value of each position
-    tax_lots = {t: [] for t in tickers} # List of TaxLot objects per ticker
-    
-    trades = []
-    composition = []
-    unrealized_pl_by_year = []
-    portfolio_history_vals = []
-    portfolio_history_dates = []
-    
-    # Check if we are starting late (Hybrid Mode)
     if sim_start_date > pd.to_datetime(start_date) and api_port_series is not None:
         logs.append(f"Hybrid Mode Active: Real data starts late ({sim_start_date.date()}).")
         try:
@@ -460,53 +468,58 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         except (KeyError, IndexError, TypeError):
             current_val = start_val
             logs.append(f"Handover Failed: Defaulting to start_val ${start_val:,.2f}")
-            
-        # Initialize positions
-        total_alloc = sum(allocation.values())
-        logs.append(f"Initializing Positions (Hybrid):")
-        for ticker, weight in allocation.items():
-            val = current_val * (weight / total_alloc)
-            positions[ticker] = val
-            
-            # Create initial tax lot
-            # We assume price=1.0 for simplicity since we track value
-            tax_lots[ticker].append(TaxLot(
-                ticker=ticker,
-                date_acquired=sim_start_date,
-                quantity=val, # quantity = value when price=1
-                cost_basis_per_share=1.0,
-                total_cost_basis=val
-            ))
-            logs.append(f"  {ticker}: ${val:,.2f}")
-            
-        returns_port = valid_returns
-        dates = returns_port.index
-        
+        initial_lot_date = sim_start_date
+        logs.append("Initializing Positions (Hybrid):")
     else:
         logs.append(f"Standard Mode: Starting simulation from beginning ({start_date}).")
         current_val = start_val
-        total_alloc = sum(allocation.values())
-        logs.append(f"Initializing Positions (Standard):")
-        for ticker, weight in allocation.items():
-            val = start_val * (weight / total_alloc)
-            positions[ticker] = val
-            
-            tax_lots[ticker].append(TaxLot(
-                ticker=ticker,
-                date_acquired=pd.to_datetime(start_date),
-                quantity=val,
-                cost_basis_per_share=1.0,
-                total_cost_basis=val
-            ))
-            logs.append(f"  {ticker}: ${val:,.2f}")
-            
-        dates = valid_returns.index
+        initial_lot_date = pd.to_datetime(start_date)
+        logs.append("Initializing Positions (Standard):")
 
-    # Iterate through dates
+    position_values = target_weight_fractions * current_val
+    lot_quantities = position_values.copy()
+    lot_cost_basis = position_values.copy()
+    tax_lots = {}
+    for ticker, value in zip(tickers, position_values):
+        tax_lots[ticker] = deque([
+            TaxLot(
+                ticker=ticker,
+                date_acquired=initial_lot_date,
+                quantity=value,
+                cost_basis_per_share=1.0,
+                total_cost_basis=value,
+            )
+        ])
+        logs.append(f"  {ticker}: ${value:,.2f}")
+
+    trades = []
+    composition = []
+    unrealized_pl_by_year = []
+    portfolio_history_vals = []
+    portfolio_history_dates = []
+
+    returns_port = valid_returns.reindex(columns=tickers)
+    dates = returns_port.index
+    return_matrix = returns_port.to_numpy(dtype=float, copy=False)
+    date_months = dates.month.to_numpy()
+    date_quarters = dates.quarter.to_numpy()
+    date_years = dates.year.to_numpy()
+    date_days = dates.day.to_numpy()
+    days_in_month = dates.days_in_month.to_numpy()
+    month_change = np.zeros(len(dates), dtype=bool)
+    quarter_change = np.zeros(len(dates), dtype=bool)
+    year_change = np.zeros(len(dates), dtype=bool)
+    if len(dates) > 1:
+        month_change[:-1] = date_months[1:] != date_months[:-1]
+        quarter_change[:-1] = date_quarters[1:] != date_quarters[:-1]
+        year_change[:-1] = date_years[1:] != date_years[:-1]
+    month_end_or_last = month_change.copy()
+    month_end_or_last[-1] = True
+
     # Initialize History with Start Date
     portfolio_history_dates.append(dates[0])
     portfolio_history_vals.append(current_val)
-    
+
     # Initialize TWR Tracking
     twr_history_dates = [dates[0]]
     twr_history_vals = [1.0] # Start at 1.0 (indexed to 100)
@@ -516,32 +529,31 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     last_rebal_month = (0, 0)
     last_rebal_quarter = (0, 0)
     last_rebal_year = -1
-    _prev_month = dates[0].month  # Initialize for monthly draw detection
+    _prev_month = int(date_months[0])  # Initialize for monthly draw detection
 
     for i in range(1, len(dates)):
         date = dates[i]
-        prev_date = dates[i-1]
+        is_last_trading_day = i == len(dates) - 1
+        is_month_boundary = bool(month_change[i])
+        is_quarter_boundary = bool(quarter_change[i])
+        is_year_boundary = bool(year_change[i])
+        is_month_end = bool(month_end_or_last[i])
 
         # 1. Update Position Values
-        day_port_val = 0
-        for ticker in tickers:
-            r = returns_port.loc[date, ticker]
-            positions[ticker] *= (1 + r)
-            day_port_val += positions[ticker]
-            
+        position_values *= (1.0 + return_matrix[i])
+        day_port_val = float(position_values.sum())
+
         # Record daily value (may be updated below after DCA injection)
         portfolio_history_dates.append(date)
         portfolio_history_vals.append(day_port_val)
 
         # Loan balance tracking (interest, draws, repayments)
         if pm_buy_block or draw_monthly > 0 or draw_monthly_retirement > 0 or loan_repayment > 0:
-            # Interest accrual
             if loan_balance > 0:
                 loan_balance *= (1 + daily_rate)
-            # Monthly draw (on last trading day of month, matching simulate_margin)
-            cur_month = date.month
-            _is_last_day_of_month = (i < len(dates) - 1 and dates[i + 1].month != date.month)
-            if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and _is_last_day_of_month:
+
+            cur_month = int(date_months[i])
+            if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and is_month_boundary:
                 if draw_start_date is None or date.date() >= draw_start_date:
                     _cur_date = date.date()
                     if draw_monthly_retirement > 0 and retirement_date is not None and _cur_date >= retirement_date:
@@ -552,83 +564,71 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         loan_balance += _draw_amt
                         _draw_label = "RetDraw" if (retirement_date is not None and _cur_date >= retirement_date) else "Draw"
                         logs.append(f"  💸 {_draw_label} {_cur_date}: +${_draw_amt:,.0f} → loan ${loan_balance:,.0f}")
-            # Loan repayment (cashflow used to pay down margin)
-            if loan_repayment > 0 and loan_balance > 0 and i < len(dates) - 1:
-                next_date = dates[i + 1]
+
+            if loan_repayment > 0 and loan_balance > 0 and not is_last_trading_day:
                 _repay = False
-                if loan_repayment_freq == "Monthly" and next_date.month != date.month:
+                if loan_repayment_freq == "Monthly" and is_month_boundary:
                     _repay = True
-                elif loan_repayment_freq == "Quarterly" and next_date.quarter != date.quarter:
+                elif loan_repayment_freq == "Quarterly" and is_quarter_boundary:
                     _repay = True
-                elif loan_repayment_freq == "Yearly" and next_date.year != date.year:
+                elif loan_repayment_freq == "Yearly" and is_year_boundary:
                     _repay = True
                 if _repay:
                     _pre_repay = loan_balance
                     loan_balance = max(0, loan_balance - loan_repayment)
                     logs.append(f"  💰 Repay {date.date()}: -${_pre_repay - loan_balance:,.0f} → loan ${loan_balance:,.0f}")
+
             _prev_month = cur_month
 
         # Calculate TWR
-        # Return = Current Pre-Flow / Previous Post-Flow
         if prev_post_flow_val > 0:
             daily_ret = day_port_val / prev_post_flow_val
         else:
             daily_ret = 1.0
-            
+
         curr_twr *= daily_ret
         twr_history_dates.append(date)
         twr_history_vals.append(curr_twr)
-            
+
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
-            # Stop DCA at draw_start_date or retirement_date if dca_in_retirement is False
             _dca_cutoff_date = draw_start_date or retirement_date
             if not dca_in_retirement and _dca_cutoff_date is not None and date.date() >= _dca_cutoff_date:
                 should_inject = False
             elif cashflow_freq == Freq.YEARLY:
-                if i < len(dates) - 1 and dates[i+1].year != date.year:
-                    should_inject = True
+                should_inject = is_year_boundary
             elif cashflow_freq == Freq.QUARTERLY:
-                if i < len(dates) - 1 and dates[i+1].quarter != date.quarter:
-                    should_inject = True
+                should_inject = is_quarter_boundary
             elif cashflow_freq == Freq.MONTHLY:
-                if i < len(dates) - 1 and dates[i+1].month != date.month:
-                    should_inject = True
-                    
+                should_inject = is_month_boundary
+
         if should_inject:
             logs.append(f"\n[DCA] {date.date()} | Injecting ${cashflow:,.2f}")
-            
-            # Distribute cashflow according to target allocation
-            total_alloc = sum(allocation.values())
-            for ticker, weight in allocation.items():
-                amount = cashflow * (weight / total_alloc)
-                positions[ticker] += amount
+
+            for idx, ticker in enumerate(tickers):
+                amount = cashflow * target_weight_fractions[idx]
+                current_pos = float(position_values[idx])
+                total_qty = float(lot_quantities[idx])
+                current_price = current_pos / total_qty if total_qty > 0 else 1.0
+                shares_bought = amount / current_price if current_price != 0 else 0.0
+
+                position_values[idx] = current_pos + amount
+                lot_quantities[idx] += shares_bought
+                lot_cost_basis[idx] += amount
                 day_port_val += amount
-                
-                # Create new Tax Lot for the injection
-                # Determine current price proxy
-                total_qty = sum(lot.quantity for lot in tax_lots[ticker])
-                current_pos = positions[ticker] - amount # Value BEFORE injection
-                
-                if total_qty > 0:
-                    current_price = current_pos / total_qty
-                else:
-                    current_price = 1.0
-                    
-                shares_bought = amount / current_price
-                
-                new_lot = TaxLot(
-                    ticker=ticker,
-                    date_acquired=date,
-                    quantity=shares_bought,
-                    cost_basis_per_share=current_price,
-                    total_cost_basis=amount
+
+                tax_lots[ticker].append(
+                    TaxLot(
+                        ticker=ticker,
+                        date_acquired=date,
+                        quantity=shares_bought,
+                        cost_basis_per_share=current_price,
+                        total_cost_basis=amount,
+                    )
                 )
-                tax_lots[ticker].append(new_lot)
-                
+
                 logs.append(f"  {ticker}: Bought ${amount:,.2f} ({shares_bought:.4f} units)")
-                
                 trades.append({
                     "Date": date,
                     "Ticker": ticker,
@@ -637,110 +637,75 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                     "Realized LT P&L": 0,
                     "Realized LT (Collectible)": 0,
                     "Realized P&L": 0,
-                    "Price (Est)": current_price
+                    "Price (Est)": current_price,
                 })
 
-            # Update recorded portfolio value to include DCA injection
             portfolio_history_vals[-1] = day_port_val
 
-        # Update baseline for next day's return calculation
         prev_post_flow_val = day_port_val
-            
+
         # 3. Check for Rebalance
         should_rebal = False
-        
+
         if rebalance_freq == Freq.YEARLY:
-            if i < len(dates) - 1:
-                next_date = dates[i+1]
-                if next_date.year != date.year:
-                    should_rebal = True
-
+            should_rebal = is_year_boundary
         elif rebalance_freq == Freq.QUARTERLY:
-            # Rebalance at end of Mar, Jun, Sep, Dec
-            # Check if next date is in a new quarter
-            if i < len(dates) - 1:
-                next_date = dates[i+1]
-                if next_date.quarter != date.quarter:
-                    should_rebal = True
-
+            should_rebal = is_quarter_boundary
         elif rebalance_freq == Freq.MONTHLY:
-            # Rebalance at end of every month
-            if i < len(dates) - 1:
-                next_date = dates[i+1]
-                if next_date.month != date.month:
-                    should_rebal = True
-
+            should_rebal = is_month_boundary
         elif rebalance_freq == "Custom":
-            # Custom rebalancing based on custom_freq (Yearly/Quarterly/Monthly)
-            
-            # Check if this is the last trading day of the month
-            is_month_end = False
-            if i < len(dates) - 1:
-                if dates[i+1].month != date.month:
-                    is_month_end = True
-            else:
-                is_month_end = True
+            effective_day = min(rebalance_day, int(days_in_month[i]))
+            current_day = int(date_days[i])
+            current_month = int(date_months[i])
 
-            days_in_month = date.days_in_month
-            # Clamp target day to actual days in potential month (for Feb/Apr etc)
-            effective_day = min(rebalance_day, days_in_month)
-            
             if custom_freq == "Monthly":
-                # Rebalance if we reached target day OR it's month end and we haven't reached target yet
-                if date.day >= effective_day or (is_month_end and effective_day > date.day):
-                    month_key = (date.year, date.month)
+                if current_day >= effective_day or (is_month_end and effective_day > current_day):
+                    month_key = (date.year, current_month)
                     if last_rebal_month != month_key:
                         should_rebal = True
                         last_rebal_month = month_key
-                        if date.day != effective_day:
-                             logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
-                        
+                        if current_day != effective_day:
+                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
+
             elif custom_freq == "Quarterly":
-                quarter_months = [1, 4, 7, 10]
-                if date.month in quarter_months:
-                    if date.day >= effective_day or (is_month_end and effective_day > date.day):
-                        quarter_key = (date.year, date.month)
-                        if last_rebal_quarter != quarter_key:
-                            should_rebal = True
-                            last_rebal_quarter = quarter_key
-                            if date.day != effective_day:
-                                logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
+                if current_month in (1, 4, 7, 10) and (current_day >= effective_day or (is_month_end and effective_day > current_day)):
+                    quarter_key = (date.year, current_month)
+                    if last_rebal_quarter != quarter_key:
+                        should_rebal = True
+                        last_rebal_quarter = quarter_key
+                        if current_day != effective_day:
+                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
 
             else:  # Yearly (default)
-                if date.month == rebalance_month:
-                     if date.day >= effective_day or (is_month_end and effective_day > date.day):
-                        if last_rebal_year != date.year:
-                            should_rebal = True
-                            last_rebal_year = date.year
-                            if date.day != effective_day:
-                                logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
+                if current_month == rebalance_month and (current_day >= effective_day or (is_month_end and effective_day > current_day)):
+                    if last_rebal_year != date.year:
+                        should_rebal = True
+                        last_rebal_year = date.year
+                        if current_day != effective_day:
+                            logs.append(f"ℹ️ Rebalance shifted: Target day {rebalance_day} → Actual {date.date()} {'(Month End)' if is_month_end else '(Next Open)'}")
 
         elif rebalance_freq == "Threshold":
-            triggered, max_drift, drifter = _check_drift(positions, allocation, threshold_pct)
+            triggered, max_drift, drifter = _check_drift_fast(position_values, target_weight_pcts, threshold_pct, tickers)
             if triggered:
                 should_rebal = True
                 logs.append(f"  ⚡ Drift trigger: {drifter} at {max_drift:.1f}pp (threshold {threshold_pct:.1f}pp)")
 
         elif rebalance_freq == "Threshold+Calendar":
             is_check_date = False
-            if i < len(dates) - 1:
-                next_date = dates[i+1]
-                if custom_freq == Freq.YEARLY and next_date.year != date.year:
-                    is_check_date = True
-                elif custom_freq == Freq.QUARTERLY and next_date.quarter != date.quarter:
-                    is_check_date = True
-                elif custom_freq == Freq.MONTHLY and next_date.month != date.month:
-                    is_check_date = True
+            if custom_freq == Freq.YEARLY:
+                is_check_date = is_year_boundary
+            elif custom_freq == Freq.QUARTERLY:
+                is_check_date = is_quarter_boundary
+            elif custom_freq == Freq.MONTHLY:
+                is_check_date = is_month_boundary
             if is_check_date:
-                triggered, max_drift, drifter = _check_drift(positions, allocation, threshold_pct)
+                triggered, max_drift, drifter = _check_drift_fast(position_values, target_weight_pcts, threshold_pct, tickers)
                 if triggered:
                     should_rebal = True
                     logs.append(f"  ⚡ Drift trigger at {custom_freq} check: {drifter} at {max_drift:.1f}pp")
                 else:
                     logs.append(f"  ✓ {custom_freq} check: max drift {max_drift:.1f}pp < {threshold_pct:.1f}pp — skip")
 
-        # No forced rebalance on last day
-                
         # 4. PM Buy Block — skip entire rebalance when equity < threshold
         if should_rebal and pm_buy_block:
             estimated_equity = day_port_val - max(loan_balance, 0)
@@ -753,46 +718,41 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             logs.append(f"\n[REBALANCE] {date.date()} | Portfolio Value: ${day_port_val:,.2f}")
             logs.append(f"{'Ticker':<10} {'Action':<6} {'Amount':<12} {'ST Gain':<12} {'LT Gain':<12}")
             logs.append("-" * 75)
-            
-            # Calculate Trades (composition recorded after trades complete)
-            for ticker in tickers:
-                target_weight = allocation.get(ticker, 0)
-                target_val = day_port_val * (target_weight / total_alloc)
-                current_pos = positions[ticker]
-                
-                trade_amt = target_val - current_pos
-                
+
+            target_values = day_port_val * target_weight_fractions
+            trade_amounts = target_values - position_values
+
+            for idx, ticker in enumerate(tickers):
+                current_pos = float(position_values[idx])
+                trade_amt = float(trade_amounts[idx])
                 st_gain = 0.0
                 lt_gain = 0.0
                 lt_gain_collectible = 0.0
-                
+
                 if abs(trade_amt) < 0.01:
                     continue
-                
-                # Determine Tax Treatment
-                tax_treatment = get_tax_treatment(ticker)
-                
-                if trade_amt > 0: # BUY
-                    total_qty = sum(lot.quantity for lot in tax_lots[ticker])
-                    if total_qty > 0:
-                        current_price = current_pos / total_qty
-                    else:
-                        current_price = 1.0 # Default if starting from 0
-                        
-                    shares_bought = trade_amt / current_price
-                    
-                    new_lot = TaxLot(
-                        ticker=ticker,
-                        date_acquired=date,
-                        quantity=shares_bought,
-                        cost_basis_per_share=current_price,
-                        total_cost_basis=trade_amt
+
+                tax_treatment = tax_treatments[ticker]
+
+                if trade_amt > 0:
+                    total_qty = float(lot_quantities[idx])
+                    current_price = current_pos / total_qty if total_qty > 0 else 1.0
+                    shares_bought = trade_amt / current_price if current_price != 0 else 0.0
+
+                    tax_lots[ticker].append(
+                        TaxLot(
+                            ticker=ticker,
+                            date_acquired=date,
+                            quantity=shares_bought,
+                            cost_basis_per_share=current_price,
+                            total_cost_basis=trade_amt,
+                        )
                     )
-                    tax_lots[ticker].append(new_lot)
-                    positions[ticker] += trade_amt
-                    
+                    position_values[idx] = current_pos + trade_amt
+                    lot_quantities[idx] += shares_bought
+                    lot_cost_basis[idx] += trade_amt
+
                     logs.append(f"{ticker:<10} {'BUY':<6} ${trade_amt:,.2f}      -             -")
-                    
                     trades.append({
                         "Date": date,
                         "Ticker": ticker,
@@ -801,67 +761,56 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         "Realized LT P&L": 0,
                         "Realized LT (Collectible)": 0,
                         "Realized P&L": 0,
-                        "Price (Est)": current_price
+                        "Price (Est)": current_price,
                     })
-                    
-                elif trade_amt < 0: # SELL
+
+                elif trade_amt < 0:
                     sell_val = -trade_amt
-                    
-                    # Determine Current Price
-                    total_qty = sum(lot.quantity for lot in tax_lots[ticker])
-                    if total_qty > 0:
-                        current_price = current_pos / total_qty
-                    else:
-                        current_price = 1.0
-                        
-                    shares_to_sell = sell_val / current_price
-                    
-                    # FIFO Logic
-                    shares_remaining_to_sell = shares_to_sell
-                    
-                    while shares_remaining_to_sell > 0 and tax_lots[ticker]:
-                        current_lot = tax_lots[ticker][0] # First lot (FIFO)
-                        
+                    total_qty = float(lot_quantities[idx])
+                    current_price = current_pos / total_qty if total_qty > 0 else 1.0
+                    shares_remaining_to_sell = sell_val / current_price if current_price != 0 else 0.0
+
+                    while shares_remaining_to_sell > 1e-12 and tax_lots[ticker]:
+                        current_lot = tax_lots[ticker][0]
                         sold_qty, cost_basis_sold, remaining_lot = current_lot.sell_shares(shares_remaining_to_sell)
-                        
-                        # Calculate Gain/Loss
                         proceeds = sold_qty * current_price
                         gain_loss = proceeds - cost_basis_sold
-                        
-                        # Determine Holding Period
-                        holding_period = date - current_lot.date_acquired
-                        is_long_term = holding_period.days > 365
-                        
-                        # Apply Tax Treatment Rules
+                        is_long_term = (date - current_lot.date_acquired).days > 365
+
                         if tax_treatment == "Section1256":
-                            # 60/40 Rule regardless of holding period
                             lt_gain += gain_loss * 0.60
                             st_gain += gain_loss * 0.40
-                            
                         elif tax_treatment == "Collectible":
                             if is_long_term:
                                 lt_gain_collectible += gain_loss
                             else:
                                 st_gain += gain_loss
-                                
-                        else: # Equity (Standard)
+                        else:
                             if is_long_term:
                                 lt_gain += gain_loss
                             else:
                                 st_gain += gain_loss
-                        
-                        # Update Lots
+
+                        lot_quantities[idx] -= sold_qty
+                        lot_cost_basis[idx] -= cost_basis_sold
+
                         if remaining_lot:
                             tax_lots[ticker][0] = remaining_lot
-                            shares_remaining_to_sell = 0
+                            shares_remaining_to_sell = 0.0
                         else:
-                            tax_lots[ticker].pop(0) # Lot fully consumed
+                            tax_lots[ticker].popleft()
                             shares_remaining_to_sell -= sold_qty
-                            
-                    positions[ticker] += trade_amt # trade_amt is negative
+
+                    if abs(lot_quantities[idx]) < 1e-12:
+                        lot_quantities[idx] = 0.0
+                    if abs(lot_cost_basis[idx]) < 1e-8:
+                        lot_cost_basis[idx] = 0.0
+
+                    position_values[idx] = current_pos + trade_amt
+                    if abs(position_values[idx]) < 1e-8:
+                        position_values[idx] = 0.0
 
                     logs.append(f"{ticker:<10} {'SELL':<6} ${sell_val:,.2f}      ${st_gain:,.2f}      ${lt_gain:,.2f}")
-                    
                     trades.append({
                         "Date": date,
                         "Ticker": ticker,
@@ -870,38 +819,24 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
                         "Realized LT P&L": lt_gain,
                         "Realized LT (Collectible)": lt_gain_collectible,
                         "Realized P&L": st_gain + lt_gain + lt_gain_collectible,
-                        "Price (Est)": current_price
+                        "Price (Est)": current_price,
                     })
 
             logs.append("-" * 75)
 
-            # Record Post-Rebalance Composition (after trades, reflects target weights)
-            for ticker in tickers:
+            for idx, ticker in enumerate(tickers):
                 composition.append({
                     "Date": date,
                     "Ticker": ticker,
-                    "Value": positions[ticker]
+                    "Value": float(position_values[idx]),
                 })
 
         # 5. Record Month-End Unrealized P&L
-        is_month_end = False
-        if i < len(dates) - 1:
-            if dates[i+1].month != date.month or dates[i+1].year != date.year:
-                is_month_end = True
-        elif i == len(dates) - 1:
-            is_month_end = True
-            
         if is_month_end:
-            total_unrealized = 0
-            for t in tickers:
-                pos_val = positions[t]
-                total_basis = sum(lot.total_cost_basis for lot in tax_lots[t])
-                total_unrealized += (pos_val - total_basis)
-                
             unrealized_pl_by_year.append({
                 "Date": date,
                 "Year": date.year,
-                "Unrealized P&L": total_unrealized
+                "Unrealized P&L": float(position_values.sum() - lot_cost_basis.sum()),
             })
                 
     # Record final composition snapshot
@@ -918,13 +853,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             
     if not already_recorded:
         logs.append(f"\n[SNAPSHOT] Final Composition at {last_date.date()}")
-        for ticker in tickers:
+        for idx, ticker in enumerate(tickers):
             composition.append({
                 "Date": last_date,
                 "Ticker": ticker,
-                "Value": positions[ticker]
+                "Value": float(position_values[idx])
             })
-            logs.append(f"  {ticker}: ${positions[ticker]:,.2f}")
+            logs.append(f"  {ticker}: ${position_values[idx]:,.2f}")
                 
     trades_df = pd.DataFrame(trades)
     composition_df = pd.DataFrame(composition)

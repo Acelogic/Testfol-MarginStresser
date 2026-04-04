@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 
 from app.common.constants import Freq, RebalMode
-from app.core.backtest_orchestrator import calc_rebal_offset, run_single_backtest
+from app.core import backtest_orchestrator as orchestrator
+from app.core.backtest_orchestrator import calc_rebal_offset, run_multi_backtest, run_single_backtest
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,15 @@ def _mock_shadow(allocation, start_val, start_date, end_date,
     series = pd.Series(vals, index=dates, name="Portfolio")
     twr = pd.Series([1 + 0.0003 * i for i in range(len(dates))], index=dates, name="TWR")
     return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], series, twr)
+
+
+def _mock_component_prices(tickers, start_date, end_date):
+    """Return deterministic component prices for the requested tickers/date range."""
+    dates = pd.bdate_range(start_date, end_date)
+    data = {}
+    for idx, ticker in enumerate(dict.fromkeys(ticker.split("?")[0] for ticker in tickers), start=1):
+        data[ticker] = [100.0 + idx + day for day in range(len(dates))]
+    return pd.DataFrame(data, index=dates)
 
 
 class TestRunSingleBacktest:
@@ -164,3 +174,131 @@ class TestRunSingleBacktest:
         )
         assert "cagr" in result["stats"]
         assert "sharpe" in result["stats"]
+
+
+class TestRunMultiBacktest:
+    def test_reuses_shared_component_prices_in_pass1(self, monkeypatch):
+        """Pass 1 fetches one shared component universe instead of per-portfolio fetches."""
+        fetch_calls = []
+
+        def _recording_component_fetch(tickers, start_date, end_date):
+            fetch_calls.append((tuple(tickers), start_date, end_date))
+            return _mock_component_prices(tickers, start_date, end_date)
+
+        monkeypatch.setattr(orchestrator, "fetch_component_data", _recording_component_fetch)
+
+        portfolios = [
+            {
+                "name": "First",
+                "allocation": {"AAA": 50.0, "BBB": 50.0},
+                "maint_pcts": {"AAA": 25.0, "BBB": 25.0},
+                "rebalance": {"mode": RebalMode.NONE, "freq": Freq.YEARLY},
+            },
+            {
+                "name": "Second",
+                "allocation": {"BBB": 40.0, "CCC": 60.0},
+                "maint_pcts": {"BBB": 25.0, "CCC": 25.0},
+                "rebalance": {"mode": RebalMode.NONE, "freq": Freq.YEARLY},
+            },
+        ]
+
+        results, bench_series = run_multi_backtest(
+            portfolios=portfolios,
+            start_date="2020-01-02",
+            end_date="2020-12-31",
+            start_val=10000.0,
+            cashflow_amount=0.0,
+            cashflow_freq="Monthly",
+            invest_div=True,
+            pay_down_margin=False,
+            tax_config={},
+            bearer_token=None,
+            fetch_backtest_fn=_mock_fetch,
+            run_shadow_fn=_mock_shadow,
+        )
+
+        assert [result["name"] for result in results] == ["First", "Second"]
+        assert bench_series == []
+        assert len(fetch_calls) == 1
+        assert set(fetch_calls[0][0]) == {"AAA", "BBB", "CCC"}
+
+    def test_reuses_shared_component_prices_for_local_pass2_reruns(self, monkeypatch):
+        """Aligned local reruns share one common-start fetch instead of refetching per portfolio."""
+        fetch_calls = []
+
+        def _recording_component_fetch(tickers, start_date, end_date):
+            fetch_calls.append((tuple(tickers), start_date, end_date))
+            return _mock_component_prices(tickers, start_date, end_date)
+
+        def _shadow_with_late_portfolio(
+            allocation,
+            start_val,
+            start_date,
+            end_date,
+            api_port_series=None,
+            rebalance_freq="Yearly",
+            cashflow=0.0,
+            cashflow_freq="Monthly",
+            prices_df=None,
+            rebalance_month=1,
+            rebalance_day=1,
+            custom_freq="Yearly",
+            invest_dividends=True,
+            pay_down_margin=False,
+            tax_config=None,
+            custom_rebal_config=None,
+            **kwargs,
+        ):
+            dates = pd.bdate_range(start_date, end_date)
+            if "LATE" in allocation:
+                dates = dates[5:]
+            vals = [start_val * (1 + 0.0003 * i) for i in range(len(dates))]
+            series = pd.Series(vals, index=dates, name="Portfolio")
+            twr = pd.Series([1 + 0.0003 * i for i in range(len(dates))], index=dates, name="TWR")
+            return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], series, twr)
+
+        monkeypatch.setattr(orchestrator, "fetch_component_data", _recording_component_fetch)
+
+        portfolios = [
+            {
+                "name": "Early A",
+                "allocation": {"AAA": 100.0},
+                "maint_pcts": {"AAA": 25.0},
+                "rebalance": {"mode": RebalMode.NONE, "freq": Freq.YEARLY},
+            },
+            {
+                "name": "Early B",
+                "allocation": {"BBB": 100.0},
+                "maint_pcts": {"BBB": 25.0},
+                "rebalance": {"mode": RebalMode.NONE, "freq": Freq.YEARLY},
+            },
+            {
+                "name": "Late",
+                "allocation": {"LATE": 100.0},
+                "maint_pcts": {"LATE": 25.0},
+                "rebalance": {"mode": RebalMode.NONE, "freq": Freq.YEARLY},
+            },
+        ]
+
+        results, _ = run_multi_backtest(
+            portfolios=portfolios,
+            start_date="2020-01-02",
+            end_date="2020-12-31",
+            start_val=10000.0,
+            cashflow_amount=0.0,
+            cashflow_freq="Monthly",
+            invest_div=True,
+            pay_down_margin=False,
+            tax_config={},
+            bearer_token=None,
+            fetch_backtest_fn=_mock_fetch,
+            run_shadow_fn=_shadow_with_late_portfolio,
+        )
+
+        assert len(fetch_calls) == 2
+        assert set(fetch_calls[0][0]) == {"AAA", "BBB", "LATE"}
+        assert set(fetch_calls[1][0]) == {"AAA", "BBB"}
+        common_start_str = results[2]["series"].index[0].strftime("%Y-%m-%d")
+        assert fetch_calls[1][1] == common_start_str
+        assert results[0]["shadow_range"].startswith(common_start_str)
+        assert results[1]["shadow_range"].startswith(common_start_str)
