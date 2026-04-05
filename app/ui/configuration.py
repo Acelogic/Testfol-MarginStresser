@@ -433,6 +433,22 @@ def render():
             "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
         })
 
+    # Margin widget keys to persist across portfolio switches
+    _MARGIN_WIDGET_KEYS = [
+        "tax_sim_mode", "other_income", "filing_status", "state_code",
+        "tax_method", "starting_loan", "equity_init", "starting_cash",
+        "draw_monthly", "draw_start_date", "draw_monthly_retirement",
+        "retirement_date", "dca_in_retirement", "retirement_income",
+        "default_maint", "margin_rate_model", "rate_annual",
+        "spread_pct", "t1_spread", "t2_spread", "t3_spread", "t4_spread",
+        "pm_mode", "pm_buy_block", "pm_buy_block_threshold",
+    ]
+
+    # Restore margin settings from backup (survives fragment widget resets)
+    for _k, _v in st.session_state.get("_margin_store", {}).items():
+        if _k not in st.session_state:
+            st.session_state[_k] = _v
+
     @st.fragment
     def _margin_fragment():
         # Move Tax Simulation to top to control state of other inputs
@@ -473,6 +489,7 @@ def render():
                 ["Smart (Historical Brackets)", "Max (Top Rate)", "Fixed (2025 Rates)"],
                 index=0,
                 horizontal=True,
+                key="tax_method",
                 help="Smart: Uses historical inclusion rates. Max: Flat historical max rate. Fixed: Modern 0/15/20% for all years."
             )
             
@@ -672,6 +689,13 @@ def render():
 
             # Backward compat
             config['pm_enabled'] = pm_mode != "Off"
+
+        # Save margin settings to stable backup
+        _backup = {}
+        for _k in _MARGIN_WIDGET_KEYS:
+            if _k in st.session_state:
+                _backup[_k] = st.session_state[_k]
+        st.session_state._margin_store = _backup
 
     with tab_margin:
         _margin_fragment()
