@@ -778,8 +778,53 @@ def run_multi_backtest(
         if b is not None and not b.empty:
             start_dates.append(b.index.min())
 
+    # Include data availability from failed portfolios so that common_start
+    # reflects the newest ticker across ALL portfolios (not just successful ones).
+    _failed_indices = []
+    if pass1_component_prices is not None and not pass1_component_prices.empty:
+        for _fi, _fp in enumerate(portfolios):
+            _fs = results_list[_fi].get("series") if results_list[_fi] else None
+            if _fs is None or _fs.empty:
+                _ftickers = _base_tickers(_fp.get("allocation", {}).keys())
+                _latest = None
+                for _ft in _ftickers:
+                    if _ft in pass1_component_prices.columns:
+                        _fvi = pass1_component_prices[_ft].first_valid_index()
+                        if _fvi is not None and (_latest is None or _fvi > _latest):
+                            _latest = _fvi
+                if _latest is not None:
+                    start_dates.append(_latest)
+                    _failed_indices.append(_fi)
+
     common_start = max(start_dates) if start_dates else None
     global_start_val = start_val
+
+    # Re-run failed portfolios from common_start (they had no data at the
+    # original start_date but may have data from common_start onward).
+    if common_start and _failed_indices:
+        _cs_str = common_start.strftime("%Y-%m-%d")
+        for _fi in _failed_indices:
+            _, _raw, _bench = _run_pass1_portfolio(
+                _fi,
+                portfolios[_fi],
+                start_date=_cs_str,
+                end_date=end_date,
+                start_val=start_val,
+                cashflow_amount=cashflow_amount,
+                cashflow_freq=cashflow_freq,
+                invest_div=invest_div,
+                pay_down_margin=pay_down_margin,
+                tax_config=tax_config,
+                bearer_token=bearer_token,
+                fetch_fn=fetch_fn,
+                shadow_fn=shadow_fn,
+                pm_config=pm_config,
+                prefetched_component_prices=pass1_component_prices,
+            )
+            results_list[_fi] = _raw
+            if _bench is not None:
+                bench_by_index[_fi] = _bench
+        bench_series_list = [b for b in bench_by_index if b is not None]
 
     # Resolve draw_start_date for Pass 2 re-runs
     _p2_cfg = pm_config or {}
