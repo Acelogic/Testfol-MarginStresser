@@ -378,10 +378,17 @@ def _run_via_api(config, start_date, end_date, bearer_token):
 st.set_page_config(page_title="Testfol Charting", layout="wide", page_icon="📈")
 
 # --- Navigation ---
-mode = st.sidebar.radio("Navigation", ["Simulator", "Documentation"], horizontal=True)
+mode = st.sidebar.radio(
+    "Navigation",
+    ["Simulator", "Docs", "Changelog"],
+    horizontal=True,
+)
 
-if mode == "Documentation":
+if mode == "Docs":
     utils.render_documentation()
+    st.stop()
+if mode == "Changelog":
+    utils.render_changelog()
     st.stop()
 
 # --- Sidebar ---

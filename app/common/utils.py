@@ -3,6 +3,86 @@ import streamlit as st
 import json
 import os
 
+APP_VERSION = "3.7.0"
+
+CHANGELOG_MARKDOWN = """
+## Changelog
+
+### v3.7.0 - Changelog Navigation & Sidebar Cleanup
+- Moved the changelog out of the simulator control stack and into its own top-level navigation destination.
+- Added a compact `Changelog` menu item beside `Simulator` and `Docs`, keeping release notes accessible without taking over the sidebar.
+- Removed the bulky changelog expander from the main simulator sidebar so global settings, run controls, and API settings stay closer to the top.
+- Shortened the documentation nav label to `Docs` to avoid wrapping in Streamlit's horizontal sidebar navigation.
+- Centralized the visible app version as `APP_VERSION`, making future release bumps less scattered.
+- Consolidated release notes into a dedicated changelog renderer instead of embedding a long markdown block in the simulator sidebar.
+
+### v3.6.0 - Fresh Start Returns & Rebalance Timing Fix
+- Fresh Start yearly column: per-year backtests for drift-free annual returns
+- Fresh Start toggle: switch entire Returns Analysis to use fresh-start data
+- Stitched fresh-start series for quarterly, monthly, daily, and drawdown breakdowns
+- Rebalance timing fix: Custom mode now correctly triggers on target date instead of end-of-period
+- Leveraged presets switched from Standard to Custom (Jan 1) rebalancing
+- Single-ticker presets (QLD, QQUP) set to no rebalancing
+- None rebalance mode added to UI
+
+### v3.5.0 - Drawdowns Tab & Corrections Analysis
+- New Drawdowns tab in Returns Analysis
+- Corrections greater than 5% with SPY comparison and severity filter
+- 70+ market event labels from 2000-2026
+- Sortable duration columns
+
+### v3.4.0 - NDX Simulation Accuracy
+- Official Nasdaq membership auditing
+- Survivorship bias dampening
+- Price cache improvements
+
+### v3.3.0 - Multi-Provider Price Data
+- Polygon.io to yfinance automatic failover
+- Component performance chart
+- ER-aware presets for NDXMEGASPLIT with ERs
+
+### v3.2.0 - Margin & Tax Overhaul
+- Historical smart tax rates from 2013-2023
+- Variable Fed Funds margin interest
+- Draw start date and retirement income
+- 164 regression tests
+
+### v3.1.0 - Portfolio Margin & State Taxes
+- Dynamic PM comparison and buy restrictions
+- State tax library for all 50 states
+- Rolling metrics and risk charts
+
+### v3.0.0 - Architecture Refactor
+- Split into `app/` package structure
+- FastAPI backend with REST endpoints
+- Shadow backtest engine with FIFO tax lots
+- Disk-based HMAC cache
+
+### v2.5.0 - Technical Analysis
+- 200DMA, 150MA, and Munger 200WMA
+- Weinstein Stage Analysis
+- NDX-100 MA scanner
+- Trader's Cheat Sheet
+
+### v2.0.0 - Returns & Monte Carlo
+- Seasonal summary, heatmaps, and distributions
+- Annual, quarterly, monthly, and daily returns
+- Monte Carlo simulation
+- Benchmark comparisons
+
+### v1.5.0 - Backtesting Engine
+- Shadow yfinance backtester
+- Custom rebalancing logic
+- Tax calculations for federal and GLD handling
+- NDXMEGA simulated tickers
+
+### v1.0.0 - Initial Release
+- Margin stress testing
+- Log scaling and chart metrics
+- Testfol API integration
+"""
+
+
 def color_return(val):
     if pd.isna(val): return ""
     color = '#00CC96' if val >= 0 else '#EF553B'
@@ -118,3 +198,12 @@ def render_documentation():
         st.markdown(content)
     else:
         st.error(f"Documentation file not found: {doc_path}")
+
+
+def render_changelog():
+    st.sidebar.title("Changelog")
+    st.sidebar.caption(f"Current version: v{APP_VERSION}")
+    st.sidebar.markdown("---")
+
+    st.title(f"Testfol Charting v{APP_VERSION}")
+    st.markdown(CHANGELOG_MARKDOWN)
