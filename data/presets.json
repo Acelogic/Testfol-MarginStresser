@@ -251,12 +251,14 @@
                 "Ticker": "SPY",
                 "Weight %": 100.0,
                 "Maint %": 25.0,
-                "PM Maint %": 0.0
+                "PM Maint %": 9.0
             }
         ],
         "rebalance": {
             "mode": "Standard",
-            "freq": "Yearly"
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
         }
     },
     {
@@ -532,7 +534,7 @@
                 "Ticker": "QQQ",
                 "Weight %": 100.0,
                 "Maint %": 25.0,
-                "PM Maint %": 0.0
+                "PM Maint %": 9.0
             }
         ],
         "rebalance": {
@@ -667,16 +669,45 @@
                 "Ticker": "SPYSIM?L=2",
                 "Weight %": 60.0,
                 "Maint %": 50.0,
-                "PM Maint %": 0.0
+                "PM Maint %": 30.0
             },
             {
                 "Ticker": "VXUSSIM",
                 "Weight %": 20.0,
                 "Maint %": 25.0,
+                "PM Maint %": 9.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "60% SSO / 20% ZROZ / 20% GLD",
+        "allocation": [
+            {
+                "Ticker": "SPYSIM?L=2",
+                "Weight %": 60.0,
+                "Maint %": 50.0,
                 "PM Maint %": 0.0
             },
             {
                 "Ticker": "GLDSIM",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "ZROZSIM",
                 "Weight %": 20.0,
                 "Maint %": 25.0,
                 "PM Maint %": 0.0

@@ -219,3 +219,6 @@ data/api_cache/
 
 # Git Worktrees
 .worktrees/
+
+# Local brainstorm/artifact workspace
+.superpowers/
