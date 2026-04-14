@@ -85,6 +85,8 @@ def backtest():
 
     # Simulation Variables
     dates = sorted(weights_df['Date'].unique())
+    if dates and data.index.max() > dates[-1]:
+        dates.append(data.index.max())
     mega_values = pd.Series(index=data.index, dtype=float)
     sim_start = data.index[data.index.searchsorted(dates[0])]  # First trading day on or after first weights date
     mega_values.loc[sim_start] = 100.0  # Index base 100

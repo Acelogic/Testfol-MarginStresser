@@ -39,7 +39,15 @@ def get_price_data(tickers, start_date='2000-01-01', force_refresh=False, data_s
             df = pd.read_pickle(cache_file)
             
             missing = [t for t in tickers if t not in df.columns]
+            present = [t for t in tickers if t in df.columns and df[t].notna().any()]
             pct_missing = len(missing) / len(tickers) if tickers else 0
+
+            # For small ad-hoc requests, a missing ticker usually means we are
+            # adding a live benchmark/proxy such as QBIG. Fetch and merge it
+            # instead of returning an unrelated cached universe.
+            if missing and (len(tickers) <= 5 or not present):
+                print(f"Cache missing requested ticker(s): {', '.join(missing)}. Fetching and merging...")
+                return download_and_cache(missing, start_date, cache_file, source, api_key)
             
             if pct_missing > 0.25:
                 print(f"Cache missing {len(missing)} tickers ({pct_missing:.1%}) — likely historical/delisted, using cache as-is.")
@@ -82,11 +90,12 @@ def download_and_cache(tickers, start_date, cache_file, data_source='yfinance', 
         # Check 1: Tickers not in columns
         missing_tickers = [t for t in unique_tickers if t not in downloaded_tickers]
         
-        # Check 2: Tickers with >50% NaN (yfinance returns partial data for many delisted)
+        # Check 2: truly empty tickers. Do not drop partial-history names:
+        # recent NDX additions/IPOs can be mostly NaN when the request starts in 1999.
         if not new_df.empty:
             for t in list(downloaded_tickers):
-                nan_pct = new_df[t].isna().mean()
-                if nan_pct > 0.50:
+                valid_count = int(new_df[t].notna().sum())
+                if valid_count < 2:
                     missing_tickers.append(t)
                     new_df = new_df.drop(columns=[t])
         
@@ -311,11 +320,29 @@ def download_from_yfinance(tickers, start_date):
     print(f"[yfinance] Downloading prices for {len(tickers)} tickers from {start_date}...")
     
     data = yf.download(tickers, start=start_date, auto_adjust=True, progress=True)
-    
-    if 'Close' in data.columns:
-        return data['Close']
+
+    if data.empty:
+        return pd.DataFrame()
+
+    ticker_list = list(tickers)
+    single_ticker = ticker_list[0] if len(ticker_list) == 1 else None
+
+    if isinstance(data.columns, pd.MultiIndex):
+        if 'Close' in data.columns.get_level_values(0):
+            close = data['Close']
+        else:
+            close = data
+    elif 'Close' in data.columns:
+        close = data['Close']
     else:
-        return data
+        close = data
+
+    if isinstance(close, pd.Series):
+        close = close.to_frame(name=single_ticker or close.name or 'Close')
+    elif single_ticker and len(close.columns) == 1:
+        close = close.rename(columns={close.columns[0]: single_ticker})
+
+    return close
 
 def download_from_stooq(tickers, start_date):
     """Download price data directly from Stooq CSV endpoint (no pandas-datareader)."""

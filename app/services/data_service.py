@@ -25,7 +25,88 @@ def _normalize_date_str(value) -> str:
     return value.strftime("%Y-%m-%d") if hasattr(value, "strftime") else str(value)
 
 
-def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFrame:
+def clip_component_data_to_synced_end(
+    prices: pd.DataFrame,
+    required_columns: list[str],
+) -> pd.DataFrame:
+    """Drop trailing dates until every requested component has real data.
+
+    This prevents mixed-date portfolios, e.g. live single names updating to a
+    new trading day while SIM/proxy sleeves are still one close behind.
+    """
+    if prices.empty or not required_columns:
+        return prices
+
+    result = prices.copy()
+    if not isinstance(result.index, pd.DatetimeIndex):
+        result.index = pd.to_datetime(result.index)
+    if result.index.tz is not None:
+        result.index = result.index.tz_localize(None)
+    result = result.sort_index()
+
+    columns = [col for col in dict.fromkeys(required_columns) if col in result.columns]
+    if len(columns) < 2:
+        return result
+
+    last_valid_by_col: dict[str, pd.Timestamp] = {}
+    for col in columns:
+        series = result[col].dropna()
+        if not series.empty:
+            last_valid_by_col[col] = pd.Timestamp(series.index[-1])
+
+    if len(last_valid_by_col) < 2:
+        return result
+
+    synced_end = min(last_valid_by_col.values())
+    latest_end = max(last_valid_by_col.values())
+    if synced_end >= latest_end:
+        return result
+
+    stale_cols = sorted(
+        col for col, last_date in last_valid_by_col.items()
+        if last_date == synced_end
+    )
+    fresh_cols = sorted(
+        col for col, last_date in last_valid_by_col.items()
+        if last_date == latest_end
+    )
+    logger.warning(
+        "Clipping component data to %s because not all sleeves are synced "
+        "(stale: %s; latest: %s at %s)",
+        synced_end.date(),
+        ", ".join(stale_cols),
+        ", ".join(fresh_cols),
+        latest_end.date(),
+    )
+    return result.loc[result.index <= synced_end]
+
+
+def _component_cache_is_complete(
+    prices: pd.DataFrame,
+    required_columns: list[str],
+    start_date: str,
+    end_date: str,
+) -> bool:
+    if prices.empty:
+        return False
+
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        prices = prices.copy()
+        prices.index = pd.to_datetime(prices.index)
+
+    window = prices.loc[pd.Timestamp(start_date):pd.Timestamp(end_date)]
+    if window.empty:
+        return False
+
+    for col in dict.fromkeys(required_columns):
+        if col not in window.columns or window[col].dropna().empty:
+            logger.info("Ignoring component cache with missing/empty column: %s", col)
+            return False
+
+    return True
+
+
+def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: bool = True) -> pd.DataFrame:
     """
     Fetches historical data for each ticker individually via Testfol API (or local).
     Handles composite tickers like NDXMEGASIM by splicing local CSVs with live data.
@@ -43,12 +124,14 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
             "tickers": unique_tickers,
             "start_date": sd_str,
             "end_date": ed_str,
+            "sync_end": sync_end,
+            "sync_policy": "requested-window-v3",
         },
         sort_keys=True,
     )
     ck = cache_key(cache_payload)
     cached = cache_get(ck, prefix=COMPONENT_DATA_CACHE_PREFIX, ttl=COMPONENT_DATA_CACHE_TTL)
-    if cached is not None:
+    if cached is not None and _component_cache_is_complete(cached, unique_bases, sd_str, ed_str):
         return cached
 
     combined_prices: dict[str, pd.Series] = {}
@@ -227,6 +310,13 @@ def fetch_component_data(tickers: list[str], start_date, end_date) -> pd.DataFra
     result = pd.DataFrame(combined_prices)
     if not result.empty:
         result = result.sort_index()
+        if not isinstance(result.index, pd.DatetimeIndex):
+            result.index = pd.to_datetime(result.index)
+        if result.index.tz is not None:
+            result.index = result.index.tz_localize(None)
+        result = result.loc[pd.Timestamp(sd_str):pd.Timestamp(ed_str)]
+        if sync_end:
+            result = clip_component_data_to_synced_end(result, unique_bases)
     cache_set(ck, result, prefix=COMPONENT_DATA_CACHE_PREFIX)
     return result
 

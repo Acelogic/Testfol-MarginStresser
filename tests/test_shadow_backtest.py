@@ -62,6 +62,30 @@ def test_growth_backtest(growing_prices, sample_allocation):
     assert 18000 < final_val < 22000
 
 
+def test_shadow_backtest_does_not_forward_fill_stale_component_prices():
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"])
+    prices = pd.DataFrame(
+        {
+            "SIM": [100.0, 101.0, None],
+            "LIVE": [100.0, 101.0, 102.0],
+        },
+        index=dates,
+    )
+
+    result = run_shadow_backtest(
+        allocation={"SIM": 50.0, "LIVE": 50.0},
+        start_val=10000.0,
+        start_date="2024-01-02",
+        end_date="2024-01-04",
+        prices_df=prices,
+        rebalance_freq="Yearly",
+    )
+
+    _, _, _, _, logs, port_series, _, *_ = result
+    assert not port_series.empty, logs
+    assert port_series.index.max() == pd.Timestamp("2024-01-03")
+
+
 def test_dca_monthly(flat_prices, sample_allocation):
     """$1000/month cashflow -> correct number of buy trades."""
     result = run_shadow_backtest(

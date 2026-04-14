@@ -48,13 +48,14 @@ def _compute_fresh_yearly_returns(
     allocation: dict, maint_pcts: dict, rebalance: dict,
     series_start: str, series_end: str, series_start_val: float,
     year_list: tuple[int, ...],
+    cache_policy: str = "synced-component-windows-v3",
 ) -> tuple[dict, pd.Series | None]:
     """Run a fresh 1-year backtest per calendar year to get drift-free yearly returns (cached)."""
     import time
     from app.core.backtest_orchestrator import run_single_backtest
 
     _log = logging.getLogger("fresh_returns")
-    _log.info("Fresh yearly returns: computing %d years (%d–%d)...", len(year_list), year_list[0], year_list[-1])
+    _log.info("Fresh yearly returns: computing %d years (%d–%d, %s)...", len(year_list), year_list[0], year_list[-1], cache_policy)
     t0 = time.perf_counter()
 
     last_date = pd.Timestamp(series_end) + pd.Timedelta(days=7)

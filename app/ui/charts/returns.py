@@ -11,7 +11,7 @@ from app.core import calculations
 def _resample_returns(series, rule):
     """Resample series and compute period returns, including the first period."""
     resampled = series.resample(rule).last()
-    ret = resampled.pct_change()
+    ret = resampled.pct_change(fill_method=None)
     # First period has no prior — compute return from actual series start
     if len(resampled) > 0 and not ret.empty:
         first_val = series.iloc[0]
@@ -375,7 +375,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         yearly_col = []
         for y in years:
             row = pivot.loc[y]
-            ret = (1 + row.fillna(0)).prod() - 1
+            ret = float("nan") if row.isna().all() else (1 + row.fillna(0)).prod() - 1
             yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
@@ -502,7 +502,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         yearly_col = []
         for y in years:
             row = pivot.loc[y]
-            ret = (1 + row.fillna(0)).prod() - 1
+            ret = float("nan") if row.isna().all() else (1 + row.fillna(0)).prod() - 1
             yearly_col.append(ret)
         yearly_avg = np.nanmean(yearly_col) if len(yearly_col) > 0 else float("nan")
         z_combined_yearly = np.array(yearly_col + [yearly_avg]).reshape(-1, 1)
@@ -773,7 +773,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         df_daily_list = df_daily_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
 
         st.dataframe(
-            df_daily_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
+            df_daily_list.style.format({"Return": "{:+.2%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
             use_container_width=True,
             hide_index=True,
         )

@@ -251,7 +251,7 @@ def validate():
     print(f"\nChart saved to {out_img}")
 
 def validate_qbig():
-    print("\n\n=== Validating NDXMEGASIM vs QBIG ===")
+    print("\n\n=== Validating NDXMEGA2SIM vs QBIG ===")
     
     # 1. Load Simulation
     sim_path = os.path.join(config.BASE_DIR, "..", "NDXMEGA2SIM.csv")
@@ -271,7 +271,7 @@ def validate_qbig():
     else:
         sim_series = sim_df.iloc[:, 0]
     
-    sim_series.name = "NDXMEGASIM"
+    sim_series.name = "NDXMEGA2SIM"
 
     # 2. Fetch Real (QBIG)
     ticker = "QBIG"
@@ -284,10 +284,9 @@ def validate_qbig():
         else:
              if ticker in real_df.columns:
                  real_series = real_df[ticker]
-             elif 'Close' in real_df.columns:
-                 real_series = real_df['Close']
              else:
-                 real_series = real_df.iloc[:, 0]
+                 available = ', '.join(map(str, real_df.columns[:10]))
+                 raise ValueError(f"{ticker} was not returned by the price provider. Available columns: {available}")
                  
         real_series.name = "Real (QBIG)"
         real_series.index = pd.to_datetime(real_series.index)

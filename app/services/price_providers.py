@@ -74,7 +74,8 @@ class YFinanceProvider:
             return pd.DataFrame()
 
         sd = str(start_date)
-        ed = str(end_date)
+        # yfinance treats end= as exclusive; callers pass inclusive app dates.
+        ed = (pd.Timestamp(end_date) + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
 
         result = pd.DataFrame()
 
@@ -219,11 +220,19 @@ class ChainedProvider:
             "start_date": str(start_date),
             "end_date": str(end_date),
             "adjusted": adjusted,
+            "cache_version": "inclusive-yfinance-end-v3",
         }, sort_keys=True)
         ck = cache_key(cache_payload)
         cached = cache_get(ck, prefix=PRICE_CACHE_PREFIX, ttl=PRICE_CACHE_TTL)
         if cached is not None:
-            return cached
+            cached_cols = set(cached.columns) if hasattr(cached, "columns") else set()
+            missing_cached = [
+                ticker for ticker in tickers
+                if ticker not in cached_cols or cached[ticker].dropna().empty
+            ]
+            if not missing_cached:
+                return cached
+            logger.info("Ignoring incomplete price cache; missing tickers: %s", missing_cached)
 
         result = pd.DataFrame()
         remaining = list(tickers)

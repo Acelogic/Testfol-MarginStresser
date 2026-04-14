@@ -326,8 +326,9 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(yf_output)
         logs.append("---------------------------------\n")
     
-    # Calculate daily returns for base assets
-    returns_base = prices_base.pct_change() # Keep NaNs to detect missing data
+    # Calculate daily returns for base assets. Missing prices must remain NaN:
+    # a stale sleeve should not become a fake 0% return on a newer trading day.
+    returns_base = prices_base.pct_change(fill_method=None)
     
     # Construct leveraged returns
     returns_port = pd.DataFrame(index=returns_base.index)

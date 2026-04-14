@@ -3,12 +3,18 @@ import json
 import numpy as np
 import datetime
 import os
+import re
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__), "../src"))
 import config
 import calendar
 import price_manager
-from official_index_data import get_official_constituents
+from official_index_data import get_official_constituents, LOCAL_MEMBERSHIP_FILES
+
+try:
+    import yfinance as yf
+except Exception:
+    yf = None
 
 # Configuration
 INPUT_CSV = config.COMPONENTS_FILE
@@ -20,6 +26,8 @@ APPLY_OFFICIAL_NDX_FILTER = False
 MAPPING_OVERRIDES = {
     "Xcel Energy, Inc.": "XEL",
 }
+OFFICIAL_OVERLAY_START_OFFSET_DAYS = 0
+_SHARES_OUTSTANDING_CACHE = {}
 
 
 def apply_mapping_overrides(mapping):
@@ -58,11 +66,159 @@ def load_data(): # Load Components
     mapping = apply_mapping_overrides(mapping)
     return df, mapping
 
-def get_unique_tickers(mapping):
-    tickers = list(set(mapping.values()))
-    if PROXY_TICKER not in tickers:
-        tickers.append(PROXY_TICKER)
+def _is_supported_price_ticker(ticker):
+    return bool(isinstance(ticker, str) and re.match(r"^[A-Z][A-Z0-9.-]*$", ticker))
+
+
+def _split_pipe_field(value):
+    if not isinstance(value, str) or not value:
+        return []
+    return [item for item in value.split("|") if item]
+
+
+def get_official_membership_tickers():
+    tickers = set()
+    for path in LOCAL_MEMBERSHIP_FILES.values():
+        if not os.path.exists(path):
+            continue
+        try:
+            df = pd.read_csv(path, usecols=["Tickers"])
+        except Exception:
+            continue
+        for value in df["Tickers"].dropna():
+            tickers.update(t for t in _split_pipe_field(value) if _is_supported_price_ticker(t))
     return tickers
+
+
+def get_unique_tickers(mapping):
+    tickers = set(mapping.values())
+    tickers.update(get_official_membership_tickers())
+    if PROXY_TICKER not in tickers:
+        tickers.add(PROXY_TICKER)
+    return sorted(tickers)
+
+
+def get_official_name_map(index_symbol, trade_date):
+    path = LOCAL_MEMBERSHIP_FILES.get(index_symbol)
+    if not path or not os.path.exists(path):
+        return {}
+
+    try:
+        df = pd.read_csv(path, parse_dates=["Date"])
+    except Exception:
+        return {}
+
+    if df.empty:
+        return {}
+
+    trade_ts = pd.Timestamp(trade_date).normalize()
+    df = df.sort_values("Date")
+    pos = df["Date"].searchsorted(trade_ts, side="right") - 1
+    if pos < 0:
+        return {}
+
+    row = df.iloc[pos]
+    tickers = _split_pipe_field(row.get("Tickers", ""))
+    names = _split_pipe_field(row.get("Names", ""))
+    return {
+        ticker: names[i] if i < len(names) and names[i] else ticker
+        for i, ticker in enumerate(tickers)
+    }
+
+
+def get_shares_outstanding(ticker):
+    if ticker in _SHARES_OUTSTANDING_CACHE:
+        return _SHARES_OUTSTANDING_CACHE[ticker]
+    if yf is None:
+        _SHARES_OUTSTANDING_CACHE[ticker] = None
+        return None
+
+    shares = None
+    try:
+        shares = yf.Ticker(ticker).fast_info.get("shares")
+    except Exception:
+        shares = None
+
+    try:
+        shares = float(shares) if shares and shares > 0 else None
+    except Exception:
+        shares = None
+
+    _SHARES_OUTSTANDING_CACHE[ticker] = shares
+    return shares
+
+
+def estimate_market_values(tickers, prices, date_q):
+    values = {}
+    for ticker in tickers:
+        if ticker not in prices.columns:
+            continue
+        try:
+            price = prices.at[date_q, ticker]
+        except Exception:
+            continue
+        if pd.isna(price) or price <= 0:
+            continue
+        shares = get_shares_outstanding(ticker)
+        if not shares:
+            continue
+        values[ticker] = float(price) * shares
+    return values
+
+
+def apply_recent_official_overlay(rows, official_tickers, official_names, prices, date_q):
+    """Use official membership to repair recent quarters after SEC filings go stale."""
+    if not rows or not official_tickers:
+        return rows
+
+    official_tickers = [t for t in official_tickers if _is_supported_price_ticker(t)]
+    official_set = set(official_tickers)
+    kept_rows = [
+        row for row in rows
+        if row.get("IsMapped") and row.get("Ticker") in official_set
+    ]
+
+    if not kept_rows:
+        return rows
+
+    present = {row["Ticker"] for row in kept_rows}
+    missing = [ticker for ticker in official_tickers if ticker not in present]
+    if not missing:
+        return kept_rows
+
+    scale_candidates = []
+    existing_caps = estimate_market_values(
+        [row["Ticker"] for row in sorted(kept_rows, key=lambda r: r["Value"], reverse=True)[:60]],
+        prices,
+        date_q,
+    )
+    for row in kept_rows:
+        cap = existing_caps.get(row["Ticker"])
+        if cap and cap > 0 and row["Value"] > 0:
+            scale_candidates.append(row["Value"] / cap)
+
+    scale = float(np.median(scale_candidates)) if scale_candidates else None
+    fallback_value = float(np.median([row["Value"] for row in kept_rows if row["Value"] > 0]))
+
+    missing_caps = estimate_market_values(missing, prices, date_q)
+    added_rows = []
+    for ticker in missing:
+        value = None
+        cap = missing_caps.get(ticker)
+        if scale and cap:
+            value = cap * scale
+        if value is None or value <= 0:
+            value = fallback_value
+        added_rows.append({
+            "Date": pd.Timestamp(date_q).date(),
+            "Ticker": ticker,
+            "Name": official_names.get(ticker, ticker),
+            "Value": value,
+            "IsMapped": True,
+        })
+
+    print(f"  [Official overlay {pd.Timestamp(date_q).date()}] added {len(added_rows)} missing official tickers: {', '.join(missing)}")
+    return kept_rows + added_rows
 
 
 
@@ -75,7 +231,7 @@ def _third_friday(year, month):
     return fridays[2] if len(fridays) >= 3 else fridays[-1]
 
 
-def get_rebalance_dates(start_year=2000, end_year=2025):
+def get_rebalance_dates(start_year=2000, end_year=None):
     """
     Returns (effective_date, reference_date) pairs for each quarterly rebalance.
 
@@ -83,6 +239,9 @@ def get_rebalance_dates(start_year=2000, end_year=2025):
       - Reference date: Last trading day of Feb/May/Aug/Nov (weights determined here)
       - Effective date: First trading day following 3rd Friday of Mar/Jun/Sep/Dec
     """
+    if end_year is None:
+        end_year = pd.Timestamp.now().year
+
     pairs = []
     # Reference months map to effective months: Feb→Mar, May→Jun, Aug→Sep, Nov→Dec
     ref_eff_months = [(2, 3), (5, 6), (8, 9), (11, 12)]
@@ -105,8 +264,9 @@ def get_rebalance_dates(start_year=2000, end_year=2025):
             pairs.append((effective_date, reference_date))
         current_year += 1
 
-    # Filter to not exceed now + 90 days
-    limit = pd.Timestamp.now() + pd.Timedelta(days=90)
+    # Filter to completed rebalance dates only. Backtests carry the latest
+    # completed weights forward to the newest price date.
+    limit = pd.Timestamp.now().normalize()
     pairs = [(e, r) for e, r in pairs if e <= limit]
 
     # Edge case: data starts 2000-06-30, inject bootstrap date
@@ -145,6 +305,7 @@ def reconstruct():
         proxy_prices = pd.Series(1.0, index=prices.index)
 
     print(f"Reconstructing weights for {len(rebalance_pairs)} quarters...")
+    latest_filing_date = df['Date'].max()
 
     for effective_date, reference_date in rebalance_pairs:
         # Use effective_date for filing lookback and weight projection.
@@ -158,9 +319,18 @@ def reconstruct():
         # Must be within reasonable window (e.g. 400 days) to avoid zombie filings
         lookback_window = pd.Timedelta(days=400)
         valid_filings = df[(df['Date'] <= q_date) & (df['Date'] >= q_date - lookback_window)]
+        official_tickers = get_official_constituents("NDX", q_date)
+        official_names = get_official_name_map("NDX", q_date)
 
         if valid_filings.empty:
-            continue
+            if official_tickers and q_date > latest_filing_date:
+                print(
+                    f"  [Official overlay {q_date.date()}] SEC filing lookback is stale; "
+                    f"using latest filings from {latest_filing_date.date()} plus official membership."
+                )
+                valid_filings = df[df['Date'] <= q_date]
+            else:
+                continue
 
         # Take latest filing for EACH company
         filing_data = valid_filings.sort_values('Date', ascending=False).drop_duplicates('Company', keep='first').copy()
@@ -175,6 +345,7 @@ def reconstruct():
         # No, Proxy Return depends on the start date (filing date), which varies.
         # But efficiently, most filings are on the same few dates.
         # We can handle it per row.
+        quarter_rows = []
 
         for _, row in filing_data.iterrows():
             name = row['Company']
@@ -231,13 +402,24 @@ def reconstruct():
                  except:
                     pass
             
-            final_rows.append({
+            quarter_rows.append({
                 "Date": q_date.date(),
                 "Ticker": ticker if ticker else name, # Use Name if no ticker
                 "Name": name,
                 "Value": val_q,
                 "IsMapped": bool(ticker)
             })
+
+        if official_tickers and q_date > latest_filing_date + pd.Timedelta(days=OFFICIAL_OVERLAY_START_OFFSET_DAYS):
+            quarter_rows = apply_recent_official_overlay(
+                quarter_rows,
+                official_tickers,
+                official_names,
+                prices,
+                date_q,
+            )
+
+        final_rows.extend(quarter_rows)
 
     # Convert to DataFrame
     res_df = pd.DataFrame(final_rows)

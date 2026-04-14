@@ -238,6 +238,28 @@
     "NFLX",
     "NVDA"
   ],
+  "NDXMEGA2|2025-12-22|SOD": [
+    "AAPL",
+    "AMZN",
+    "AVGO",
+    "GOOG",
+    "GOOGL",
+    "META",
+    "MSFT",
+    "NVDA",
+    "TSLA"
+  ],
+  "NDXMEGA2|2026-03-23|SOD": [
+    "AAPL",
+    "AMZN",
+    "AVGO",
+    "GOOG",
+    "GOOGL",
+    "META",
+    "MSFT",
+    "NVDA",
+    "TSLA"
+  ],
   "NDXMEGA|2000-06-30|SOD": [],
   "NDXMEGA|2000-09-18|SOD": [],
   "NDXMEGA|2000-12-18|SOD": [],
@@ -335,6 +357,8 @@
   "NDXMEGA|2023-12-18|SOD": [],
   "NDXMEGA|2024-03-18|SOD": [],
   "NDXMEGA|2024-06-24|SOD": [],
+  "NDX|2000-03-20|SOD": [],
+  "NDX|2000-06-19|SOD": [],
   "NDX|2000-06-30|SOD": [],
   "NDX|2000-09-18|SOD": [],
   "NDX|2000-12-18|SOD": [],

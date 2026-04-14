@@ -20,7 +20,7 @@ import requests
 from app.common.constants import Freq, RebalMode, Tickers
 from app.core import calculations
 from app.core.shadow_backtest import run_shadow_backtest as _default_shadow
-from app.services.data_service import fetch_component_data
+from app.services.data_service import clip_component_data_to_synced_end, fetch_component_data
 from app.services.testfol_api import fetch_backtest as _default_fetch
 
 logger = logging.getLogger(__name__)
@@ -78,7 +78,8 @@ def _slice_prefetched_component_prices(
     start_ts = pd.Timestamp(start_date)
     end_ts = pd.Timestamp(end_date)
     sliced = prefetched_component_prices.loc[:, expected_cols]
-    return sliced.loc[start_ts:end_ts]
+    sliced = sliced.loc[start_ts:end_ts]
+    return clip_component_data_to_synced_end(sliced, expected_cols)
 
 
 def _prefetch_component_universe(
@@ -94,7 +95,12 @@ def _prefetch_component_universe(
         return None
 
     try:
-        return fetch_component_data(unique_bases, start_date, end_date)
+        try:
+            return fetch_component_data(unique_bases, start_date, end_date, sync_end=False)
+        except TypeError as exc:
+            if "sync_end" not in str(exc):
+                raise
+            return fetch_component_data(unique_bases, start_date, end_date)
     except Exception as exc:
         logger.warning("Failed shared component fetch for %s: %s", purpose, exc)
         return None
