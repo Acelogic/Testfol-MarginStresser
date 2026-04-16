@@ -300,10 +300,25 @@ def _build_portfolio_allocation_data(
     total_weight = sum(weights[t] for t in available)
     if total_weight <= 0:
         return None
+    target_fractions = pd.Series(
+        {t: weights[t] / total_weight for t in available},
+        index=available,
+        dtype=float,
+    )
 
     rebal_dates: list[pd.Timestamp] = []
+    composition_by_base = pd.DataFrame()
     if not composition_df.empty:
-        rebal_dates = sorted(pd.to_datetime(composition_df["Date"].unique()))
+        comp = composition_df.copy()
+        comp["Date"] = pd.to_datetime(comp["Date"])
+        comp["Base"] = comp["Ticker"].astype(str).str.split("?").str[0]
+        composition_by_base = (
+            comp.groupby(["Date", "Base"], as_index=True)["Value"]
+            .sum()
+            .unstack(fill_value=0.0)
+            .sort_index()
+        )
+        rebal_dates = sorted(d for d in composition_by_base.index if d < prices.index[-1])
 
     rc = rebal_config or {}
     idx = prices.index
@@ -348,11 +363,7 @@ def _build_portfolio_allocation_data(
                 seg_starts.append(snapped)
 
     all_positions = []
-    alloc_values = pd.Series(
-        {t: start_val * (weights[t] / total_weight) for t in available},
-        index=available,
-        dtype=float,
-    )
+    alloc_values = start_val * target_fractions
     for i, seg_start in enumerate(seg_starts):
         seg_end = seg_starts[i + 1] if i + 1 < len(seg_starts) else prices.index[-1]
         if i + 1 < len(seg_starts):
@@ -364,7 +375,19 @@ def _build_portfolio_allocation_data(
             continue
 
         if i > 0:
-            alloc_values = all_positions[-1].iloc[-1].reindex(available).fillna(0.0)
+            comp_values = pd.Series(dtype=float)
+            if not composition_by_base.empty:
+                comp_idx = composition_by_base.index
+                if seg_start in comp_idx:
+                    comp_values = composition_by_base.loc[seg_start].reindex(available).fillna(0.0)
+
+            if not comp_values.empty and comp_values.sum() > 0:
+                alloc_values = comp_values
+            else:
+                # Synthetic rebalance marker: preserve the current total, but
+                # snap allocations back to targets so the chart shows trimming.
+                current_total = float(all_positions[-1].iloc[-1].sum())
+                alloc_values = current_total * target_fractions
 
         start_prices = seg_prices.iloc[0].reindex(available).replace(0, np.nan)
         seg_scale = (alloc_values / start_prices).replace([np.inf, -np.inf], np.nan).fillna(0.0)

@@ -284,6 +284,43 @@ class TestRebalancingAllocationHelper:
         expected_final = 10000 * (1.001) ** 99
         assert abs(totals.iloc[-1] - expected_final) / expected_final < 0.001
 
+    def test_helper_resets_allocations_at_rebalance_snapshots(self):
+        dates = pd.bdate_range("2020-01-02", periods=10)
+        raw = pd.DataFrame(
+            {
+                "A": 100 * (1.10) ** np.arange(10),
+                "B": 100.0,
+            },
+            index=dates,
+        )
+        rebal_date = dates[5]
+        composition = pd.DataFrame(
+            [
+                {"Date": rebal_date, "Ticker": "A", "Value": 5000.0},
+                {"Date": rebal_date, "Ticker": "B", "Value": 5000.0},
+                # Final composition snapshot should not become a rebalance marker.
+                {"Date": dates[-1], "Ticker": "A", "Value": 9000.0},
+                {"Date": dates[-1], "Ticker": "B", "Value": 1000.0},
+            ]
+        )
+
+        result = _build_portfolio_allocation_data(
+            component_prices=raw,
+            allocation={"A": 50.0, "B": 50.0},
+            composition_df=composition,
+            start_val=10000,
+        )
+
+        assert result is not None
+        positions = result["positions"]
+        pct = positions.div(positions.sum(axis=1), axis=0)
+
+        assert positions.loc[dates[4], "A"] > 5000
+        assert positions.loc[rebal_date, "A"] == pytest.approx(5000)
+        assert pct.loc[rebal_date, "A"] == pytest.approx(0.5)
+        assert pct.loc[rebal_date, "B"] == pytest.approx(0.5)
+        assert dates[-1] not in result["seg_starts"]
+
     def test_only_helper_is_cached(self):
         assert hasattr(_get_cached_portfolio_allocation_data, "__wrapped__")
         assert not hasattr(render_portfolio_allocation, "__wrapped__")
