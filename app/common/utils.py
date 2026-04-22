@@ -3,10 +3,19 @@ import streamlit as st
 import json
 import os
 
-APP_VERSION = "3.7.0"
+APP_VERSION = "3.8.0"
 
 CHANGELOG_MARKDOWN = """
 ## Changelog
+
+### v3.8.0 - Risk Parity, SIM Tickers & DCA Cache Fixes
+- Added a Risk Parity Split preset with DBMF, gold, bonds, international equity, NDX Mega leverage, and long Treasury sleeves.
+- Centralized Testfol special ticker metadata so SIM/TR aliases share one provider fallback map across data fetching and shadow backtests.
+- Expanded local component data support for Testfol preset tickers, including provider/API fallback handling and local ZEROX, cash, Treasury bill, fed funds, and inflation series fallbacks.
+- Fixed stale local portfolio curves where DCA-funded portfolios could be displayed as rebased TWR instead of deposit-inclusive balances.
+- Versioned backtest result cache keys and added stale-result detection so old TWR-shaped local results are recomputed before charting.
+- Improved Global Capital inputs so whole-dollar Start Value and Cashflow values hide trailing cents, while cent values still display two decimals.
+- Added regression coverage for special ticker support, local DCA value curves, stale result detection, cache key versioning, and optional cents formatting.
 
 ### v3.7.0 - Changelog Navigation & Sidebar Cleanup
 - Moved the changelog out of the simulator control stack and into its own top-level navigation destination.
@@ -87,6 +96,15 @@ def color_return(val):
     if pd.isna(val): return ""
     color = '#00CC96' if val >= 0 else '#EF553B'
     return f'color: {color}'
+
+def optional_cents_format(value) -> str:
+    """Use cents only when the numeric value has non-zero cents."""
+    try:
+        cents = int(round(abs(float(value)) * 100)) % 100
+    except (TypeError, ValueError, OverflowError):
+        cents = 0
+    return "%.2f" if cents else "%.0f"
+
 
 def num_input(label, key, default, step, **kwargs):
     return st.number_input(

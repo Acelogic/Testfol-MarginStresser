@@ -302,3 +302,66 @@ class TestRunMultiBacktest:
         assert fetch_calls[1][1] == common_start_str
         assert results[0]["shadow_range"].startswith(common_start_str)
         assert results[1]["shadow_range"].startswith(common_start_str)
+
+    def test_local_cashflow_result_keeps_money_weighted_series(self, monkeypatch):
+        """Local portfolios must chart deposit-inclusive value, not rebased TWR."""
+
+        def _recording_component_fetch(tickers, start_date, end_date, **kwargs):
+            return _mock_component_prices(tickers, start_date, end_date)
+
+        def _shadow_with_dca_series(
+            allocation,
+            start_val,
+            start_date,
+            end_date,
+            api_port_series=None,
+            rebalance_freq="Yearly",
+            cashflow=0.0,
+            cashflow_freq="Monthly",
+            prices_df=None,
+            rebalance_month=1,
+            rebalance_day=1,
+            custom_freq="Yearly",
+            invest_dividends=True,
+            pay_down_margin=False,
+            tax_config=None,
+            custom_rebal_config=None,
+            **kwargs,
+        ):
+            dates = pd.bdate_range(start_date, end_date)
+            twr = pd.Series(1.0, index=dates, name="TWR")
+            deposits = pd.Series(0.0, index=dates)
+            deposits.iloc[2:] = cashflow
+            series = pd.Series(start_val, index=dates, name="Portfolio") + deposits
+            return (pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), pd.DataFrame(), [], series, twr)
+
+        monkeypatch.setattr(orchestrator, "fetch_component_data", _recording_component_fetch)
+
+        portfolios = [
+            {
+                "name": "Local NDX",
+                "allocation": {"NDXMEGASIM?L=2": 100.0},
+                "maint_pcts": {"NDXMEGASIM": 50.0},
+                "rebalance": {"mode": RebalMode.STANDARD, "freq": Freq.YEARLY},
+            }
+        ]
+
+        results, _ = run_multi_backtest(
+            portfolios=portfolios,
+            start_date="2020-01-02",
+            end_date="2020-01-10",
+            start_val=100000.0,
+            cashflow_amount=5000.0,
+            cashflow_freq="Monthly",
+            invest_div=True,
+            pay_down_margin=False,
+            tax_config={},
+            bearer_token=None,
+            fetch_backtest_fn=_mock_fetch,
+            run_shadow_fn=_shadow_with_dca_series,
+        )
+
+        result = results[0]
+        assert result["is_local"]
+        assert result["series"].iloc[-1] == pytest.approx(105000.0)
+        assert (result["twr_series"] * 100000.0).iloc[-1] == pytest.approx(100000.0)

@@ -10,6 +10,10 @@ import numpy as np
 import pandas as pd
 
 from app.common.constants import Freq
+from app.common.special_tickers import (
+    provider_fallback_ticker,
+    zero_return_series,
+)
 
 log = logging.getLogger("shadow_backtest")
 
@@ -65,94 +69,9 @@ def parse_ticker(ticker):
         base = ticker
         params = {}
         
-    # Handle Synthetic Tickers Mapping
-    # ... (Mapping logic kept same) ...
-     # Map SIM/TR tickers to their real counterparts for yfinance
-    mapping = {
-        # Cash/Bills
-        "TBILL": "BIL", "CASHX": "BIL", "EFFRX": "BIL",
-        "ZEROX": "BIL",  # 0% return placeholder
-        
-        # S&P 500 / Large Cap
-        "SPYSIM": "SPY", "SPYTR": "SPY",
-        "VOOSIM": "VOO",
-        "VTVSIM": "VTV",  # US Large Cap Value
-        "VUGSIM": "VUG",  # US Large Cap Growth
-        
-        # Mid Cap
-        "VOSIM": "VO",    # US Mid Cap
-        "VOESIM": "VOE",  # US Mid Cap Value
-        "VOTSIM": "VOT",  # US Mid Cap Growth
-        
-        # Small/Micro Cap
-        "VBSIM": "VB",    # US Small Cap
-        "VBRSIM": "VBR",  # US Small Cap Value
-        "VBKSIM": "VBK",  # US Small Cap Growth
-        "IWCSIM": "IWC",  # US Micro Cap
-        
-        # Total Market
-        "VTISIM": "VTI", "VTITR": "VTI",
-        "VTSIM": "VT",
-        "QQQSIM": "QQQ", "QQQTR": "QQQ",
-        
-        # International
-        "VXUSSIM": "VXUS", "VXUSX": "VXUS",
-        
-        # Bonds
-        "TLTSIM": "TLT", "TLTTR": "TLT",
-        "ZROZSIM": "ZROZ", "ZROZX": "ZROZ",
-        "IEFSIM": "IEF", "IEFTR": "IEF",
-        "IEISIM": "IEI", "IEITR": "IEI",
-        "SHYSIM": "SHY", "SHYTR": "SHY",
-        "BNDSIM": "BND",
-        
-        # Metals
-        "GLDSIM": "GLD", "GOLDX": "GLD",
-        "SLVSIM": "SLV",
-        
-        # Commodities
-        "GSGSIM": "GSG", "GSGTR": "GSG",
-        
-        # Managed Futures
-        "DBMFSIM": "DBMF", "DBMFX": "DBMF",
-        "KMLMSIM": "KMLM", "KMLMX": "KMLM",
-        
-        # Volatility
-        "VIXSIM": "^VIX", "VOLIX": "^VIX",
-        "SVIXSIM": "SVIX", "SVIXX": "SVIX",
-        "UVIXSIM": "UVXY",
-        "ZVOLSIM": "SVXY", "ZIVBX": "SVXY",  # Approximate with SVXY
-        
-        # Crypto
-        "BTCSIM": "BTC-USD", "BTCTR": "BTC-USD",
-        "ETHSIM": "ETH-USD", "ETHTR": "ETH-USD",
-        
-        # Sector ETFs
-        "XLBSIM": "XLB", "XLBTR": "XLB",
-        "XLCSIM": "XLC", "XLCTR": "XLC",
-        "XLESIM": "XLE", "XLETR": "XLE",
-        "XLFSIM": "XLF", "XLFTR": "XLF",
-        "XLISIM": "XLI", "XLITR": "XLI",
-        "XLKSIM": "XLK", "XLKTR": "XLK",
-        "XLPSIM": "XLP", "XLPTR": "XLP",
-        "XLUSIM": "XLU", "XLUTR": "XLU",
-        "XLVSIM": "XLV", "XLVTR": "XLV",
-        "XLYSIM": "XLY", "XLYTR": "XLY",
-        
-        # Special/Leveraged
-        "FNGUSIM": "FNGU",
-        "CAOSSIM": "CAOS",
-        "GDESIM": "GDE",
-        "MCISIM": "MCI",
-        "REITSIM": "VNQ",
-        
-        # Legacy
-        "DIA_SIM": "DIA",
-    }
-    
-    # Don't remap if it's our custom NDXMEGASIM
-    if base in mapping and base != "NDXMEGASIM":
-        base = mapping[base]
+    mapped_base = provider_fallback_ticker(base)
+    if mapped_base != base.upper():
+        base = mapped_base
     
     return base, params
 
@@ -182,7 +101,7 @@ def get_tax_treatment(ticker):
     # Let's stick to the clear 1256 ones or K-1 commodities.
     section1256 = {
         "GSG", "DBC", "UUP", "CYA", "DBMF", "KMLM", "CTA", # Managed Futures often 60/40
-        "VIX", "VXX", "UVXY", "SVXY" # VIX Futures
+        "VIX", "^VIX", "VXX", "UVXY", "SVXY", "UVIX", "SVIX", "ZVOL" # VIX Futures
     }
     
     if base in collectibles:
@@ -208,15 +127,26 @@ def fetch_prices(tickers, start_date, end_date, invest_dividends=True):
     print(f"  End: {end_date}", file=f)
     print("-" * 20, file=f)
 
-    provider = get_price_provider()
-    prices = provider.fetch_prices(
-        list(unique_bases), str(start_date), str(end_date), adjusted=invest_dividends,
-    )
+    local_prices = {}
+    if "ZEROX" in unique_bases:
+        local_prices["ZEROX"] = zero_return_series(start_date, end_date)
+
+    provider_bases = sorted(unique_bases - set(local_prices))
+    if provider_bases:
+        provider = get_price_provider()
+        prices = provider.fetch_prices(
+            provider_bases, str(start_date), str(end_date), adjusted=invest_dividends,
+        )
+    else:
+        prices = pd.DataFrame()
 
     output = f.getvalue()
 
     if isinstance(prices, pd.Series):
         prices = prices.to_frame()
+
+    if local_prices:
+        prices = pd.concat([prices, pd.DataFrame(local_prices)], axis=1)
 
     return prices, output
 

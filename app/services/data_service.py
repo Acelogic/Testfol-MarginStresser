@@ -11,6 +11,11 @@ import pandas as pd
 
 from app.common.cache import cache_get, cache_key, cache_set
 from app.common.constants import Tickers
+from app.common.special_tickers import (
+    is_testfol_preset_ticker,
+    provider_fallback_ticker,
+    zero_return_series,
+)
 from app.services import testfol_api as api
 from app.services.price_providers import get_price_provider
 
@@ -106,6 +111,75 @@ def _component_cache_is_complete(
     return True
 
 
+def _is_special_component_request(ticker: str) -> bool:
+    base = str(ticker).split("?")[0].strip().upper()
+    return is_testfol_preset_ticker(base) or base.endswith("SIM")
+
+
+def _build_total_return_from_annual_rates(
+    annual_rates: pd.Series | None,
+    start_date: str,
+    end_date: str,
+    name: str,
+) -> pd.Series | None:
+    if annual_rates is None or annual_rates.empty:
+        return None
+
+    rates = annual_rates.copy()
+    if not isinstance(rates.index, pd.DatetimeIndex):
+        rates.index = pd.to_datetime(rates.index)
+    if rates.index.tz is not None:
+        rates.index = rates.index.tz_localize(None)
+    rates = pd.to_numeric(rates, errors="coerce").sort_index().dropna()
+    if rates.empty:
+        return None
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    if end_ts < rates.index[0] or start_ts > end_ts:
+        return None
+
+    index = pd.bdate_range(max(start_ts, rates.index[0]), end_ts)
+    if index.empty:
+        return None
+
+    aligned = rates.reindex(index, method="ffill").dropna()
+    if aligned.empty:
+        return None
+
+    daily_returns = aligned / 100.0 / 365.0
+    return (100.0 * (1.0 + daily_returns).cumprod()).rename(name)
+
+
+def _local_preset_fallback(ticker: str, start_date: str, end_date: str) -> pd.Series | None:
+    base = str(ticker).split("?")[0].strip().upper()
+    if base == "ZEROX":
+        return zero_return_series(start_date, end_date, name=ticker)
+    if base == "EFFRX":
+        return _build_total_return_from_annual_rates(
+            get_fed_funds_rate(),
+            start_date,
+            end_date,
+            ticker,
+        )
+    if base in {"TBILL", "CASHX"}:
+        return _build_total_return_from_annual_rates(
+            get_tbill_rate(),
+            start_date,
+            end_date,
+            ticker,
+        )
+    if base == "INFLATION":
+        series = get_inflation_index()
+        if series is None or series.empty:
+            return None
+        start_ts = pd.Timestamp(start_date)
+        end_ts = pd.Timestamp(end_date)
+        series = series.loc[start_ts:end_ts]
+        return series.rename(ticker) if not series.empty else None
+    return None
+
+
 def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: bool = True) -> pd.DataFrame:
     """
     Fetches historical data for each ticker individually via Testfol API (or local).
@@ -125,7 +199,7 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
             "start_date": sd_str,
             "end_date": ed_str,
             "sync_end": sync_end,
-            "sync_policy": "requested-window-v3",
+            "sync_policy": "requested-window-v4-special-tickers",
         },
         sort_keys=True,
     )
@@ -156,8 +230,8 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
 
     mapped_provider_tickers: dict[str, str] = {}
     for base in unique_bases:
-        is_sim_request = base.upper().endswith("SIM") or base.upper().endswith("TR")
-        if not is_sim_request:
+        is_special_request = _is_special_component_request(base)
+        if not is_special_request:
             mapped_ticker, _ = parse_ticker(base)
             mapped_provider_tickers[base] = mapped_ticker
 
@@ -269,15 +343,19 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
                 except Exception as e:
                     raise RuntimeError(f"Failed to load/splice local {base}: {e}")
 
-            is_sim_request = base.upper().endswith("SIM") or base.upper().endswith("TR")
+            is_special_request = _is_special_component_request(base)
             mapped_ticker = mapped_provider_tickers.get(base)
+
+            if base.upper() == "ZEROX":
+                combined_prices[base] = zero_return_series(sd_str, ed_str, name=base)
+                continue
 
             if mapped_ticker and not batched_provider_prices.empty:
                 if mapped_ticker in batched_provider_prices.columns and not batched_provider_prices[mapped_ticker].dropna().empty:
                     combined_prices[base] = batched_provider_prices[mapped_ticker]
                     continue
 
-            # Testfol API fallback (for SIM tickers or provider chain misses)
+            # Testfol API fallback (preferred for preset tickers and provider misses)
             try:
                 series, _, _ = api.fetch_backtest(
                     start_date="1900-01-01",
@@ -292,10 +370,15 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
                 )
                 combined_prices[base] = series
             except Exception as api_err:
-                # Last resort: try provider chain even for SIM tickers
-                if is_sim_request:
+                local_fallback = _local_preset_fallback(base, sd_str, ed_str)
+                if local_fallback is not None and not local_fallback.dropna().empty:
+                    combined_prices[base] = local_fallback
+                    continue
+
+                # Last resort: try provider chain for Testfol/synthetic tickers.
+                if is_special_request:
                     try:
-                        mapped_ticker, _ = parse_ticker(base)
+                        mapped_ticker = provider_fallback_ticker(base)
                         prices = provider.fetch_prices([mapped_ticker], sd_str, ed_str)
                         if not prices.empty and mapped_ticker in prices.columns:
                             combined_prices[base] = prices[mapped_ticker]
@@ -362,3 +445,53 @@ def get_fed_funds_rate() -> pd.Series | None:
         except Exception as e:
             raise RuntimeError(f"Error reading FEDFUNDS.csv: {e}")
     return None
+
+
+def _get_fred_series(series_id: str, filename: str, *, max_age_days: int = 30) -> pd.Series | None:
+    """Fetch or read a cached FRED time series as numeric values."""
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data")
+    file_path = os.path.join(data_dir, filename)
+
+    should_download = True
+    if os.path.exists(file_path):
+        mtime = os.path.getmtime(file_path)
+        if (time.time() - mtime) < (max_age_days * 86400):
+            should_download = False
+
+    if should_download:
+        try:
+            url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series_id}"
+            headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
+            import requests
+            r = requests.get(url, headers=headers)
+            r.raise_for_status()
+            with open(file_path, "wb") as f:
+                f.write(r.content)
+            logger.info("Downloaded fresh %s", filename)
+        except Exception as e:
+            logger.warning("Failed to download %s: %s. Using cached if available.", series_id, e)
+
+    if not os.path.exists(file_path):
+        return None
+
+    try:
+        df = pd.read_csv(file_path, parse_dates=["observation_date"], index_col="observation_date")
+        values = pd.to_numeric(df[series_id].replace(".", pd.NA), errors="coerce").dropna()
+        return values.sort_index()
+    except Exception as e:
+        raise RuntimeError(f"Error reading {filename}: {e}")
+
+
+def get_tbill_rate() -> pd.Series | None:
+    """Return the 3-month Treasury Bill annualized rate from FRED."""
+    return _get_fred_series("DTB3", "DTB3.csv")
+
+
+def get_inflation_index() -> pd.Series | None:
+    """Return a daily-forward-filled CPI index for the INFLATION pseudo-ticker."""
+    cpi = _get_fred_series("CPIAUCSL", "CPIAUCSL.csv")
+    if cpi is None or cpi.empty:
+        return None
+
+    full_idx = pd.bdate_range(start=cpi.index.min(), end=pd.Timestamp.today())
+    return cpi.reindex(full_idx).ffill().rename("INFLATION")

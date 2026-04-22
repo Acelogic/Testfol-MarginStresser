@@ -12,6 +12,7 @@ import pandas as pd
 import streamlit as st
 import requests
 from app.common import utils
+from app.core.result_validation import has_stale_local_cashflow_series
 
 logging.basicConfig(
     level=logging.INFO,
@@ -234,7 +235,7 @@ def _cached_fetch_backtest(*args, **kwargs):
 
 
 @st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
-def _cached_run_shadow_backtest(*args, _v=2, **kwargs):
+def _cached_run_shadow_backtest(*args, _v="local-dca-series-v3", **kwargs):
     from app.core import run_shadow_backtest
     return run_shadow_backtest(*args, **kwargs)
 
@@ -368,6 +369,13 @@ def _run_via_api(config, start_date, end_date, bearer_token):
             s.name = b.get("name", "Benchmark")
             bench_series_list.append(s)
 
+    if has_stale_local_cashflow_series(results_list, payload.get("cashflow", {})):
+        st.warning(
+            "Backend cache returned a stale local portfolio curve without DCA deposits. "
+            "Recomputing locally with fresh cashflow-aware series."
+        )
+        return _run_inprocess(config, start_date, end_date, bearer_token)
+
     return results_list, bench_series_list
 
 
@@ -445,6 +453,21 @@ if "results_list" in st.session_state and st.session_state.results_list:
             f"using {'Polygon.io' if os.environ.get('POLYGON_API_KEY') else 'yfinance'} price data: "
             f"**{', '.join(failover_names)}**. Results may differ slightly from Testfol."
         )
+
+    if has_stale_local_cashflow_series(results_list, config.get("global_cashflow", {})):
+        st.warning(
+            "Detected stale local portfolio results where the value curve matches TWR "
+            "instead of DCA-funded balance. Recomputing locally now."
+        )
+        with st.spinner("Refreshing stale local portfolio curves..."):
+            try:
+                results_list, bench_series_list = _run_inprocess(config, start_date, end_date, bearer_token)
+                st.session_state.results_list = results_list
+                st.session_state.bench_series_list = bench_series_list or []
+            except Exception as stale_exc:
+                st.error(f"Error refreshing stale local results: {stale_exc}")
+                import traceback
+                st.code(traceback.format_exc())
 
     st.divider()
 

@@ -25,6 +25,120 @@ def test_parse_ticker_with_params():
     assert params == {"L": "2", "SW": "30"}
 
 
+@pytest.mark.parametrize(
+    ("ticker", "expected"),
+    [
+        ("SPYSIM", "SPY"),
+        ("SPYTR", "SPY"),
+        ("OEFSIM", "OEF"),
+        ("MDYSIM", "MDY"),
+        ("IJRSIM", "IJR"),
+        ("IWMSIM", "IWM"),
+        ("USMVSIM", "USMV"),
+        ("KMLMSIM", "KMLM"),
+        ("KMLMX", "KMLM"),
+        ("GLDSIM", "GLD"),
+        ("GOLDX", "GLD"),
+        ("SLVSIM", "SLV"),
+        ("SVIXSIM", "SVIX"),
+        ("SVIXX", "SVIX"),
+        ("UVIXSIM", "UVIX"),
+        ("ZVOLSIM", "ZVOL"),
+        ("ZIVBX", "ZVOL"),
+        ("TLTSIM", "TLT"),
+        ("TLTTR", "TLT"),
+        ("ZROZSIM", "ZROZ"),
+        ("ZROZX", "ZROZ"),
+        ("VXUSSIM", "VXUS"),
+        ("VXUSX", "VXUS"),
+        ("EFASIM", "EFA"),
+        ("VEASIM", "VEA"),
+        ("VWOSIM", "VWO"),
+        ("VSSSIM", "VSS"),
+        ("EFVSIM", "EFV"),
+        ("VTISIM", "VTI"),
+        ("VTITR", "VTI"),
+        ("VTSIM", "VT"),
+        ("DBMFSIM", "DBMF"),
+        ("DBMFX", "DBMF"),
+        ("VIXSIM", "^VIX"),
+        ("VOLIX", "^VIX"),
+        ("GSGSIM", "GSG"),
+        ("GSGTR", "GSG"),
+        ("IEFSIM", "IEF"),
+        ("IEFTR", "IEF"),
+        ("IEISIM", "IEI"),
+        ("IEITR", "IEI"),
+        ("SHYSIM", "SHY"),
+        ("SHYTR", "SHY"),
+        ("TIPSIM", "TIP"),
+        ("BTCSIM", "BTC-USD"),
+        ("BTCTR", "BTC-USD"),
+        ("ETHSIM", "ETH-USD"),
+        ("ETHTR", "ETH-USD"),
+        ("MTUMSIM", "MTUM"),
+        ("XLBSIM", "XLB"),
+        ("XLBTR", "XLB"),
+        ("XLCSIM", "XLC"),
+        ("XLCTR", "XLC"),
+        ("XLESIM", "XLE"),
+        ("XLETR", "XLE"),
+        ("XLFSIM", "XLF"),
+        ("XLFTR", "XLF"),
+        ("XLISIM", "XLI"),
+        ("XLITR", "XLI"),
+        ("XLKSIM", "XLK"),
+        ("XLKTR", "XLK"),
+        ("XLPSIM", "XLP"),
+        ("XLPTR", "XLP"),
+        ("XLUSIM", "XLU"),
+        ("XLUTR", "XLU"),
+        ("XLVSIM", "XLV"),
+        ("XLVTR", "XLV"),
+        ("XLYSIM", "XLY"),
+        ("XLYTR", "XLY"),
+        ("QQQSIM", "QQQ"),
+        ("QQQTR", "QQQ"),
+        ("CAOSSIM", "CAOS"),
+        ("FNGUSIM", "FNGU"),
+        ("MCISIM", "MCI"),
+        ("GDESIM", "GDE"),
+        ("RSSBSIM", "RSSB"),
+        ("NTSDSIM", "NTSD"),
+        ("UUPSIM", "UUP"),
+        ("VVSIM", "VOO"),
+        ("VOOSIM", "VOO"),
+        ("VTVSIM", "VTV"),
+        ("VUGSIM", "VUG"),
+        ("VOSIM", "VO"),
+        ("VOESIM", "VOE"),
+        ("VOTSIM", "VOT"),
+        ("VBSIM", "VB"),
+        ("VBRSIM", "VBR"),
+        ("VBKSIM", "VBK"),
+        ("IWCSIM", "IWC"),
+        ("BNDSIM", "BND"),
+        ("REITSIM", "VNQ"),
+        ("TBILL", "BIL"),
+        ("CASHX", "BIL"),
+        ("EFFRX", "BIL"),
+    ],
+)
+def test_parse_ticker_special_provider_fallbacks(ticker, expected):
+    base, params = parse_ticker(f"{ticker}?L=2")
+    assert base == expected
+    assert params == {"L": "2"}
+
+
+def test_parse_ticker_keeps_non_provider_presets_for_api_handling():
+    from app.common.special_tickers import is_testfol_preset_ticker
+
+    assert parse_ticker("ZEROX")[0] == "ZEROX"
+    assert parse_ticker("INFLATION")[0] == "INFLATION"
+    assert is_testfol_preset_ticker("FF3MKT")
+    assert is_testfol_preset_ticker("FF5CMA")
+
+
 # ---------------------------------------------------------------------------
 # run_shadow_backtest — basic scenarios
 # ---------------------------------------------------------------------------

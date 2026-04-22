@@ -719,5 +719,52 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "Risk Parity Split",
+        "allocation": [
+            {
+                "Ticker": "DBMFSIM",
+                "Weight %": 10.0,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "GLDSIM",
+                "Weight %": 16.0,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            },
+            {
+                "Ticker": "BNDSIM",
+                "Weight %": 13.0,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            },
+            {
+                "Ticker": "VXUSSIM",
+                "Weight %": 6.0,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            },
+            {
+                "Ticker": "NDXMEGASIM?L=2",
+                "Weight %": 42.0,
+                "Maint %": 50.0,
+                "PM Maint %": NaN
+            },
+            {
+                "Ticker": "VGLT",
+                "Weight %": 13.0,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]

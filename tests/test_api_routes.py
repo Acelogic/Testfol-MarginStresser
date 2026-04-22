@@ -7,9 +7,26 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
+from api.routes.backtest import BACKTEST_CACHE_VERSION, _pydantic_cache_key
+from api.schemas import BacktestRequest
 from api.main import app
 
 client = TestClient(app)
+
+
+def test_backtest_cache_key_includes_result_series_version(monkeypatch):
+    """Backtest cache keys should bust stale result-series payloads after fixes."""
+    req = BacktestRequest(
+        portfolio={"name": "TestPort", "allocation": {"SPY": 100.0}},
+        start_date="2023-01-01",
+        end_date="2023-12-31",
+    )
+    current_key = _pydantic_cache_key(req)
+
+    monkeypatch.setattr("api.routes.backtest.BACKTEST_CACHE_VERSION", "older-version")
+
+    assert _pydantic_cache_key(req) != current_key
+    assert BACKTEST_CACHE_VERSION != "older-version"
 
 
 # ---------------------------------------------------------------------------

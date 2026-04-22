@@ -139,9 +139,23 @@ def render():
         st.markdown("##### 💰 Global Capital & Cashflow")
         gc1, gc2, gc3, gc4, gc5, gc6 = st.columns([2, 2, 2, 1.5, 1.5, 1.5])
         with gc1:
-            st.session_state.global_cashflow["start_val"] = utils.num_input("Start Value ($)", "g_start", st.session_state.global_cashflow["start_val"], 1000.0)
+            _start_value = st.session_state.get("g_start", st.session_state.global_cashflow["start_val"])
+            st.session_state.global_cashflow["start_val"] = utils.num_input(
+                "Start Value ($)",
+                "g_start",
+                st.session_state.global_cashflow["start_val"],
+                1000.0,
+                format=utils.optional_cents_format(_start_value),
+            )
         with gc2:
-            st.session_state.global_cashflow["amount"] = utils.num_input("Cashflow ($)", "g_cf", st.session_state.global_cashflow["amount"], 100.0)
+            _cashflow_value = st.session_state.get("g_cf", st.session_state.global_cashflow["amount"])
+            st.session_state.global_cashflow["amount"] = utils.num_input(
+                "Cashflow ($)",
+                "g_cf",
+                st.session_state.global_cashflow["amount"],
+                100.0,
+                format=utils.optional_cents_format(_cashflow_value),
+            )
         with gc3:
              st.session_state.global_cashflow["freq"] = st.selectbox("Freq", ["Monthly", "Quarterly", "Yearly"], index=["Monthly", "Quarterly", "Yearly"].index(st.session_state.global_cashflow["freq"]), key="g_freq")
         with gc4:

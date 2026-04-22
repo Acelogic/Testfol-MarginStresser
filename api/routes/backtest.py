@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 
 import pandas as pd
@@ -16,10 +17,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
+BACKTEST_CACHE_VERSION = "backtest-result-series-includes-dca-v2"
+
 
 def _pydantic_cache_key(req: BacktestRequest | MultiBacktestRequest) -> str:
     """Generate cache key from a Pydantic request model (excludes bearer_token)."""
-    return cache_key(req.model_dump_json(exclude={"bearer_token"}))
+    payload = {
+        "cache_version": BACKTEST_CACHE_VERSION,
+        "request": req.model_dump(mode="json", exclude={"bearer_token"}),
+    }
+    return cache_key(json.dumps(payload, sort_keys=True, default=str))
 
 
 # ---------------------------------------------------------------------------
