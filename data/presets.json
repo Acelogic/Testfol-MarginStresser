@@ -566,7 +566,7 @@
                 "PM Maint %": 9.0
             },
             {
-                "Ticker": "QQQSIM?L=3&E=0.88",
+                "Ticker": "QQQSIM?L=3&E=0.82",
                 "Weight %": 5.0,
                 "Maint %": 75.0,
                 "PM Maint %": 30.0
@@ -601,13 +601,13 @@
                 "PM Maint %": 9.0
             },
             {
-                "Ticker": "QQQSIM?L=3&E=0.88",
+                "Ticker": "QQQSIM?L=3&E=0.82",
                 "Weight %": 5.0,
                 "Maint %": 75.0,
                 "PM Maint %": 30.0
             },
             {
-                "Ticker": "AAPL?L=2&E=0.97",
+                "Ticker": "AAPL?L=2&E=0.96",
                 "Weight %": 3.75,
                 "Maint %": 50.0,
                 "PM Maint %": 30.0
@@ -619,7 +619,7 @@
                 "PM Maint %": 30.0
             },
             {
-                "Ticker": "AVGO?L=2&E=1.04",
+                "Ticker": "AVGO?L=2&E=1.00",
                 "Weight %": 3.75,
                 "Maint %": 50.0,
                 "PM Maint %": 30.0
@@ -637,7 +637,7 @@
                 "PM Maint %": 30.0
             },
             {
-                "Ticker": "NVDA?L=2&E=0.97",
+                "Ticker": "NVDA?L=2&E=0.92",
                 "Weight %": 3.75,
                 "Maint %": 50.0,
                 "PM Maint %": 30.0
@@ -649,7 +649,7 @@
                 "PM Maint %": 30.0
             },
             {
-                "Ticker": "TSLA?L=2&E=0.95",
+                "Ticker": "TSLA?L=2&E=0.83",
                 "Weight %": 3.75,
                 "Maint %": 50.0,
                 "PM Maint %": 30.0

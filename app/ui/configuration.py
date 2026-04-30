@@ -46,11 +46,16 @@ def clear_runtime_caches(session_state=None) -> dict[str, int]:
     }
 
 
-@st.cache_data(show_spinner=False)
-def _load_presets():
-    """Load and sort preset names from disk (cached)."""
+def _presets_path() -> str:
     base_dir = os.path.dirname(os.path.abspath(__file__))
-    preset_path = os.path.join(base_dir, "../../data/presets.json")
+    return os.path.join(base_dir, "../../data/presets.json")
+
+
+@st.cache_data(show_spinner=False)
+def _load_presets(preset_mtime: float | None = None):
+    """Load and sort preset names from disk (cached)."""
+    del preset_mtime  # Included in the cache key so file edits invalidate presets.
+    preset_path = _presets_path()
     if not os.path.exists(preset_path):
         return [], []
     with open(preset_path, "r") as f:
@@ -87,7 +92,7 @@ def render():
                 {"Ticker": "NDXMEGASIM?L=2&E=0.95", "Weight %": 60.0, "Maint %": 50.0, "PM Maint %": 30.0},
                 {"Ticker": "GLDSIM?E=0.40", "Weight %": 20.0, "Maint %": 25.0, "PM Maint %": 15.0},
                 {"Ticker": "VXUSSIM?E=0.05", "Weight %": 15.0, "Maint %": 25.0, "PM Maint %": 9.0},
-                {"Ticker": "QQQSIM?L=3&E=0.88", "Weight %": 5.0, "Maint %": 75.0, "PM Maint %": 30.0}
+                {"Ticker": "QQQSIM?L=3&E=0.82", "Weight %": 5.0, "Maint %": 75.0, "PM Maint %": 30.0}
             ])
             st.session_state.portfolios = [{
                 "id": "p1",
@@ -191,7 +196,9 @@ def render():
                     st.warning("Max 5 portfolios.")
 
         try:
-            preset_names, presets = _load_presets()
+            preset_path = _presets_path()
+            preset_mtime = os.path.getmtime(preset_path) if os.path.exists(preset_path) else None
+            preset_names, presets = _load_presets(preset_mtime)
 
             with c_tool2:
                 selected_preset = st.selectbox(

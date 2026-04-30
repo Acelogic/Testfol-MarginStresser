@@ -47,7 +47,7 @@ ALLOCATION = {
     "NDXMEGASIM?L=2&E=0.95": 60.0,
     "GLDSIM?E=0.40":         20.0,
     "VXUSSIM?E=0.05":        15.0,
-    "QQQSIM?L=3&E=0.88":     5.0,
+    "QQQSIM?L=3&E=0.82":     5.0,
 }
 
 # Output paths

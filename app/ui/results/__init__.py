@@ -794,6 +794,8 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             raw_response=raw_response,
             fresh_yearly=fresh_yearly,
             fresh_series=fresh_series,
+            allocation=_alloc,
+            composition_df=composition_df,
         )
 
     elif selected_results_view == "⚖️ Rebalancing":

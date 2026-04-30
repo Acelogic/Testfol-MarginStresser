@@ -6,6 +6,7 @@ from plotly.subplots import make_subplots
 
 from app.common.utils import color_return
 from app.core import calculations
+from app.services.live_prices import build_live_returns_snapshot, fetch_yahoo_live_price_series
 
 
 def _resample_returns(series, rule):
@@ -18,6 +19,18 @@ def _resample_returns(series, rule):
         if first_val != 0:
             ret.iloc[0] = (resampled.iloc[0] / first_val) - 1
     return ret.dropna()
+
+
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_fetch_live_price_series(symbols: tuple[str, ...], reference_date: str):
+    return fetch_yahoo_live_price_series(symbols, pd.Timestamp(reference_date))
+
+
+def _streamlit_live_price_fetcher(symbols: tuple[str, ...], reference_date: pd.Timestamp):
+    return _cached_fetch_live_price_series(
+        tuple(symbols),
+        pd.Timestamp(reference_date).strftime("%Y-%m-%d"),
+    )
 
 def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=None):
     # Determine target series and name
@@ -208,7 +221,7 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
             </div>
             """, unsafe_allow_html=True)
 
-def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None, fresh_yearly=None, fresh_series=None):
+def render_returns_analysis(port_series, bench_series=None, comparison_series=None, unique_id="", portfolio_name="Strategy", component_data=None, raw_port_series=None, stats=None, raw_response=None, fresh_yearly=None, fresh_series=None, allocation=None, composition_df=None):
     # Toggle: use fresh-start series for period breakdowns
     has_fresh_data = fresh_yearly and len(fresh_yearly) > 0 and fresh_series is not None
     use_fresh = False
@@ -585,8 +598,82 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             fig.update_yaxes(showticklabels=False, col=3)
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
+    def render_live_returns_view():
+        st.subheader(f"{portfolio_name} Live Returns")
+
+        refresh_col, source_col = st.columns([1, 3])
+        if refresh_col.button("Refresh Live Prices", key=f"live_refresh_{view_key}"):
+            _cached_fetch_live_price_series.clear()
+        source_col.caption("Yahoo Finance live quotes. SIM sleeves use live proxy tickers.")
+
+        with st.spinner("Fetching live prices..."):
+            snapshot = build_live_returns_snapshot(
+                port_series,
+                allocation=allocation,
+                composition_df=composition_df,
+                price_fetcher=_streamlit_live_price_fetcher,
+            )
+
+        if not snapshot.get("ok"):
+            st.info(snapshot.get("error", "Live returns are unavailable."))
+            return
+
+        ref_date = snapshot["reference_date"]
+        asof = snapshot.get("asof")
+        asof_label = asof.strftime("%b %d, %I:%M %p") if asof is not None else "N/A"
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Reference Value", f"${snapshot['reference_value']:,.0f}", ref_date.strftime("%Y-%m-%d"))
+        c2.metric("Live Value", f"${snapshot['live_value']:,.0f}", f"{snapshot['live_return']*100:+.2f}%")
+        c3.metric("Live Move", f"${snapshot['live_change']:,.0f}")
+        c4.metric("Quote As Of", asof_label)
+
+        rows = snapshot["rows"].copy()
+        missing = rows[rows["Status"] != "OK"]["Ticker"].tolist()
+        if missing:
+            st.warning(
+                "Live quotes unavailable for "
+                + ", ".join(missing)
+                + "; those sleeves are held flat in the estimate."
+            )
+
+        coverage = f"{snapshot['updated_count']}/{snapshot['position_count']}"
+        st.caption(f"Reference close: {ref_date.strftime('%Y-%m-%d')} | Live coverage: {coverage}")
+
+        display_cols = [
+            "Ticker",
+            "Live Ticker",
+            "Weight",
+            "Reference Price",
+            "Live Price",
+            "Underlying Return",
+            "Effective Return",
+            "Position Value",
+            "Estimated Value",
+            "Contribution",
+            "Leverage",
+            "Status",
+        ]
+        display_df = rows[display_cols].sort_values("Position Value", ascending=False)
+
+        st.dataframe(
+            display_df.style.format({
+                "Weight": "{:.2%}",
+                "Reference Price": "${:,.2f}",
+                "Live Price": "${:,.2f}",
+                "Underlying Return": "{:+.2%}",
+                "Effective Return": "{:+.2%}",
+                "Position Value": "${:,.0f}",
+                "Estimated Value": "${:,.0f}",
+                "Contribution": "${:+,.0f}",
+                "Leverage": "{:.2f}x",
+            }).map(color_return, subset=["Underlying Return", "Effective Return", "Contribution"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     view_key = unique_id or portfolio_name or "returns"
-    returns_views = ["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "📉 Drawdowns"]
+    returns_views = ["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "⚡ Live", "📉 Drawdowns"]
     selected_view = st.segmented_control(
         "Returns View",
         returns_views,
@@ -779,6 +866,9 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
         render_distribution(daily_ret, "Daily", "Days")
+
+    elif selected_view == returns_views[5]:
+        render_live_returns_view()
 
     else:
         st.subheader(f"{portfolio_name} Corrections >5%")

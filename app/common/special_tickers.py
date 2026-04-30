@@ -136,9 +136,56 @@ TESTFOL_PRESET_TICKERS: frozenset[str] = frozenset(
 )
 
 
+LIVE_PRICE_PROVIDER_FALLBACKS: dict[str, str] = {
+    **TESTFOL_PRESET_PROVIDER_FALLBACKS,
+    # Local synthetic Nasdaq sleeves are spliced to live ETFs for current quotes.
+    "NDXMEGASIM": "QBIG",
+    "NDXMEGA2SIM": "QBIG",
+    "NDX30SIM": "QTOP",
+}
+
+LIVE_LEVERAGED_PROVIDER_FALLBACKS: dict[tuple[str, float], str] = {
+    ("AAPL", 2.0): "AAPU",
+    ("AMZN", 2.0): "AMZU",
+    ("AVGO", 2.0): "AVL",
+    ("GOOG", 2.0): "GGLL",
+    ("GOOGL", 2.0): "GGLL",
+    ("META", 2.0): "METU",
+    ("MSFT", 2.0): "MSFU",
+    ("NVDA", 2.0): "NVDU",
+    ("QQQ", 2.0): "QLD",
+    ("QQQ", 3.0): "TQQQ",
+    ("QQQSIM", 2.0): "QLD",
+    ("QQQSIM", 3.0): "TQQQ",
+    ("QQQTR", 2.0): "QLD",
+    ("QQQTR", 3.0): "TQQQ",
+    ("TSLA", 2.0): "TSLL",
+    ("NDXMEGASIM", 2.0): "QQUP",
+}
+
+
 def clean_ticker_symbol(ticker: str) -> str:
     """Return the uppercase base ticker without query params or share overrides."""
     return str(ticker).split("?")[0].split("@")[0].strip().upper()
+
+
+def _leverage_modifier(ticker: str) -> float | None:
+    if "?" not in str(ticker):
+        return None
+
+    query = str(ticker).split("?", 1)[1]
+    for pair in query.split("&"):
+        if "=" not in pair:
+            continue
+        key, value = pair.split("=", 1)
+        if key.upper() != "L":
+            continue
+        try:
+            return float(value)
+        except ValueError:
+            return None
+
+    return None
 
 
 def is_fama_french_factor_ticker(ticker: str) -> bool:
@@ -157,6 +204,24 @@ def provider_fallback_ticker(ticker: str) -> str:
     """Return a provider-compatible fallback ticker when one is known."""
     base = clean_ticker_symbol(ticker)
     return TESTFOL_PRESET_PROVIDER_FALLBACKS.get(base, base)
+
+
+def live_price_fallback_ticker(ticker: str) -> str:
+    """Return a live quote symbol for Testfol/SIM tickers when one is known."""
+    base = clean_ticker_symbol(ticker)
+    leverage = _leverage_modifier(ticker)
+    if leverage is not None:
+        live_leveraged = LIVE_LEVERAGED_PROVIDER_FALLBACKS.get((base, leverage))
+        if live_leveraged:
+            return live_leveraged
+    return LIVE_PRICE_PROVIDER_FALLBACKS.get(base, base)
+
+
+def live_price_uses_native_leverage(ticker: str) -> bool:
+    """Return True when live prices use an already-levered traded product."""
+    base = clean_ticker_symbol(ticker)
+    leverage = _leverage_modifier(ticker)
+    return leverage is not None and (base, leverage) in LIVE_LEVERAGED_PROVIDER_FALLBACKS
 
 
 def zero_return_series(start_date, end_date, name: str = "ZEROX") -> pd.Series:
