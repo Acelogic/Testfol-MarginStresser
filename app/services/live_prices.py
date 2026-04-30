@@ -18,6 +18,15 @@ from app.common.special_tickers import (
 
 QuoteFetcher = Callable[[tuple[str, ...], pd.Timestamp], dict[str, dict[str, Any]]]
 
+EXTENDED_HOURS_SESSION_BY_STATE = {
+    "PRE": "Pre-market",
+    "PREPRE": "Pre-market",
+    "REGULAR": "Regular",
+    "POST": "After-hours",
+    "POSTPOST": "After-hours",
+    "CLOSED": "Closed",
+}
+
 
 def _parse_query_params(ticker: str) -> dict[str, str]:
     if "?" not in str(ticker):
@@ -52,6 +61,158 @@ def _normalize_price_series(series: pd.Series | None) -> pd.Series:
     if result.index.tz is not None:
         result.index = result.index.tz_localize(None)
     return result[~result.index.duplicated(keep="last")].sort_index()
+
+
+def _finite_price(value: Any) -> float:
+    try:
+        price = float(value)
+    except (TypeError, ValueError):
+        return np.nan
+    return price if np.isfinite(price) else np.nan
+
+
+def _quote_timestamp(value: Any) -> pd.Timestamp | None:
+    if value in (None, ""):
+        return None
+
+    try:
+        if isinstance(value, pd.Timestamp):
+            ts = value
+        elif isinstance(value, datetime):
+            ts = pd.Timestamp(value)
+        elif isinstance(value, (int, float, np.integer, np.floating)):
+            numeric = float(value)
+            unit = "ms" if numeric > 10_000_000_000 else "s"
+            return (
+                pd.to_datetime(numeric, unit=unit, utc=True)
+                .tz_convert("America/New_York")
+                .tz_localize(None)
+            )
+        else:
+            ts = pd.Timestamp(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+    if pd.isna(ts):
+        return None
+    if ts.tzinfo is not None:
+        ts = ts.tz_convert("America/New_York").tz_localize(None)
+    return ts
+
+
+def _session_from_market_state(market_state: Any) -> str | None:
+    state = str(market_state or "").strip().upper()
+    return EXTENDED_HOURS_SESSION_BY_STATE.get(state)
+
+
+def _session_from_timestamp(timestamp: pd.Timestamp | None) -> str | None:
+    if timestamp is None:
+        return None
+
+    ts = pd.Timestamp(timestamp)
+    minute = ts.hour * 60 + ts.minute
+    if 4 * 60 <= minute < 9 * 60 + 30:
+        return "Pre-market"
+    if 9 * 60 + 30 <= minute < 16 * 60:
+        return "Regular"
+    if 16 * 60 <= minute < 20 * 60:
+        return "After-hours"
+    return "Closed"
+
+
+def _quote_from_yahoo_info(info: dict[str, Any]) -> tuple[float, pd.Timestamp | None, str | None]:
+    market_state = str(info.get("marketState") or "").strip().upper()
+    quote_specs = {
+        "Pre-market": ("preMarketPrice", "preMarketTime"),
+        "Regular": ("regularMarketPrice", "regularMarketTime"),
+        "After-hours": ("postMarketPrice", "postMarketTime"),
+        "Current": ("currentPrice", "regularMarketTime"),
+    }
+
+    priority_by_state = {
+        "PRE": ("Pre-market", "Regular", "After-hours", "Current"),
+        "PREPRE": ("Pre-market", "Regular", "After-hours", "Current"),
+        "REGULAR": ("Regular", "Current", "Pre-market", "After-hours"),
+        "POST": ("After-hours", "Regular", "Current", "Pre-market"),
+        "POSTPOST": ("After-hours", "Regular", "Current", "Pre-market"),
+    }
+
+    candidates: dict[str, tuple[float, pd.Timestamp | None]] = {}
+    for session, (price_key, time_key) in quote_specs.items():
+        price = _finite_price(info.get(price_key))
+        if np.isfinite(price):
+            candidates[session] = (price, _quote_timestamp(info.get(time_key)))
+
+    for session in priority_by_state.get(market_state, ()):
+        if session in candidates:
+            price, timestamp = candidates[session]
+            label = session if session != "Current" else _session_from_market_state(market_state)
+            return price, timestamp, label or session
+
+    timestamped = [
+        (session, price, timestamp)
+        for session, (price, timestamp) in candidates.items()
+        if timestamp is not None
+    ]
+    if timestamped:
+        session, price, timestamp = max(timestamped, key=lambda item: item[2])
+        label = session if session != "Current" else _session_from_timestamp(timestamp)
+        return price, timestamp, label
+
+    for session, (price, timestamp) in candidates.items():
+        return price, timestamp, session if session != "Current" else None
+
+    return np.nan, None, _session_from_market_state(market_state)
+
+
+def _quote_from_fast_info(fast_info: Any) -> tuple[float, pd.Timestamp | None]:
+    price = np.nan
+    timestamp = None
+    try:
+        price = _finite_price(fast_info.get("last_price", np.nan))
+    except Exception:
+        price = np.nan
+
+    for key in ("last_timestamp", "last_time", "last_trade_time"):
+        try:
+            timestamp = _quote_timestamp(fast_info.get(key))
+        except Exception:
+            timestamp = None
+        if timestamp is not None:
+            break
+
+    return price, timestamp
+
+
+def _prefer_intraday_quote(
+    current_price: float,
+    current_time: pd.Timestamp | None,
+    current_session: str | None,
+    intraday_close: pd.Series,
+) -> tuple[float, pd.Timestamp | None, str | None]:
+    if intraday_close.empty:
+        return current_price, current_time, current_session
+
+    intraday_time = pd.Timestamp(intraday_close.index[-1])
+    intraday_price = _finite_price(intraday_close.iloc[-1])
+    if not np.isfinite(intraday_price):
+        return current_price, current_time, current_session
+
+    if current_time is None or intraday_time >= current_time:
+        return intraday_price, intraday_time, _session_from_timestamp(intraday_time)
+
+    return current_price, current_time, current_session
+
+
+def _combined_session_label(sessions: Iterable[str | None]) -> str | None:
+    labels = sorted({str(session) for session in sessions if session})
+    if not labels:
+        return None
+    if len(labels) == 1:
+        return labels[0]
+    if set(labels).issubset({"Pre-market", "After-hours"}):
+        return "Extended-hours"
+    return "Mixed"
 
 
 def _latest_position_values(
@@ -131,7 +292,7 @@ def fetch_yahoo_live_price_series(
     symbols: Iterable[str],
     reference_date: pd.Timestamp,
 ) -> dict[str, dict[str, Any]]:
-    """Fetch recent adjusted closes plus a current Yahoo Finance quote."""
+    """Fetch recent adjusted closes plus current Yahoo Finance regular/extended quotes."""
     import yfinance as yf
 
     unique_symbols = tuple(dict.fromkeys(str(s).strip().upper() for s in symbols if str(s).strip()))
@@ -148,27 +309,78 @@ def fetch_yahoo_live_price_series(
 
             live_price = np.nan
             live_time: pd.Timestamp | None = None
+            market_session: str | None = None
+
             try:
-                fast_info = getattr(ticker, "fast_info", {}) or {}
-                live_price = float(fast_info.get("last_price", np.nan))
+                info = getattr(ticker, "info", {}) or {}
+                if isinstance(info, dict):
+                    live_price, live_time, market_session = _quote_from_yahoo_info(info)
             except Exception:
                 live_price = np.nan
+                live_time = None
+                market_session = None
+
+            try:
+                fast_info = getattr(ticker, "fast_info", {}) or {}
+                fast_price, fast_time = _quote_from_fast_info(fast_info)
+                if (
+                    np.isfinite(fast_price)
+                    and (
+                        not np.isfinite(live_price)
+                        or live_time is None
+                        or (fast_time is not None and fast_time > live_time)
+                    )
+                ):
+                    live_price = fast_price
+                    live_time = fast_time
+                    market_session = _session_from_timestamp(fast_time) or market_session
+            except Exception:
+                pass
+
+            try:
+                intraday = ticker.history(
+                    period="1d",
+                    interval="1m",
+                    auto_adjust=True,
+                    prepost=True,
+                    timeout=10,
+                )
+                intraday_close = _normalize_price_series(
+                    intraday["Close"] if "Close" in intraday else None
+                )
+                live_price, live_time, market_session = _prefer_intraday_quote(
+                    live_price,
+                    live_time,
+                    market_session,
+                    intraday_close,
+                )
+            except Exception:
+                pass
 
             if not np.isfinite(live_price):
                 try:
-                    intraday = ticker.history(period="1d", interval="1m", auto_adjust=True, timeout=10)
+                    intraday = ticker.history(
+                        period="1d",
+                        interval="1m",
+                        auto_adjust=True,
+                        prepost=False,
+                        timeout=10,
+                    )
                     intraday_close = _normalize_price_series(
                         intraday["Close"] if "Close" in intraday else None
                     )
                     if not intraday_close.empty:
                         live_price = float(intraday_close.iloc[-1])
                         live_time = pd.Timestamp(intraday_close.index[-1])
+                        market_session = _session_from_timestamp(live_time)
                 except Exception:
                     pass
 
             if np.isfinite(live_price):
                 if live_time is None:
                     live_time = pd.Timestamp(datetime.now())
+                if market_session is None:
+                    market_session = _session_from_timestamp(live_time)
                 close.loc[live_time] = live_price
                 close = close.sort_index()
 
@@ -179,6 +391,7 @@ def fetch_yahoo_live_price_series(
                     "prices": close,
                     "live_price": live_price if np.isfinite(live_price) else float(close.iloc[-1]),
                     "live_time": live_time or pd.Timestamp(close.index[-1]),
+                    "market_session": market_session,
                     "error": None,
                 }
         except Exception as exc:
@@ -240,12 +453,14 @@ def build_live_returns_snapshot(
     rows: list[dict[str, Any]] = []
     total_live_value = 0.0
     quote_times: list[pd.Timestamp] = []
+    quote_sessions: list[str] = []
     updated_count = 0
 
     for spec in position_specs:
         quote = quotes.get(spec["live_symbol"], {})
         prices = _normalize_price_series(quote.get("prices"))
         status = quote.get("error") or "OK"
+        market_session = quote.get("market_session")
 
         if prices.empty:
             effective_ret = 0.0
@@ -273,6 +488,8 @@ def build_live_returns_snapshot(
             live_time = quote.get("live_time")
             if live_time is not None:
                 quote_times.append(pd.Timestamp(live_time))
+            if market_session:
+                quote_sessions.append(str(market_session))
 
         current_value = spec["position_value"] * (1.0 + effective_ret)
         contribution = current_value - spec["position_value"]
@@ -292,6 +509,7 @@ def build_live_returns_snapshot(
                 "Contribution": contribution,
                 "Leverage": spec["leverage"],
                 "Reference Date": quote_reference_date,
+                "Market Session": market_session or "Unknown",
                 "Status": status,
             }
         )
@@ -307,6 +525,7 @@ def build_live_returns_snapshot(
         "live_return": live_return,
         "live_change": total_live_value - reference_value,
         "asof": asof,
+        "market_session": _combined_session_label(quote_sessions),
         "updated_count": updated_count,
         "position_count": len(rows),
         "rows": pd.DataFrame(rows),

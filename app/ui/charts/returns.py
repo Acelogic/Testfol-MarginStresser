@@ -328,8 +328,18 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         stats_source = display_pivot.copy() # Columns: Jan..Dec, Yearly Return
         
         # Define rows
-        stats_rows = ["Average", "% Positive", "% Negative", "Median", "Best", "Worst", "Abs Average", "Abs Best", "Abs Worst"]
+        stats_rows = ["Average", "Avg YTD", "Now YTD", "% Positive", "% Negative", "Median", "Best", "Worst", "Abs Average", "Abs Best", "Abs Worst"]
         stats_df = pd.DataFrame(index=stats_rows, columns=stats_source.columns)
+
+        ytd_by_month = pd.DataFrame(index=stats_source.index, columns=stats_source.columns, dtype=float)
+        for month_idx, col in enumerate(stats_source.columns):
+            through_month = stats_source.iloc[:, :month_idx + 1]
+            complete_years = through_month.dropna(how="any")
+            if complete_years.empty:
+                continue
+            ytd_by_month.loc[complete_years.index, col] = (1 + complete_years).prod(axis=1) - 1
+        latest_years = ytd_by_month.dropna(how="all")
+        latest_year = int(latest_years.index.max()) if not latest_years.empty else None
         
         for col in stats_source.columns:
             s_data = stats_source[col].dropna()
@@ -337,6 +347,9 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 continue
                 
             stats_df.loc["Average", col] = s_data.mean()
+            stats_df.loc["Avg YTD", col] = ytd_by_month[col].dropna().mean()
+            if latest_year is not None:
+                stats_df.loc["Now YTD", col] = ytd_by_month.loc[latest_year, col]
             stats_df.loc["% Positive", col] = (s_data > 0).mean()
             stats_df.loc["% Negative", col] = (s_data < 0).mean()
             stats_df.loc["Median", col] = s_data.median()
@@ -348,18 +361,23 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             
         stats_df = stats_df.astype(float)
         
-        return_rows = ["Average", "Median", "Best", "Worst"]
+        return_rows = ["Average", "Avg YTD", "Now YTD", "Median", "Best", "Worst"]
         pct_rows = ["% Positive", "% Negative"]
         abs_rows = ["Abs Average", "Abs Best", "Abs Worst"]
         
         def style_summary(df):
-            return df.style.format("{:.2%}") \
+            return df.style.format("{:.2%}", na_rep="") \
                 .map(color_return, subset=pd.IndexSlice[return_rows, :]) \
                 .background_gradient(cmap="Greens", subset=pd.IndexSlice["% Positive", :], vmin=0, vmax=1) \
                 .background_gradient(cmap="Reds", subset=pd.IndexSlice["% Negative", :], vmin=0, vmax=1) \
                 .background_gradient(cmap="Oranges", subset=pd.IndexSlice[abs_rows, :])
 
         st.dataframe(style_summary(stats_df), use_container_width=True)
+        now_caption = f" Now YTD uses {latest_year}." if latest_year is not None else ""
+        st.caption(
+            "Avg YTD compounds January through each column month, then averages those same-month returns across years."
+            + now_caption
+        )
 
     # --- HEATMAP HELPERS ---
     def render_quarterly_returns_view(series, suffix=""):
@@ -598,13 +616,184 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             fig.update_yaxes(showticklabels=False, col=3)
         st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
 
+    def render_year_drilldown_view(series, suffix=""):
+        full_suffix = f"{unique_id}_{suffix}" if unique_id else suffix
+        if series.empty:
+            return
+
+        working_series = pd.Series(series).dropna()
+        if working_series.empty:
+            return
+        if not isinstance(working_series.index, pd.DatetimeIndex):
+            working_series.index = pd.to_datetime(working_series.index)
+        working_series = working_series.sort_index()
+
+        monthly_ret = _resample_returns(working_series, "ME")
+        if monthly_ret.empty:
+            st.info("Not enough monthly data for a year drilldown.")
+            return
+
+        monthly_bal = working_series.resample("ME").last().reindex(monthly_ret.index)
+        monthly_df = monthly_ret.to_frame(name="Monthly Return")
+        monthly_df["Ending Balance"] = monthly_bal.values
+        monthly_df["Year"] = monthly_df.index.year
+        monthly_df["Month"] = monthly_df.index.strftime("%b")
+        monthly_df["Month Number"] = monthly_df.index.month
+
+        year_options = [int(y) for y in sorted(monthly_df["Year"].dropna().unique())]
+        if not year_options:
+            st.info("Not enough monthly data for a year drilldown.")
+            return
+
+        default_year = year_options[-1]
+        selected_year = st.select_slider(
+            "Year",
+            options=year_options,
+            value=default_year,
+            key=f"year_drilldown_{full_suffix}",
+        )
+
+        year_df = monthly_df[monthly_df["Year"] == selected_year].copy()
+        year_df = year_df.sort_values("Month Number")
+        if year_df.empty:
+            st.info(f"No monthly returns are available for {selected_year}.")
+            return
+
+        growth = 1.0 + year_df["Monthly Return"].fillna(0.0)
+        starting_factor = growth.cumprod().shift(1, fill_value=1.0)
+        year_df["Compounded Contribution"] = starting_factor * year_df["Monthly Return"].fillna(0.0)
+        year_df["Cumulative Return"] = year_df["Compounded Contribution"].cumsum()
+        year_df["Starting Factor"] = starting_factor
+
+        end_balance = float(year_df["Ending Balance"].iloc[-1])
+        first_growth = growth.iloc[0]
+        start_balance = (
+            float(year_df["Ending Balance"].iloc[0] / first_growth)
+            if first_growth and np.isfinite(first_growth)
+            else np.nan
+        )
+        ending_return = float((growth.prod() - 1.0))
+        balance_change = end_balance - start_balance if np.isfinite(start_balance) else np.nan
+
+        best_idx = year_df["Monthly Return"].idxmax()
+        worst_idx = year_df["Monthly Return"].idxmin()
+        best_label = f"{year_df.loc[best_idx, 'Month']} {year_df.loc[best_idx, 'Monthly Return']:+.2%}"
+        worst_label = f"{year_df.loc[worst_idx, 'Month']} {year_df.loc[worst_idx, 'Monthly Return']:+.2%}"
+
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Ending Return", f"{ending_return:+.2%}")
+        m2.metric("Start Value", f"${start_balance:,.0f}" if np.isfinite(start_balance) else "N/A")
+        m3.metric(
+            "End Value",
+            f"${end_balance:,.0f}",
+            f"${balance_change:+,.0f}" if np.isfinite(balance_change) else None,
+        )
+        m4.metric("Best / Worst Month", best_label, worst_label)
+
+        chart_df = year_df.copy()
+        chart_df["Contribution Label"] = chart_df["Compounded Contribution"].map(lambda x: f"{x*100:+.2f}%")
+        chart_df["Cumulative Label"] = chart_df["Cumulative Return"].map(lambda x: f"{x*100:+.2f}%")
+        bar_text = chart_df["Contribution Label"].tolist()
+        if bar_text:
+            bar_text[0] = ""
+
+        cumulative_label_annotations = []
+        for idx, row in chart_df.reset_index(drop=True).iterrows():
+            cumulative_y = float(row["Cumulative Return"] * 100)
+            contribution_y = float(row["Compounded Contribution"] * 100)
+            inside_positive_bar = contribution_y > 0 and 0 <= cumulative_y <= contribution_y
+            inside_negative_bar = contribution_y < 0 and contribution_y <= cumulative_y <= 0
+            yshift = -20 if inside_positive_bar else (20 if inside_negative_bar else 14)
+            cumulative_label_annotations.append(dict(
+                x=row["Month"],
+                y=cumulative_y,
+                text=row["Cumulative Label"],
+                showarrow=False,
+                yshift=yshift,
+                font=dict(color="#F8FAFC", size=12),
+                bgcolor="rgba(15, 18, 28, 0.82)",
+                bordercolor="rgba(248, 250, 252, 0.28)",
+                borderpad=3,
+            ))
+
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=chart_df["Month"],
+            y=chart_df["Compounded Contribution"] * 100,
+            name="Compounded Monthly Contribution",
+            marker_color=["#00CC96" if x >= 0 else "#EF553B" for x in chart_df["Compounded Contribution"]],
+            text=bar_text,
+            textposition="auto",
+            customdata=np.stack([
+                (chart_df["Monthly Return"] * 100).map(lambda x: f"{x:+.2f}%"),
+                chart_df["Starting Factor"],
+                chart_df["Cumulative Label"],
+            ], axis=-1),
+            hovertemplate=(
+                "<b>%{x}</b><br>"
+                "Monthly return: %{customdata[0]}<br>"
+                "Starting factor: %{customdata[1]:.4f}x<br>"
+                "Compounded contribution: %{text}<br>"
+                "Cumulative return: %{customdata[2]}"
+                "<extra></extra>"
+            ),
+        ))
+        fig.add_trace(go.Scatter(
+            x=chart_df["Month"],
+            y=chart_df["Cumulative Return"] * 100,
+            name="Cumulative Year Return",
+            mode="lines+markers",
+            line=dict(color="#42A5F5", width=3),
+            marker=dict(size=8),
+            customdata=chart_df["Cumulative Label"],
+            hovertemplate="<b>%{x}</b><br>Cumulative return: %{customdata}<extra></extra>",
+        ))
+        fig.add_hline(y=0, line_width=1, line_color="rgba(255,255,255,0.45)")
+        fig.update_layout(
+            title=f"{selected_year} Return Build-Up",
+            yaxis_title="Return vs. Start of Year (%)",
+            xaxis_title="Month",
+            template="plotly_dark",
+            height=430,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            annotations=cumulative_label_annotations,
+            margin=dict(t=80),
+        )
+        st.plotly_chart(fig, use_container_width=True, key=f"year_drill_fig_{full_suffix}")
+
+        detail_df = chart_df[[
+            "Month",
+            "Monthly Return",
+            "Starting Factor",
+            "Compounded Contribution",
+            "Cumulative Return",
+            "Ending Balance",
+        ]].copy()
+        st.dataframe(
+            detail_df.style.format({
+                "Monthly Return": "{:+.2%}",
+                "Starting Factor": "{:.4f}x",
+                "Compounded Contribution": "{:+.2%}",
+                "Cumulative Return": "{:+.2%}",
+                "Ending Balance": "${:,.2f}",
+            }).map(
+                color_return,
+                subset=["Monthly Return", "Compounded Contribution", "Cumulative Return"],
+            ),
+            use_container_width=True,
+            hide_index=True,
+        )
+
     def render_live_returns_view():
         st.subheader(f"{portfolio_name} Live Returns")
 
         refresh_col, source_col = st.columns([1, 3])
         if refresh_col.button("Refresh Live Prices", key=f"live_refresh_{view_key}"):
             _cached_fetch_live_price_series.clear()
-        source_col.caption("Yahoo Finance live quotes. SIM sleeves use live proxy tickers.")
+        source_col.caption(
+            "Yahoo Finance live quotes with pre-market/post-market when available. "
+            "SIM sleeves use live proxy tickers."
+        )
 
         with st.spinner("Fetching live prices..."):
             snapshot = build_live_returns_snapshot(
@@ -621,12 +810,13 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         ref_date = snapshot["reference_date"]
         asof = snapshot.get("asof")
         asof_label = asof.strftime("%b %d, %I:%M %p") if asof is not None else "N/A"
+        session_label = snapshot.get("market_session") or "Unknown session"
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Reference Value", f"${snapshot['reference_value']:,.0f}", ref_date.strftime("%Y-%m-%d"))
         c2.metric("Live Value", f"${snapshot['live_value']:,.0f}", f"{snapshot['live_return']*100:+.2f}%")
         c3.metric("Live Move", f"${snapshot['live_change']:,.0f}")
-        c4.metric("Quote As Of", asof_label)
+        c4.metric("Quote As Of", asof_label, session_label)
 
         rows = snapshot["rows"].copy()
         missing = rows[rows["Status"] != "OK"]["Ticker"].tolist()
@@ -652,6 +842,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             "Estimated Value",
             "Contribution",
             "Leverage",
+            "Market Session",
             "Status",
         ]
         display_df = rows[display_cols].sort_values("Position Value", ascending=False)
@@ -673,7 +864,16 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         )
 
     view_key = unique_id or portfolio_name or "returns"
-    returns_views = ["📋 Summary", "📅 Annual", "📆 Quarterly", "🗓️ Monthly", "📊 Daily", "⚡ Live", "📉 Drawdowns"]
+    returns_views = [
+        "📋 Summary",
+        "📅 Annual",
+        "📆 Quarterly",
+        "🗓️ Monthly",
+        "🎚️ Year Drilldown",
+        "📊 Daily",
+        "⚡ Live",
+        "📉 Drawdowns",
+    ]
     selected_view = st.segmented_control(
         "Returns View",
         returns_views,
@@ -845,6 +1045,33 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             render_monthly_returns_view(bench_series, suffix="_bench")
 
     elif selected_view == returns_views[4]:
+        drilldown_views = [portfolio_name]
+        if comparison_series is not None and not comparison_series.empty:
+            drilldown_views.append("Benchmark (Comparison)")
+        if bench_series is not None and not bench_series.empty:
+            drilldown_views.append("Benchmark (Primary)")
+
+        selected_drilldown_view = drilldown_views[0]
+        if len(drilldown_views) > 1:
+            selected_drilldown_view = st.segmented_control(
+                "Year Drilldown View",
+                drilldown_views,
+                default=drilldown_views[0],
+                key=f"year_drilldown_view_{view_key}",
+                label_visibility="collapsed",
+            )
+
+        if selected_drilldown_view == portfolio_name:
+            st.subheader(f"{portfolio_name} Year Drilldown")
+            render_year_drilldown_view(active_series)
+        elif selected_drilldown_view == "Benchmark (Comparison)":
+            st.subheader("Standard Rebalance (Comparison) Year Drilldown")
+            render_year_drilldown_view(comparison_series, suffix="_comp")
+        else:
+            st.subheader("Primary Benchmark Year Drilldown")
+            render_year_drilldown_view(bench_series, suffix="_bench")
+
+    elif selected_view == returns_views[5]:
         daily_ret = active_series.pct_change().dropna()
         st.subheader(f"{portfolio_name} Daily Returns")
 
@@ -867,7 +1094,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         render_distribution(daily_ret, "Daily", "Days")
 
-    elif selected_view == returns_views[5]:
+    elif selected_view == returns_views[6]:
         render_live_returns_view()
 
     else:

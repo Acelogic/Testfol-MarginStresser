@@ -1,9 +1,11 @@
 import math
+import sys
+from types import SimpleNamespace
 
 import pandas as pd
 
 from app.common.special_tickers import live_price_fallback_ticker
-from app.services.live_prices import build_live_returns_snapshot
+from app.services.live_prices import build_live_returns_snapshot, fetch_yahoo_live_price_series
 
 
 def test_live_price_fallback_ticker_maps_simulated_symbols():
@@ -146,3 +148,71 @@ def test_build_live_returns_snapshot_scales_latest_composition_to_displayed_valu
     rows = snapshot["rows"].set_index("Ticker")
     assert math.isclose(rows.loc["SPY", "Position Value"], 750.0, rel_tol=1e-9)
     assert math.isclose(rows.loc["BND", "Position Value"], 250.0, rel_tol=1e-9)
+
+
+def test_fetch_yahoo_live_price_series_uses_extended_hours_intraday(monkeypatch):
+    ref_date = pd.Timestamp("2026-04-27")
+    after_hours_time = pd.Timestamp("2026-04-28 16:30", tz="America/New_York")
+    calls = []
+
+    class FakeTicker:
+        def __init__(self, symbol):
+            self.symbol = symbol
+
+        @property
+        def info(self):
+            return {
+                "marketState": "POST",
+                "regularMarketPrice": 100.0,
+                "regularMarketTime": int(pd.Timestamp("2026-04-28 16:00", tz="America/New_York").timestamp()),
+                "postMarketPrice": 105.0,
+                "postMarketTime": int(pd.Timestamp("2026-04-28 16:15", tz="America/New_York").timestamp()),
+            }
+
+        @property
+        def fast_info(self):
+            return {"last_price": 104.0}
+
+        def history(self, *args, **kwargs):
+            calls.append(kwargs)
+            if kwargs.get("interval") == "1m":
+                assert kwargs.get("prepost") is True
+                return pd.DataFrame({"Close": [106.0]}, index=[after_hours_time])
+            return pd.DataFrame({"Close": [100.0]}, index=[ref_date])
+
+    monkeypatch.setitem(sys.modules, "yfinance", SimpleNamespace(Ticker=FakeTicker))
+
+    result = fetch_yahoo_live_price_series(("AAPL",), ref_date)
+    quote = result["AAPL"]
+
+    assert quote["error"] is None
+    assert math.isclose(quote["live_price"], 106.0, rel_tol=1e-9)
+    assert quote["live_time"] == pd.Timestamp("2026-04-28 16:30")
+    assert quote["market_session"] == "After-hours"
+    assert any(call.get("prepost") is True for call in calls)
+
+
+def test_build_live_returns_snapshot_reports_market_session():
+    ref_date = pd.Timestamp("2026-04-27")
+    port_series = pd.Series([1000.0], index=[ref_date])
+
+    def fake_fetcher(symbols, reference_date):
+        next_date = ref_date + pd.Timedelta(hours=18)
+        return {
+            "SPY": {
+                "prices": pd.Series([100.0, 101.0], index=[ref_date, next_date]),
+                "live_time": next_date,
+                "market_session": "After-hours",
+                "error": None,
+            },
+        }
+
+    snapshot = build_live_returns_snapshot(
+        port_series,
+        allocation={"SPY": 100.0},
+        price_fetcher=fake_fetcher,
+    )
+
+    assert snapshot["market_session"] == "After-hours"
+    rows = snapshot["rows"].set_index("Ticker")
+    assert rows.loc["SPY", "Market Session"] == "After-hours"
