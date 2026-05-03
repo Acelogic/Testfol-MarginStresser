@@ -3,10 +3,18 @@ import streamlit as st
 import json
 import os
 
-APP_VERSION = "3.8.0"
+APP_VERSION = "3.9.0"
 
 CHANGELOG_MARKDOWN = """
 ## Changelog
+
+### v3.9.0 - Dynamic Nasdaq LETFs & Rate-Aware Financing
+- Added dynamic Nasdaq rotation tickers such as `NDX_TOP8_ANN` and `NDXMEGA_TOP8_ANN`, with annual component schedules, company-level share-class collapsing, official NDX membership filtering, and `E=AUTO` individual LETF expense ratios.
+- Updated the local shadow engine so synthetic `?L` leverage uses historical FRED Fed Funds financing plus a default 0.50% implementation spread instead of a flat 4% assumption.
+- Added dynamic allocation schedule support to local backtests, including annual forced rebalances and inactive ticker handling so future baskets are not backfilled.
+- Cleaned up NDXMEGASPLIT presets, removed rejected hedge duplicates, restored the non-legacy NDXMEGASPLIT names, and added the research cherry-picked enhanced preset with ERs.
+- Documented dynamic Nasdaq tickers, LETF financing cost methodology, and the backtesting bias notes around static Mag 7 / cherry-picked baskets.
+- Added regression coverage for dynamic Nasdaq expansion, official membership corrections, rate-sensitive leverage financing, and default implementation spread behavior.
 
 ### v3.8.0 - Risk Parity, SIM Tickers & DCA Cache Fixes
 - Added a Risk Parity Split preset with DBMF, gold, bonds, international equity, NDX Mega leverage, and long Treasury sleeves.

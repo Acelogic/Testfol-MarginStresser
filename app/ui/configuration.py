@@ -106,6 +106,24 @@ def render():
                 }
             }]
 
+        # Migrate stale names that can live in Streamlit widget/session state
+        # after preset cleanup. Without this, text_input keys can keep showing
+        # old labels even after data/presets.json and code defaults are fixed.
+        _canonical_portfolio_names = {
+            "NDXMEGASPLIT - Legacy 60/20/15/5 (w/ ERs)": "NDXMEGASPLIT (w/ ERs)",
+            "NDXMEGASPLIT - Legacy 60/20/15/5 (No ER)": "NDXMEGASPLIT",
+        }
+        for _portfolio in st.session_state.portfolios:
+            _pid = _portfolio.get("id")
+            _old_name = _portfolio.get("name")
+            if _old_name in _canonical_portfolio_names:
+                _portfolio["name"] = _canonical_portfolio_names[_old_name]
+            _name_key = f"p_name_{_pid}"
+            if _name_key in st.session_state:
+                _widget_name = st.session_state[_name_key]
+                if _widget_name in _canonical_portfolio_names:
+                    st.session_state[_name_key] = _canonical_portfolio_names[_widget_name]
+
         if "global_cashflow" not in st.session_state:
             st.session_state.global_cashflow = {
                 "start_val": 10000.0, "amount": 0.0,

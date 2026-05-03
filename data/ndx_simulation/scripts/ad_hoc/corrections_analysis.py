@@ -153,7 +153,7 @@ def fmt_recov(days):
 
 # ── Portfolio simulation (via shadow backtest engine) ────────────────────
 def build_portfolio():
-    """Run the real shadow backtest engine for NDXMEGASPLIT (w/ ERs)."""
+    """Run the real shadow backtest engine for the NDXMEGASPLIT preset."""
     print("Fetching component prices...")
     tickers = list(ALLOCATION.keys())
     prices_df = fetch_component_data(tickers, START_DATE, END_DATE)

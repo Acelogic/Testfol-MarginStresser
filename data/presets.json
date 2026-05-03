@@ -141,6 +141,12 @@
                 "Weight %": 20,
                 "Maint %": 25,
                 "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "SHY",
+                "Weight %": 20,
+                "Maint %": 25,
+                "PM Maint %": 0.0
             }
         ],
         "rebalance": {
@@ -164,83 +170,6 @@
             "mode": "Custom",
             "freq": "Yearly",
             "day": 15,
-            "month_str": "Jan"
-        }
-    },
-    {
-        "name": "Main Split",
-        "allocation": [
-            {
-                "Ticker": "AAPL?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "MSFT?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "AVGO?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "AMZN?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "META?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "NVDA?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "GOOGL?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "TSLA?L=2",
-                "Weight %": 7.5,
-                "Maint %": 50,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "GLD",
-                "Weight %": 20.0,
-                "Maint %": 25,
-                "PM Maint %": 15.0
-            },
-            {
-                "Ticker": "VXUS",
-                "Weight %": 15.0,
-                "Maint %": 25,
-                "PM Maint %": 9.0
-            },
-            {
-                "Ticker": "TQQQ",
-                "Weight %": 5.0,
-                "Maint %": 75,
-                "PM Maint %": 30.0
-            }
-        ],
-        "rebalance": {
-            "mode": "Custom",
-            "freq": "Yearly",
-            "day": 1,
             "month_str": "Jan"
         }
     },
@@ -330,48 +259,19 @@
         }
     },
     {
-        "name": "60% SSO / 20% ZROZ",
+        "name": "Research - TQQQ Proxy 60/40 GLD (w/ ERs)",
         "allocation": [
             {
-                "Ticker": "SPYSIM?L=2",
-                "Weight %": 60.0,
-                "Maint %": 50.0,
-                "PM Maint %": 0.0
-            },
-            {
-                "Ticker": "ZROZSIM",
-                "Weight %": 20.0,
-                "Maint %": 25.0,
-                "PM Maint %": 0.0
-            },
-            {
-                "Ticker": "GLDSIM",
-                "Weight %": 20.0,
-                "Maint %": 25.0,
-                "PM Maint %": 0.0
-            }
-        ],
-        "rebalance": {
-            "mode": "Custom",
-            "freq": "Yearly",
-            "day": 1,
-            "month_str": "Jan"
-        }
-    },
-    {
-        "name": "TQQQ/GLD",
-        "allocation": [
-            {
-                "Ticker": "QQQSIM?L=3",
+                "Ticker": "QQQSIM?L=3&E=0.82",
                 "Weight %": 60.0,
                 "Maint %": 75.0,
-                "PM Maint %": 0.0
+                "PM Maint %": 30.0
             },
             {
-                "Ticker": "GLDSIM",
+                "Ticker": "GLDSIM?E=0.40",
                 "Weight %": 40.0,
                 "Maint %": 25.0,
-                "PM Maint %": 0.0
+                "PM Maint %": 15.0
             }
         ],
         "rebalance": {
@@ -382,13 +282,13 @@
         }
     },
     {
-        "name": "QLD",
+        "name": "QLD - 2x QQQ Proxy (No Rebalance)",
         "allocation": [
             {
                 "Ticker": "QQQSIM?L=2",
                 "Weight %": 100,
-                "Maint %": 25,
-                "PM Maint %": 0.0
+                "Maint %": 50,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
@@ -399,13 +299,13 @@
         }
     },
     {
-        "name": "QQUP ",
+        "name": "QQUP - 2x NDXMEGA Proxy (No Rebalance)",
         "allocation": [
             {
                 "Ticker": "NDXMEGASIM?L=2",
                 "Weight %": 100,
-                "Maint %": 25,
-                "PM Maint %": 0.0
+                "Maint %": 50,
+                "PM Maint %": 30.0
             }
         ],
         "rebalance": {
@@ -416,7 +316,7 @@
         }
     },
     {
-        "name": "NDXMEGASPLIT Enhanced ",
+        "name": "NDXMEGASPLIT Research - Annual NDXMEGA Top 8 30% Sleeve (No ER)",
         "allocation": [
             {
                 "Ticker": "NDXMEGASIM?L=2",
@@ -443,50 +343,8 @@
                 "PM Maint %": 30.0
             },
             {
-                "Ticker": "AAPL?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "MSFT?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "AVGO?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "AMZN?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "META?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "NVDA?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "GOOG?L=2",
-                "Weight %": 3.75,
-                "Maint %": 50.0,
-                "PM Maint %": 30.0
-            },
-            {
-                "Ticker": "TSLA?L=2",
-                "Weight %": 3.75,
+                "Ticker": "NDXMEGA_TOP8_ANN?L=2",
+                "Weight %": 30.0,
                 "Maint %": 50.0,
                 "PM Maint %": 30.0
             }
@@ -499,7 +357,7 @@
         }
     },
     {
-        "name": "HedgedPortion Only",
+        "name": "Research - Hedge Sleeve Only (GLD/VXUS/QQQ3)",
         "allocation": [
             {
                 "Ticker": "VXUSSIM",
@@ -580,7 +438,7 @@
         }
     },
     {
-        "name": "NDXMEGASPLIT Enhanced (w/ ERs)",
+        "name": "NDXMEGASPLIT Enhanced Cherry Picked (w/ ERs)",
         "allocation": [
             {
                 "Ticker": "NDXMEGASIM?L=2&E=0.95",
@@ -663,7 +521,182 @@
         }
     },
     {
-        "name": "60% SSO / 20% VXUS / 20% GLD",
+        "name": "NDXMEGASPLIT Research - Annual NDXMEGA Top 8 30% Sleeve (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2&E=0.95",
+                "Weight %": 30.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "VXUSSIM?E=0.05",
+                "Weight %": 15.0,
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3&E=0.82",
+                "Weight %": 5.0,
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "NDXMEGA_TOP8_ANN?L=2&E=AUTO",
+                "Weight %": 30.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDXMEGASPLIT Research - Annual NDX Top 8 30% Sleeve (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDXMEGASIM?L=2&E=0.95",
+                "Weight %": 30.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 20.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "VXUSSIM?E=0.05",
+                "Weight %": 15.0,
+                "Maint %": 25.0,
+                "PM Maint %": 9.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3&E=0.82",
+                "Weight %": 5.0,
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "NDX_TOP8_ANN?L=2&E=AUTO",
+                "Weight %": 30.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDX Top 2 Research - Medium 40/40/20 (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK",
+                "Weight %": 40.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 40.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "CASHX",
+                "Weight %": 20.0,
+                "Maint %": 0.0,
+                "PM Maint %": 0.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDX Top 2 Research - Aggressive 40/40/15/5 (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDX_TOP2_ANN?L=2&E=AUTO&W=CAP",
+                "Weight %": 40.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 40.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "CASHX",
+                "Weight %": 15.0,
+                "Maint %": 0.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "QQQSIM?L=3&E=0.82",
+                "Weight %": 5.0,
+                "Maint %": 75.0,
+                "PM Maint %": 30.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "NDX Top 2 Research - Safe 35/35/30 (w/ ERs)",
+        "allocation": [
+            {
+                "Ticker": "NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK",
+                "Weight %": 35.0,
+                "Maint %": 50.0,
+                "PM Maint %": 30.0
+            },
+            {
+                "Ticker": "GLDSIM?E=0.40",
+                "Weight %": 35.0,
+                "Maint %": 25.0,
+                "PM Maint %": 15.0
+            },
+            {
+                "Ticker": "CASHX",
+                "Weight %": 30.0,
+                "Maint %": 0.0,
+                "PM Maint %": 0.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Custom",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "SSO Split - 60/20/20 VXUS/GLD",
         "allocation": [
             {
                 "Ticker": "SPYSIM?L=2",
@@ -692,7 +725,7 @@
         }
     },
     {
-        "name": "60% SSO / 20% ZROZ / 20% GLD",
+        "name": "SSO Split - 60/20/20 ZROZ/GLD",
         "allocation": [
             {
                 "Ticker": "SPYSIM?L=2",
@@ -721,7 +754,7 @@
         }
     },
     {
-        "name": "Risk Parity Split",
+        "name": "Research - Risk Parity Split",
         "allocation": [
             {
                 "Ticker": "DBMFSIM",

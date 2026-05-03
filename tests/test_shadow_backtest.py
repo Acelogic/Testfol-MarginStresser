@@ -200,6 +200,67 @@ def test_shadow_backtest_does_not_forward_fill_stale_component_prices():
     assert port_series.index.max() == pd.Timestamp("2024-01-03")
 
 
+def test_leveraged_returns_use_fed_funds_for_financing(monkeypatch):
+    from app.services import data_service
+
+    dates = pd.bdate_range("2024-01-02", "2024-01-12")
+    prices = pd.DataFrame({"TEST": 100.0}, index=dates)
+
+    def run_with_rate(rate_pct):
+        fed_funds = pd.Series(
+            rate_pct,
+            index=pd.date_range(dates.min(), dates.max(), freq="D"),
+        )
+        monkeypatch.setattr(data_service, "get_fed_funds_rate", lambda: fed_funds)
+        result = run_shadow_backtest(
+            allocation={"TEST?L=2&SP=0": 100.0},
+            start_val=10000.0,
+            start_date=str(dates.min().date()),
+            end_date=str(dates.max().date()),
+            prices_df=prices,
+            rebalance_freq="Yearly",
+        )
+        _, _, _, _, logs, port_series, _, *_ = result
+        return logs, port_series
+
+    zero_logs, zero_rate_port = run_with_rate(0.0)
+    high_logs, high_rate_port = run_with_rate(10.0)
+
+    assert zero_rate_port.iloc[-1] == pytest.approx(10000.0)
+    assert high_rate_port.iloc[-1] < zero_rate_port.iloc[-1]
+    assert any("Leverage Financing Source: FEDFUNDS" in entry for entry in zero_logs)
+    assert any("Leverage Financing Source: FEDFUNDS" in entry for entry in high_logs)
+
+
+def test_leveraged_returns_apply_default_implementation_spread(monkeypatch):
+    from app.services import data_service
+
+    dates = pd.bdate_range("2024-01-02", "2024-01-12")
+    prices = pd.DataFrame({"TEST": 100.0}, index=dates)
+    fed_funds = pd.Series(0.0, index=pd.date_range(dates.min(), dates.max(), freq="D"))
+    monkeypatch.setattr(data_service, "get_fed_funds_rate", lambda: fed_funds)
+
+    no_spread = run_shadow_backtest(
+        allocation={"TEST?L=2&SP=0": 100.0},
+        start_val=10000.0,
+        start_date=str(dates.min().date()),
+        end_date=str(dates.max().date()),
+        prices_df=prices,
+        rebalance_freq="Yearly",
+    )[5]
+    default_spread = run_shadow_backtest(
+        allocation={"TEST?L=2": 100.0},
+        start_val=10000.0,
+        start_date=str(dates.min().date()),
+        end_date=str(dates.max().date()),
+        prices_df=prices,
+        rebalance_freq="Yearly",
+    )[5]
+
+    assert no_spread.iloc[-1] == pytest.approx(10000.0)
+    assert default_spread.iloc[-1] < no_spread.iloc[-1]
+
+
 def test_dca_monthly(flat_prices, sample_allocation):
     """$1000/month cashflow -> correct number of buy trades."""
     result = run_shadow_backtest(

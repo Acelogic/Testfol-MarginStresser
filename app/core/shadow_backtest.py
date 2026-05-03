@@ -17,6 +17,9 @@ from app.common.special_tickers import (
 
 log = logging.getLogger("shadow_backtest")
 
+DEFAULT_FFR_ANNUAL = 0.04  # 4% assumption if Fed Funds data is unavailable.
+DEFAULT_LEVERAGE_SPREAD_PCT = 0.50
+
 @dataclass
 class TaxLot:
     ticker: str
@@ -76,6 +79,42 @@ def parse_ticker(ticker):
     return base, params
 
 # ... (rest of imports/helpers) ...
+
+
+def _annual_rate_pct_to_daily(rate_pct: pd.Series | float) -> pd.Series | float:
+    """Convert annualized percentage rates to daily decimal financing rates."""
+    return (1 + (rate_pct / 100.0)) ** (1.0 / 252.0) - 1
+
+
+def _resolve_leverage_funding_daily(index: pd.DatetimeIndex, returns_base: pd.DataFrame) -> tuple[pd.Series, str]:
+    """Return daily financing rates for synthetic leverage cost calculations."""
+    index = pd.DatetimeIndex(index)
+
+    try:
+        from app.services import data_service
+
+        fed_funds = data_service.get_fed_funds_rate()
+        if fed_funds is not None and not fed_funds.empty:
+            fed_funds = pd.to_numeric(fed_funds, errors="coerce").sort_index().dropna()
+            if not fed_funds.empty:
+                if fed_funds.index.tz is not None:
+                    fed_funds.index = fed_funds.index.tz_localize(None)
+                annual_pct = fed_funds.reindex(index, method="ffill")
+                missing = annual_pct.isna()
+                if missing.any():
+                    annual_pct = annual_pct.fillna(DEFAULT_FFR_ANNUAL * 100.0)
+                daily = _annual_rate_pct_to_daily(annual_pct)
+                return daily.rename("FEDFUNDS funding"), "FEDFUNDS"
+    except Exception as e:
+        log.warning("Failed to load FEDFUNDS leverage funding data: %s", e)
+
+    for col in ("EFFRX", "CASHX", "BIL", "SHV"):
+        if col in returns_base.columns:
+            daily = returns_base[col].reindex(index).ffill().fillna(DEFAULT_FFR_ANNUAL / 252.0)
+            return daily.rename(f"{col} funding"), col
+
+    daily = pd.Series(DEFAULT_FFR_ANNUAL / 252.0, index=index, name="Default funding")
+    return daily, "flat 4% fallback"
 
 
 
@@ -179,7 +218,22 @@ def _check_drift_fast(position_values, target_weights_pct, threshold_pct, ticker
     return max_drift > threshold_pct, max_drift, tickers[drift_idx]
 
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly"):
+def _normalize_dynamic_allocation_schedule(dynamic_allocation_schedule):
+    if not dynamic_allocation_schedule:
+        return []
+
+    entries = []
+    for effective_date, target_allocation in dynamic_allocation_schedule.items():
+        entries.append(
+            (
+                pd.Timestamp(effective_date),
+                {str(ticker): float(weight) for ticker, weight in target_allocation.items()},
+            )
+        )
+    return sorted(entries, key=lambda item: item[0])
+
+
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly", dynamic_allocation_schedule=None):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -196,10 +250,45 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         custom_rebal_config (dict): Configuration for custom rebalancing logic (optional).
     """
 
-    tickers = list(allocation.keys())
-    total_alloc = sum(allocation.values())
-    target_weight_fractions = np.array([allocation[ticker] / total_alloc for ticker in tickers], dtype=float)
-    target_weight_pcts = target_weight_fractions * 100.0
+    dynamic_schedule_entries = _normalize_dynamic_allocation_schedule(dynamic_allocation_schedule)
+    tickers = list(dict.fromkeys(str(ticker) for ticker in allocation.keys()))
+    if dynamic_schedule_entries:
+        scheduled_tickers = [
+            str(ticker)
+            for _, target_allocation in dynamic_schedule_entries
+            for ticker in target_allocation.keys()
+        ]
+        tickers = list(dict.fromkeys(tickers + scheduled_tickers))
+        allocation = {ticker: float(allocation.get(ticker, 0.0)) for ticker in tickers}
+    else:
+        allocation = {ticker: float(allocation[ticker]) for ticker in tickers}
+
+    def _schedule_index_for_date(dt, *, inclusive=True):
+        if not dynamic_schedule_entries:
+            return -1
+        ts = pd.Timestamp(dt)
+        selected_idx = -1
+        for idx, (effective_date, _) in enumerate(dynamic_schedule_entries):
+            if effective_date < ts or (inclusive and effective_date <= ts):
+                selected_idx = idx
+            else:
+                break
+        return selected_idx
+
+    def _target_arrays(target_allocation):
+        weights = np.array([float(target_allocation.get(ticker, 0.0)) for ticker in tickers], dtype=float)
+        total = float(weights.sum())
+        if total <= 0:
+            fallback = np.array([float(allocation.get(ticker, 0.0)) for ticker in tickers], dtype=float)
+            total = float(fallback.sum())
+            weights = fallback
+        if total <= 0:
+            weights = np.repeat(1.0 / len(tickers), len(tickers)) if tickers else np.array([], dtype=float)
+        else:
+            weights = weights / total
+        return weights, weights * 100.0
+
+    target_weight_fractions, target_weight_pcts = _target_arrays(allocation)
     tax_treatments = {ticker: get_tax_treatment(ticker) for ticker in tickers}
 
     # Initialize logs
@@ -215,6 +304,12 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(f"Custom Frequency: {custom_freq}, Day: {rebalance_day}" + (f", Month: {rebalance_month}" if custom_freq == "Yearly" else ""))
     if rebalance_freq in ("Threshold", "Threshold+Calendar"):
         logs.append(f"Drift Threshold: {threshold_pct}%")
+    if dynamic_schedule_entries:
+        logs.append(
+            "Dynamic Allocation Schedule: "
+            f"{len(dynamic_schedule_entries)} annual rotation point(s), "
+            f"{len(tickers)} total engine ticker(s)."
+        )
 
     # PM Buy Block tracking
     pm_blocked_dates = []
@@ -275,18 +370,11 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     
     missing_tickers = []
     
-    # Try to find FFR (Risk Free Rate) for leverage cost
-    # Look for 'BIL' or '^IRX' in prices_base
-    ffr_series = None
-    if 'BIL' in returns_base.columns:
-        ffr_series = returns_base['BIL'] # BIL Return ~ FFR (minus ER)
-    elif 'CASHX' in returns_base.columns:
-         ffr_series = returns_base['CASHX']
-    elif 'SHV' in returns_base.columns:
-         ffr_series = returns_base['SHV']
-    
-    # Defaults
-    DEFAULT_FFR_ANNUAL = 0.04 # 4% assumption if no data
+    funding_daily, funding_source = _resolve_leverage_funding_daily(returns_base.index, returns_base)
+    logs.append(
+        f"Leverage Financing Source: {funding_source}; "
+        f"Default SP: {DEFAULT_LEVERAGE_SPREAD_PCT:.2f}%"
+    )
     
     for ticker in tickers:
         base, params = parse_ticker(ticker)
@@ -320,27 +408,16 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 4. Leverage (L, SW, SP)
         L = float(params.get('L', 1.0))
         SW = float(params.get('SW', 1.0))
-        # Default SP = 0.0%
-        SP = float(params.get('SP', 0.0))
+        SP = float(params.get('SP', DEFAULT_LEVERAGE_SPREAD_PCT))
         
         if L != 1.0:
             # Leverage Formula: R_lev = L * R_u - Cost
             # Cost = SW * (L - 1) * (FFR + SP)
-            
-            # Calculate FFR term
-            if ffr_series is not None:
-                # FFR series is daily return. We need Annualized rate?
-                # Usually: Cost is calculated on Daily basis.
-                # (FFR_daily * 252) ~ FFR_annual.
-                # Currently ffr_series is daily return.
-                # So Cost_daily = SW * (L - 1) * (R_ffr + SP_daily)
-                sp_daily = (SP / 100.0) / 252.0
-                cost_daily = SW * (L - 1) * (ffr_series.reindex(r_s.index).fillna(DEFAULT_FFR_ANNUAL/252) + sp_daily)
-            else:
-                 # Constant assumption
-                 ffr_daily = DEFAULT_FFR_ANNUAL / 252.0
-                 sp_daily = (SP / 100.0) / 252.0
-                 cost_daily = SW * (L - 1) * (ffr_daily + sp_daily)
+            sp_daily = (SP / 100.0) / 252.0
+            funding_for_ticker = funding_daily.reindex(r_s.index).ffill().fillna(
+                DEFAULT_FFR_ANNUAL / 252.0
+            )
+            cost_daily = SW * (L - 1) * (funding_for_ticker + sp_daily)
                  
             r_s = (r_s * L) - cost_daily
             
@@ -379,7 +456,27 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         start_ts = pd.to_datetime(start_date)
         returns_port = returns_port[returns_port.index >= start_ts]
 
-    valid_returns = returns_port.dropna()
+    if dynamic_schedule_entries:
+        active_mask = pd.DataFrame(False, index=returns_port.index, columns=tickers)
+        for dt in returns_port.index:
+            schedule_idx = _schedule_index_for_date(dt, inclusive=False)
+            if schedule_idx < 0:
+                continue
+            target_allocation = dynamic_schedule_entries[schedule_idx][1]
+            active_tickers = [
+                ticker
+                for ticker, weight in target_allocation.items()
+                if weight > 0 and ticker in active_mask.columns
+            ]
+            if active_tickers:
+                active_mask.loc[dt, active_tickers] = True
+
+        active_missing = returns_port.isna() & active_mask
+        valid_row_mask = active_mask.any(axis=1) & ~active_missing.any(axis=1)
+        returns_port = returns_port.where(active_mask, 0.0)
+        valid_returns = returns_port[valid_row_mask]
+    else:
+        valid_returns = returns_port.dropna()
     
     if valid_returns.empty:
         logs.append(f"Error: No valid data found after start date {start_date}.")
@@ -406,6 +503,21 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         current_val = start_val
         initial_lot_date = pd.to_datetime(start_date)
         logs.append("Initializing Positions (Standard):")
+
+    current_schedule_idx = _schedule_index_for_date(sim_start_date)
+    if dynamic_schedule_entries:
+        target_weight_fractions, target_weight_pcts = _target_arrays(
+            dynamic_schedule_entries[current_schedule_idx][1]
+        )
+        active = [
+            ticker
+            for ticker, weight in dynamic_schedule_entries[current_schedule_idx][1].items()
+            if weight > 0
+        ]
+        logs.append(
+            f"Dynamic allocation active at {sim_start_date.date()}: "
+            + ", ".join(active)
+        )
 
     position_values = target_weight_fractions * current_val
     lot_quantities = position_values.copy()
@@ -521,6 +633,31 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         twr_history_dates.append(date)
         twr_history_vals.append(curr_twr)
 
+        dynamic_schedule_rebalance = False
+        if dynamic_schedule_entries:
+            new_schedule_idx = current_schedule_idx
+            while (
+                new_schedule_idx + 1 < len(dynamic_schedule_entries)
+                and dynamic_schedule_entries[new_schedule_idx + 1][0] <= date
+            ):
+                new_schedule_idx += 1
+
+            if new_schedule_idx != current_schedule_idx:
+                current_schedule_idx = new_schedule_idx
+                target_weight_fractions, target_weight_pcts = _target_arrays(
+                    dynamic_schedule_entries[current_schedule_idx][1]
+                )
+                dynamic_schedule_rebalance = True
+                active = [
+                    ticker
+                    for ticker, weight in dynamic_schedule_entries[current_schedule_idx][1].items()
+                    if weight > 0
+                ]
+                logs.append(
+                    f"\n[DYNAMIC ALLOCATION] {date.date()} | Active sleeve: "
+                    + ", ".join(active)
+                )
+
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
@@ -576,14 +713,14 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         prev_post_flow_val = day_port_val
 
         # 3. Check for Rebalance
-        should_rebal = False
+        should_rebal = dynamic_schedule_rebalance
 
         if rebalance_freq == Freq.YEARLY:
-            should_rebal = is_year_boundary
+            should_rebal = should_rebal or is_year_boundary
         elif rebalance_freq == Freq.QUARTERLY:
-            should_rebal = is_quarter_boundary
+            should_rebal = should_rebal or is_quarter_boundary
         elif rebalance_freq == Freq.MONTHLY:
-            should_rebal = is_month_boundary
+            should_rebal = should_rebal or is_month_boundary
         elif rebalance_freq == "Custom":
             effective_day = min(rebalance_day, int(days_in_month[i]))
             current_day = int(date_days[i])

@@ -58,12 +58,87 @@ You can use Testfol modifiers in the ticker symbol to simulate leverage or expen
 
 | Modifier | Description | Example |
 | :--- | :--- | :--- |
-| `?L=X` | **Leverage**: Multiplies daily returns by X. | `SPY?L=2` (2x S&P 500) |
-| `?E=X` | **Expense Ratio**: Applies annual expense ratio (%). | `QQQ?E=0.20` (0.20% annual fee) |
+| `?L=X` | **Leverage**: Multiplies daily returns by X and, in the local engine, subtracts historical Fed Funds financing cost plus a default 0.50% implementation spread for the extra exposure. | `SPY?L=2` (2x S&P 500) |
+| `?E=X` | **Expense Ratio**: Applies annual fund operating expense ratio (%). This is separate from leverage financing cost. | `QQQ?E=0.20` (0.20% annual fee) |
 | `?D=X` | **Drag**: Applies annual drag (legacy alias for expense ratio). | `SPY?D=0.50` (0.50% fee) |
 | `_SIM` | **Simulation**: Often used to extend history. | `UPRO_SIM` (Simulated 3x SPY) |
 
 You can combine modifiers: `NDXMEGASIM?L=2&E=0.95` (2x leveraged with 0.95% expense ratio).
+
+For local-engine LETF simulations, `?L` is rate-sensitive. The simulator uses FRED `FEDFUNDS` plus a default `0.50%` implementation spread as the financing rate for the borrowed/synthetic exposure and falls back to 4% only if the Fed Funds file cannot be loaded. Example: `QQQSIM?L=3&E=0.82` applies 3x daily QQQ exposure, subtracts financing cost on the extra 2x exposure, then subtracts the explicit `0.82%` expense ratio. Use `SP=0` when you intentionally want no extra spread, or set a custom spread such as `SP=1.0`.
+
+---
+
+## Dynamic Nasdaq Rotation Tickers
+
+The app supports dynamic pseudo-tickers that expand into historical Nasdaq component sleeves during the local backtest. These are useful when you want a rules-based alternative to hindsight baskets such as "hold today's Mag 7 forever."
+
+### Supported Patterns
+
+| Pattern | Source | Meaning |
+| :--- | :--- | :--- |
+| `NDX_TOP{N}_ANN` | Historical Nasdaq-100 weights | Each year, select the top N Nasdaq-100 companies using the prior December NDX weights. |
+| `NDXMEGA_TOP{N}_ANN` | Local NDXMEGA constituent history | Each annual NDXMEGA reconstruction date, select the top N NDXMEGA companies. |
+
+Examples:
+- `NDX_TOP2_ANN`
+- `NDX_TOP5_ANN`
+- `NDX_TOP8_ANN`
+- `NDXMEGA_TOP8_ANN`
+
+The `{N}` value is flexible, so `NDX_TOP4_ANN` and `NDX_TOP5_ANN` work even if they are not saved as presets.
+
+### Query Parameters
+
+Dynamic tickers can use the standard leverage and expense modifiers, plus a weighting modifier:
+
+| Parameter | Example | Meaning |
+| :--- | :--- | :--- |
+| `L=2` | `NDX_TOP5_ANN?L=2` | Simulate each selected component as a 2x daily-reset instrument. |
+| `E=AUTO` | `NDX_TOP5_ANN?L=2&E=AUTO` | Apply per-name individual 2x LETF expense ratios when known. Unknown names use the fallback ER, currently `0.92%`. |
+| `W=EQUAL` | `NDX_TOP5_ANN?L=2&E=AUTO&W=EQUAL` | Equal-weight the selected names. This is the default. |
+| `W=CAP` | `NDX_TOP2_ANN?L=2&E=AUTO&W=CAP` | Weight selected names by their historical NDX company weights. |
+| `W=INV_RANK` | `NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK` | Inverse-rank weight the selected names. For top 2, rank 1 receives 2/3 of the sleeve and rank 2 receives 1/3. |
+| `W=RANK` | `NDX_TOP5_ANN?L=2&E=AUTO&W=RANK` | Rank-weight selected names linearly, with rank 1 heaviest. |
+
+The `W` parameter controls only the dynamic sleeve allocation. It is removed before the engine creates the underlying component tickers, so a ticker such as:
+
+```text
+NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK
+```
+
+expands into ordinary component tickers such as:
+
+```text
+NVDA?L=2&E=0.92
+AAPL?L=2&E=0.96
+```
+
+### Rules And Data Timing
+
+- `NDX_TOP{N}_ANN` uses prior December Nasdaq-100 weights and becomes effective on January 1 of the following year. When an official Nasdaq-100 membership snapshot is available, the selector filters to those official members before ranking the reconstructed weights.
+- `NDXMEGA_TOP{N}_ANN` uses the NDXMEGA reconstruction rows from the local simulation data.
+- Dual share classes and historical symbol changes are collapsed at the company level before ranking. For example, `GOOG` and `GOOGL` are treated as one company, historical `FB` membership is matched to `META`, `RIMM` to `BBRY`, and `SYMC` to `GEN`.
+- The selected component sleeve is rebalanced when the annual selection changes. Between annual rebalances, holdings drift with returns.
+- If the requested start date predates the first available annual selection, the local engine starts the dynamic run at the first available rotation point instead of backfilling a future basket.
+- These tickers force the local Shadow Engine because the Testfol API does not know how to expand local dynamic pseudo-tickers.
+
+### Presets Using Dynamic Nasdaq Tickers
+
+Current saved presets include:
+
+| Preset | Dynamic sleeve |
+| :--- | :--- |
+| `NDXMEGASPLIT Research - Annual NDXMEGA Top 8 30% Sleeve (No ER)` | `NDXMEGA_TOP8_ANN?L=2` |
+| `NDXMEGASPLIT Research - Annual NDXMEGA Top 8 30% Sleeve (w/ ERs)` | `NDXMEGA_TOP8_ANN?L=2&E=AUTO` |
+| `NDXMEGASPLIT Research - Annual NDX Top 8 30% Sleeve (w/ ERs)` | `NDX_TOP8_ANN?L=2&E=AUTO` |
+| `NDX Top 2 Research - Aggressive 40/40/15/5 (w/ ERs)` | `NDX_TOP2_ANN?L=2&E=AUTO&W=CAP` |
+| `NDX Top 2 Research - Medium 40/40/20 (w/ ERs)` | `NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK` |
+| `NDX Top 2 Research - Safe 35/35/30 (w/ ERs)` | `NDX_TOP2_ANN?L=2&E=AUTO&W=INV_RANK` |
+
+### Backtesting Bias Note
+
+Dynamic Nasdaq rotation tickers are intended to reduce hindsight bias. A historical "Mag 7" backtest is anachronistic before the Mag 7 label existed, and a static basket of today's winners can overstate historical performance. A rule such as `NDX_TOP5_ANN?L=2&E=AUTO&W=EQUAL` is more defensible because it uses only historical index membership and weights known at each annual rebalance.
 
 ---
 
@@ -135,4 +210,3 @@ The X-Ray engine allows you to peer inside your ETFs to see the actual underlyin
     -   **Sectors**: `XLBSIM` (Materials), `XLKSIM` (Tech), `XLFSIM` (Financials), etc.
     -   **Bonds**: `IEFSIM` (7-10y), `SHYSIM` (1-3y), `TLTSIM` (20y+).
     -   **Modifiers**: Works seamlessly with leverage modifiers like `SPYSIM?L=2`.
-

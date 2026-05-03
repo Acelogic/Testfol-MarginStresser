@@ -21,6 +21,10 @@ from app.common.constants import Freq, RebalMode, Tickers
 from app.core import calculations
 from app.core.shadow_backtest import run_shadow_backtest as _default_shadow
 from app.services.data_service import clip_component_data_to_synced_end, fetch_component_data
+from app.services.ndx_mega_rotation import (
+    build_dynamic_allocation_plan,
+    expand_dynamic_ticker_universe,
+)
 from app.services.testfol_api import fetch_backtest as _default_fetch
 
 logger = logging.getLogger(__name__)
@@ -95,12 +99,13 @@ def _prefetch_component_universe(
         return None
 
     try:
+        expanded_tickers = expand_dynamic_ticker_universe(tickers, start_date, end_date)
         try:
-            return fetch_component_data(unique_bases, start_date, end_date, sync_end=False)
+            return fetch_component_data(expanded_tickers, start_date, end_date, sync_end=False)
         except TypeError as exc:
             if "sync_end" not in str(exc):
                 raise
-            return fetch_component_data(unique_bases, start_date, end_date)
+            return fetch_component_data(expanded_tickers, start_date, end_date)
     except Exception as exc:
         logger.warning("Failed shared component fetch for %s: %s", purpose, exc)
         return None
@@ -197,7 +202,8 @@ def _rerun_result_for_common_start(
     if series.index[0] >= common_start - pd.Timedelta(days=3):
         return index, res
 
-    alloc_map = res["allocation"]
+    alloc_map = res.get("_engine_allocation", res["allocation"])
+    dynamic_schedule = res.get("_dynamic_allocation_schedule")
     reb = res["_reb"]
     r_mode = res["_r_mode"]
     r_freq = reb.get("freq", "Yearly")
@@ -266,6 +272,7 @@ def _rerun_result_for_common_start(
                         dca_in_retirement=_pm_cfg_p2.get("dca_in_retirement", True),
                         loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                         loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
+                        dynamic_allocation_schedule=dynamic_schedule,
                     )
                     res["trades_df"] = new_trades
                     res["trades"] = new_trades
@@ -360,6 +367,7 @@ def _rerun_result_for_common_start(
                     dca_in_retirement=_pm_cfg2.get("dca_in_retirement", True),
                     loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                     loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
+                    dynamic_allocation_schedule=dynamic_schedule,
                 )
                 res["trades_df"] = new_trades
                 res["trades"] = new_trades
@@ -418,7 +426,17 @@ def run_single_backtest(
     fetch_fn = fetch_backtest_fn or _default_fetch
     shadow_fn = run_shadow_fn or _default_shadow
 
-    alloc_map = allocation
+    original_allocation = allocation
+    dynamic_plan = build_dynamic_allocation_plan(
+        allocation,
+        maint_pcts,
+        pm_maint_pcts,
+        start_date,
+        end_date,
+    )
+    alloc_map = dynamic_plan.engine_allocation
+    engine_maint_pcts = dynamic_plan.maint_pcts
+    engine_pm_maint_pcts = dynamic_plan.pm_maint_pcts
     shared_prices_df = _slice_prefetched_component_prices(
         prefetched_component_prices,
         alloc_map.keys(),
@@ -427,21 +445,31 @@ def run_single_backtest(
     )
 
     # Weighted maintenance
-    total_w = sum(alloc_map.values())
+    maintenance_allocation = alloc_map
+    if dynamic_plan.dynamic_schedule:
+        maintenance_allocation = next(iter(sorted(dynamic_plan.dynamic_schedule.items())))[1]
+        start_ts = pd.Timestamp(start_date)
+        for effective_date, target_allocation in sorted(dynamic_plan.dynamic_schedule.items()):
+            if effective_date <= start_ts:
+                maintenance_allocation = target_allocation
+            else:
+                break
+
+    total_w = sum(maintenance_allocation.values())
     d_maint = 25.0
     current_wmaint = 0.0
     if total_w > 0:
-        for ticker, weight in alloc_map.items():
-            m = maint_pcts.get(ticker.split("?")[0], d_maint)
+        for ticker, weight in maintenance_allocation.items():
+            m = engine_maint_pcts.get(ticker.split("?")[0], d_maint)
             current_wmaint += (weight / total_w) * (m / 100)
     else:
         current_wmaint = d_maint / 100.0
 
     # PM weighted maintenance
     current_wmaint_pm = 0.0
-    if pm_maint_pcts and total_w > 0:
-        for ticker, weight in alloc_map.items():
-            m_pm = pm_maint_pcts.get(ticker.split("?")[0], 0.0)
+    if engine_pm_maint_pcts and total_w > 0:
+        for ticker, weight in maintenance_allocation.items():
+            m_pm = engine_pm_maint_pcts.get(ticker.split("?")[0], 0.0)
             if m_pm > 0:
                 current_wmaint_pm += (weight / total_w) * (m_pm / 100)
 
@@ -491,7 +519,7 @@ def run_single_backtest(
     r_threshold = reb.get("threshold_pct", 5.0)
 
     # Determine engine
-    has_ndxmega = any(
+    has_ndxmega = dynamic_plan.has_dynamic or any(
         (Tickers.NDXMEGASIM in t or Tickers.NDXMEGA2SIM in t or Tickers.NDX30SIM in t)
         for t in alloc_map
     )
@@ -594,6 +622,7 @@ def run_single_backtest(
                     dca_in_retirement=pm_dca_in_retirement,
                     loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
                     loan_repayment_freq=pm_cf_freq,
+                    dynamic_allocation_schedule=dynamic_plan.dynamic_schedule,
                 )
                 if api_twr_series is not None:
                     twr_series = api_twr_series
@@ -641,6 +670,7 @@ def run_single_backtest(
             dca_in_retirement=pm_dca_in_retirement,
             loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
             loan_repayment_freq=pm_cf_freq,
+            dynamic_allocation_schedule=dynamic_plan.dynamic_schedule,
         )
         # Unpack: shadow backtest returns 7-tuple or 8-tuple (with pm_blocked_dates)
         if isinstance(_shadow_result, tuple) and len(_shadow_result) == 8:
@@ -648,6 +678,9 @@ def run_single_backtest(
         else:
             trades_df, pl_by_year, composition_df, unrealized_pl_df, logs, port_series, twr_series = _shadow_result
             pm_blocked_dates = []
+
+        if dynamic_plan.has_dynamic and dynamic_plan.notes:
+            logs = list(dynamic_plan.notes) + list(logs)
 
         if not port_series.empty:
             _stats_series = twr_series if (twr_series is not None and not twr_series.empty) else port_series
@@ -667,7 +700,7 @@ def run_single_backtest(
         "pl_by_year": pl_by_year,
         "unrealized_pl_df": unrealized_pl_df,
         "component_prices": prices_df,
-        "allocation": alloc_map,
+        "allocation": original_allocation,
         "maint_pcts": maint_pcts,
         "rebalance": reb,
         "logs": logs,
@@ -681,6 +714,11 @@ def run_single_backtest(
         "wmaint_pm": current_wmaint_pm,
         "pm_blocked_dates": pm_blocked_dates,
         # Internal: kept for pass-2 re-fetch
+        "_engine_allocation": alloc_map,
+        "_engine_maint_pcts": engine_maint_pcts,
+        "_engine_pm_maint_pcts": engine_pm_maint_pcts,
+        "_dynamic_allocation_schedule": dynamic_plan.dynamic_schedule,
+        "_dynamic_allocation_notes": dynamic_plan.notes or [],
         "_reb": reb,
         "_r_mode": r_mode,
     }
@@ -791,7 +829,13 @@ def run_multi_backtest(
         for _fi, _fp in enumerate(portfolios):
             _fs = results_list[_fi].get("series") if results_list[_fi] else None
             if _fs is None or _fs.empty:
-                _ftickers = _base_tickers(_fp.get("allocation", {}).keys())
+                _ftickers = _base_tickers(
+                    expand_dynamic_ticker_universe(
+                        _fp.get("allocation", {}).keys(),
+                        start_date,
+                        end_date,
+                    )
+                )
                 _latest = None
                 for _ft in _ftickers:
                     if _ft in pass1_component_prices.columns:
@@ -870,7 +914,7 @@ def run_multi_backtest(
                 and res.get("series") is not None
                 and not res["series"].empty
                 and res["series"].index[0] < common_start - pd.Timedelta(days=3)
-                for ticker in res.get("allocation", {})
+                for ticker in res.get("_engine_allocation", res.get("allocation", {}))
             ],
             common_start.strftime("%Y-%m-%d"),
             end_date,

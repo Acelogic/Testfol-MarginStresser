@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import warnings
+from functools import lru_cache
 
 import pandas as pd
 
@@ -178,6 +179,46 @@ def _local_preset_fallback(ticker: str, start_date: str, end_date: str) -> pd.Se
         series = series.loc[start_ts:end_ts]
         return series.rename(ticker) if not series.empty else None
     return None
+
+
+@lru_cache(maxsize=1)
+def _load_ndx_price_cache() -> pd.DataFrame:
+    data_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "../../data")
+    cache_path = os.path.join(data_dir, "ndx_simulation", "data", "cache", "prices_cache.pkl")
+    if not os.path.exists(cache_path):
+        return pd.DataFrame()
+
+    try:
+        prices = pd.read_pickle(cache_path)
+    except Exception as exc:
+        logger.warning("Failed to load local NDX simulation price cache: %s", exc)
+        return pd.DataFrame()
+
+    if prices.empty:
+        return pd.DataFrame()
+    if not isinstance(prices.index, pd.DatetimeIndex):
+        prices.index = pd.to_datetime(prices.index)
+    if prices.index.tz is not None:
+        prices.index = prices.index.tz_localize(None)
+    prices = prices.sort_index()
+    prices.columns = [str(col).strip().upper() for col in prices.columns]
+    return prices
+
+
+def _local_ndx_price_cache_fallback(ticker: str, start_date: str, end_date: str) -> pd.Series | None:
+    base = str(ticker).split("?")[0].strip().upper()
+    prices = _load_ndx_price_cache()
+    if prices.empty or base not in prices.columns:
+        return None
+
+    series = prices[base].dropna().sort_index()
+    if series.empty:
+        return None
+
+    start_ts = pd.Timestamp(start_date)
+    end_ts = pd.Timestamp(end_date)
+    series = series.loc[start_ts:end_ts]
+    return series.rename(base) if not series.empty else None
 
 
 def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: bool = True) -> pd.DataFrame:
@@ -355,6 +396,11 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
                     combined_prices[base] = batched_provider_prices[mapped_ticker]
                     continue
 
+            ndx_cache_fallback = _local_ndx_price_cache_fallback(base, sd_str, ed_str)
+            if ndx_cache_fallback is not None and not ndx_cache_fallback.dropna().empty:
+                combined_prices[base] = ndx_cache_fallback
+                continue
+
             # Testfol API fallback (preferred for preset tickers and provider misses)
             try:
                 series, _, _ = api.fetch_backtest(
@@ -405,6 +451,7 @@ def fetch_component_data(tickers: list[str], start_date, end_date, *, sync_end: 
 
 import time
 
+@lru_cache(maxsize=1)
 def get_fed_funds_rate() -> pd.Series | None:
     """
     Fetches historical Fed Funds Rate (daily) from FRED or local cache.
@@ -426,7 +473,7 @@ def get_fed_funds_rate() -> pd.Series | None:
             # Fake User-Agent to avoid 403
             headers = {'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)'}
             import requests
-            r = requests.get(url, headers=headers)
+            r = requests.get(url, headers=headers, timeout=20)
             r.raise_for_status()
             with open(file_path, "wb") as f:
                 f.write(r.content)
@@ -436,11 +483,16 @@ def get_fed_funds_rate() -> pd.Series | None:
 
     if os.path.exists(file_path):
         try:
-            # FRED CSV format: observation_date, FEDFUNDS
             df = pd.read_csv(file_path, parse_dates=["observation_date"], index_col="observation_date")
-            # Resample to daily (forward fill monthlies)
-            full_idx = pd.date_range(start=df.index.min(), end=pd.Timestamp.today(), freq='D')
-            daily_series = df['FEDFUNDS'].reindex(full_idx).ffill()
+            values = pd.to_numeric(df["FEDFUNDS"].replace(".", pd.NA), errors="coerce").dropna().sort_index()
+            # FRED's FEDFUNDS is monthly. Forward-fill to calendar days so
+            # trading-day backtests can align directly to historical rates.
+            full_idx = pd.date_range(
+                start=values.index.min(),
+                end=max(pd.Timestamp.today().normalize(), values.index.max()),
+                freq="D",
+            )
+            daily_series = values.reindex(full_idx).ffill()
             return daily_series
         except Exception as e:
             raise RuntimeError(f"Error reading FEDFUNDS.csv: {e}")

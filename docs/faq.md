@@ -34,6 +34,24 @@
 ### Can I simulate Short Selling?
 **No**. The simulator currently supports "Long Only" strategies with margin leverage. Short selling involves borrowing shares (not cash) and has different margin maintenance rules not yet modeled here.
 
+### Does `?E` include the full cost of a leveraged ETF?
+**No.** `?E` represents the explicit fund operating expense ratio. For local synthetic leverage such as `QQQSIM?L=3&E=0.82` or `NDXMEGASIM?L=2&E=0.95`, the app also models financing on the borrowed/synthetic exposure.
+
+The local engine currently uses:
+
+```text
+FEDFUNDS + 0.50% implementation spread
+```
+
+for every synthetic `?L` ticker, with a flat 4% fallback only if Fed Funds data cannot be loaded. Use `SP=0` if you intentionally want to remove the implementation spread for a research test.
+
+Real leveraged ETF tickers such as `TQQQ`, `QLD`, `SSO`, and `QQUP` use their actual price history, so those embedded financing/tracking costs are already reflected in the return series.
+
+### Why can local results differ from Testfol API results?
+Some portfolios route through Testfol's API, while local-only tickers such as `NDXMEGASIM`, `NDX30SIM`, threshold rebalancing, no-rebalance mode, and dynamic Nasdaq rotation tickers route through the local Shadow Engine.
+
+For standard API-supported expressions such as `QQQSIM?L=3`, the API may use its own leverage and financing assumptions. For local synthetic leverage, this app now uses historical Fed Funds plus the default implementation spread. When comparing local-only NDXMEGA strategies to API-supported TQQQ/GLD strategies, check whether the comparison is mixed-engine or forced-local.
+
 ### Why is there a difference between "Pay with Margin" and "Pay from Cash"?
 -   **Pay with Margin**: You keep your assets compounding but accumulate a compounding debt liability. Good in bull markets.
 -   **Pay from Cash**: You stay debt-free (regarding taxes) but interrupt the compound growth of your assets by selling them. Often safer but lower total return.

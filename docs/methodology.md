@@ -58,6 +58,17 @@ $$ \text{Usage \%} = \frac{\text{Loan}}{\text{Portfolio Value} \times (1 - \text
 
 ---
 
+## Synthetic LETF Financing
+For local-engine tickers with leverage modifiers, such as `QQQSIM?L=3&E=0.82` or `NDXMEGASIM?L=2&E=0.95`, the simulator models leverage financing separately from the explicit expense ratio.
+
+- **Funding source**: FRED `FEDFUNDS`, forward-filled to daily dates, plus a default `0.50%` implementation spread.
+- **Fallback**: A flat 4% annual funding rate is used only when Fed Funds data cannot be loaded.
+- **Formula**:
+
+$$ \text{Levered Return}_t = L \times R_t - (L - 1) \times (\text{FedFunds}_t + \text{Spread}) - \text{ExpenseRatio} $$
+
+`?E` represents the fund operating expense ratio. It does not include the cost of obtaining leveraged exposure through borrowing, swaps, futures, or similar instruments. The default spread applies to every local synthetic `?L` ticker, not only QQQ/TQQQ-style proxies. Explicit `SP=` values override the default.
+
 ---
 
 ## Monte Carlo Simulation Engine
