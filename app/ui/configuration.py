@@ -525,7 +525,7 @@ def render():
             
             tax_method_selection = st.radio(
                 "Tax Calculation Method",
-                ["Smart (Historical Brackets)", "Max (Top Rate)", "Fixed (2025 Rates)"],
+                ["Smart (Historical Brackets)", "Max (Top Rate)", "Fixed (2026 Rates)"],
                 index=0,
                 horizontal=True,
                 key="tax_method",
@@ -537,7 +537,7 @@ def render():
             elif "Max" in tax_method_selection:
                  config['tax_method'] = "historical_max_rate"
             else:
-                 config['tax_method'] = "2025_fixed"
+                 config['tax_method'] = "2026_fixed"
         
         # Disable margin inputs if "Pay from Cash" is selected (per user request)
         # This implies a "Cash Only" mindset for this mode

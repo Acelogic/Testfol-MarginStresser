@@ -15,7 +15,7 @@ other_income = 200000.0  # High earner
 filing_status = "Single"
 
 # Update file paths to parent directory
-csv_path = os.path.join(os.path.dirname(__file__), "..", "Historical Income Tax Rates and Brackets, 1862-2025.csv")
+csv_path = os.path.join(os.path.dirname(__file__), "..", "..", "data", "Historical Income Tax Rates and Brackets, 1862-2026.csv")
 excel_path = os.path.join(os.path.dirname(__file__), "..", "Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx")
 
 print("=== Testing 2000-2010 Tax Calculations ===\n")

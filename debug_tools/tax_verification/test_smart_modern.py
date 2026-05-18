@@ -41,7 +41,7 @@ def test_smart_modern_brackets():
 
     # Case 2: 2025 Tax
     # Single Filer
-    # 0% bracket up to $49,450
+    # 0% bracket up to $48,350
     # Gain: $48,000 (Should be $0 tax because 2025 limit is higher)
     tax_2025_zero = calculate_tax_on_realized_gains(
         realized_gain=48000, 
@@ -50,7 +50,7 @@ def test_smart_modern_brackets():
         filing_status="Single", 
         method="historical_smart"
     )
-    print(f"2025 Tax on $48k (Limit $49,450): ${tax_2025_zero:.2f} (Expected: $0.00)")
+    print(f"2025 Tax on $48k (Limit $48,350): ${tax_2025_zero:.2f} (Expected: $0.00)")
     assert tax_2025_zero == 0.0
 
     print("\nSUCCESS: Smart mode correctly distinguishes 2024 and 2025 brackets!")

@@ -79,7 +79,19 @@ class TestGetStandardDeduction:
 
     def test_mfs_2025(self):
         from app.core.tax_library import get_standard_deduction
-        assert get_standard_deduction(2025, "Married Filing Separately") == 15000
+        assert get_standard_deduction(2025, "Married Filing Separately") == 15750
+
+    def test_single_2026(self):
+        from app.core.tax_library import get_standard_deduction
+        assert get_standard_deduction(2026, "Single") == 16100
+
+    def test_mfj_2026(self):
+        from app.core.tax_library import get_standard_deduction
+        assert get_standard_deduction(2026, "Married Filing Jointly") == 32200
+
+    def test_hoh_2026(self):
+        from app.core.tax_library import get_standard_deduction
+        assert get_standard_deduction(2026, "Head of Household") == 24150
 
     def test_pre_1970_uses_10pct_capped_at_1000(self):
         from app.core.tax_library import get_standard_deduction
@@ -90,8 +102,8 @@ class TestGetStandardDeduction:
 
     def test_future_year_uses_latest(self):
         from app.core.tax_library import get_standard_deduction
-        # Future year should fallback to latest known (2025)
-        assert get_standard_deduction(2030, "Single") == 15000
+        # Future year should fallback to latest known (2026)
+        assert get_standard_deduction(2030, "Single") == 16100
 
     def test_2018_tcja_jump(self):
         from app.core.tax_library import get_standard_deduction
@@ -113,7 +125,7 @@ class TestCalculateFederalTax:
 
     def test_single_in_zero_pct_bracket_2025(self):
         from app.core.tax_library import calculate_federal_tax
-        # Single 2025: 0% up to $49,450
+        # Single 2025: 0% up to $48,350
         # Other income = $30k, gain = $10k -> all in 0% bracket
         assert calculate_federal_tax(10_000, 30_000, "Single", year=2025) == 0.0
 
@@ -125,7 +137,7 @@ class TestCalculateFederalTax:
 
     def test_single_in_20pct_bracket_2025(self):
         from app.core.tax_library import calculate_federal_tax
-        # Other income = $550k (past 15% threshold at 545,500), gain = $10k -> 20%
+        # Other income = $550k (past 15% threshold at 533,400), gain = $10k -> 20%
         tax = calculate_federal_tax(10_000, 550_000, "Single", year=2025)
         assert tax == pytest.approx(2_000)
 
@@ -137,11 +149,17 @@ class TestCalculateFederalTax:
 
     def test_gain_spanning_brackets(self):
         from app.core.tax_library import calculate_federal_tax
-        # Single 2025: 0% up to 49,450. Other income = 40k.
-        # Gain = 20k: 9,450 at 0%, 10,550 at 15%
+        # Single 2025: 0% up to 48,350. Other income = 40k.
+        # Gain = 20k: 8,350 at 0%, 11,650 at 15%
         tax = calculate_federal_tax(20_000, 40_000, "Single", year=2025)
-        expected = 0 + 10_550 * 0.15
+        expected = 0 + 11_650 * 0.15
         assert tax == pytest.approx(expected)
+
+    def test_2026_single_thresholds(self):
+        from app.core.tax_library import calculate_federal_tax
+        assert calculate_federal_tax(9_000, 40_000, "Single", year=2026) == 0.0
+        assert calculate_federal_tax(10_000, 40_000, "Single", year=2026) == pytest.approx(82.5)
+        assert calculate_federal_tax(10_000, 550_000, "Single", year=2026) == pytest.approx(2_000)
 
 
 class TestCalculateTaxOnRealizedGains:

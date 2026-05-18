@@ -74,7 +74,8 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax
     # 4. Tax Breakdown Chart
     method_label = {
         "historical_smart": "Historical Smart",
-        "historical_max": "Historical Max Rate",
+        "historical_max_rate": "Historical Max Rate",
+        "2026_fixed": "2026 Fixed",
         "2025_fixed": "2025 Fixed",
         "2024_fixed": "2024 Fixed",
     }.get(tax_method, tax_method)
@@ -442,4 +443,3 @@ def render_monte_carlo_view(mc_results, unique_id=None):
     )
     
     st.plotly_chart(fig_hist, use_container_width=True)
-

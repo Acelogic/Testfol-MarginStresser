@@ -10,7 +10,7 @@ logger = logging.getLogger(__name__)
 _TAX_TABLES = {}
 
 # Constants
-DEFAULT_TAX_CSV_PATH = "data/Historical Income Tax Rates and Brackets, 1862-2025.csv"
+DEFAULT_TAX_CSV_PATH = "data/Historical Income Tax Rates and Brackets, 1862-2026.csv"
 DEFAULT_CAP_GAINS_EXCEL_PATH = "data/Federal-Capital-Gains-Tax-Rates-Collections-1913-2025_fv.xlsx"
 
 def load_tax_tables(csv_path):
@@ -198,8 +198,8 @@ def get_capital_gains_inclusion_rate(year):
     else:
         return 1.0 # 100% included (1987-Present)
 
-# Standard Deduction Data (1970-2024)
-# Source: Tax Policy Center, IRS
+# Standard Deduction Data (1970-2026)
+# Sources: Tax Policy Center, IRS Rev. Proc. 2025-32 for 2025 OBBB and 2026 values
 _STANDARD_DEDUCTIONS = {
     1970: {"Single": 1100, "Married Filing Jointly": 1100, "Head of Household": 1100},
     1971: {"Single": 1050, "Married Filing Jointly": 1050, "Head of Household": 1050},
@@ -256,7 +256,8 @@ _STANDARD_DEDUCTIONS = {
     2022: {"Single": 12950, "Married Filing Jointly": 25900, "Head of Household": 19400},
     2023: {"Single": 13850, "Married Filing Jointly": 27700, "Head of Household": 20800},
     2024: {"Single": 14600, "Married Filing Jointly": 29200, "Head of Household": 21900},
-    2025: {"Single": 15000, "Married Filing Jointly": 30000, "Head of Household": 23625}, # Projected/Estimated
+    2025: {"Single": 15750, "Married Filing Jointly": 31500, "Head of Household": 23625},
+    2026: {"Single": 16100, "Married Filing Jointly": 32200, "Head of Household": 24150},
 }
 
 def get_standard_deduction(year, filing_status, income=0):
@@ -447,7 +448,45 @@ def calculate_tax_on_realized_gains(realized_gain=0.0, other_income=0.0, year=20
             
     return st_tax + collectible_tax + lt_tax + niit
 
-def calculate_federal_tax(realized_gain, other_income, filing_status="Single", year=2025):
+_CAPITAL_GAINS_BRACKETS = {
+    # Sources: IRS Rev. Proc. 2024-40 for 2025, IRS Rev. Proc. 2025-32 for 2026.
+    2024: {
+        "Married Filing Jointly": [(94050, 0.00), (583750, 0.15), (float("inf"), 0.20)],
+        "Head of Household": [(63000, 0.00), (551350, 0.15), (float("inf"), 0.20)],
+        "Married Filing Separately": [(47025, 0.00), (291875, 0.15), (float("inf"), 0.20)],
+        "Single": [(47025, 0.00), (518900, 0.15), (float("inf"), 0.20)],
+    },
+    2025: {
+        "Married Filing Jointly": [(96700, 0.00), (600050, 0.15), (float("inf"), 0.20)],
+        "Head of Household": [(64750, 0.00), (566700, 0.15), (float("inf"), 0.20)],
+        "Married Filing Separately": [(48350, 0.00), (300000, 0.15), (float("inf"), 0.20)],
+        "Single": [(48350, 0.00), (533400, 0.15), (float("inf"), 0.20)],
+    },
+    2026: {
+        "Married Filing Jointly": [(98900, 0.00), (613700, 0.15), (float("inf"), 0.20)],
+        "Head of Household": [(66200, 0.00), (579600, 0.15), (float("inf"), 0.20)],
+        "Married Filing Separately": [(49450, 0.00), (306850, 0.15), (float("inf"), 0.20)],
+        "Single": [(49450, 0.00), (545500, 0.15), (float("inf"), 0.20)],
+    },
+}
+
+
+def _get_capital_gains_brackets(year, filing_status):
+    if filing_status not in ["Single", "Married Filing Jointly", "Head of Household", "Married Filing Separately"]:
+        filing_status = "Single"
+
+    if year in _CAPITAL_GAINS_BRACKETS:
+        lookup_year = year
+    elif year > max(_CAPITAL_GAINS_BRACKETS.keys()):
+        lookup_year = max(_CAPITAL_GAINS_BRACKETS.keys())
+    else:
+        # Preserve the old fixed-rate fallback for unsupported 2013-2023 years.
+        lookup_year = 2025
+
+    return _CAPITAL_GAINS_BRACKETS[lookup_year][filing_status]
+
+
+def calculate_federal_tax(realized_gain, other_income, filing_status="Single", year=2026):
     """
     Calculates estimated federal tax on long-term capital gains using specific year brackets.
     Does NOT include NIIT — that is applied separately in calculate_tax_on_realized_gains().
@@ -461,59 +500,7 @@ def calculate_federal_tax(realized_gain, other_income, filing_status="Single", y
     # 15% up to Threshold 2
     # 20% above Threshold 2
 
-    brackets = []
-
-    if year == 2024:
-        if filing_status == "Married Filing Jointly":
-            brackets = [
-                (94050, 0.00),
-                (583750, 0.15),
-                (float("inf"), 0.20)
-            ]
-        elif filing_status == "Head of Household":
-            brackets = [
-                (63000, 0.00),
-                (551350, 0.15),
-                (float("inf"), 0.20)
-            ]
-        elif filing_status == "Married Filing Separately":
-            brackets = [
-                (47025, 0.00),
-                (291875, 0.15),
-                (float("inf"), 0.20)
-            ]
-        else: # Single
-            brackets = [
-                (47025, 0.00),
-                (518900, 0.15),
-                (float("inf"), 0.20)
-            ]
-
-    else: # Default to 2025 (and future)
-        if filing_status == "Married Filing Jointly":
-            brackets = [
-                (98900, 0.00),
-                (613700, 0.15),
-                (float("inf"), 0.20)
-            ]
-        elif filing_status == "Head of Household":
-            brackets = [
-                (64750, 0.00),
-                (566700, 0.15),
-                (float("inf"), 0.20)
-            ]
-        elif filing_status == "Married Filing Separately":
-            brackets = [
-                (49450, 0.00),
-                (306850, 0.15),
-                (float("inf"), 0.20)
-            ]
-        else: # Single
-            brackets = [
-                (49450, 0.00),
-                (545500, 0.15),
-                (float("inf"), 0.20)
-            ]
+    brackets = _get_capital_gains_brackets(year, filing_status)
 
     # Calculate Capital Gains Tax
     # The capital gains "stack" on top of other income.

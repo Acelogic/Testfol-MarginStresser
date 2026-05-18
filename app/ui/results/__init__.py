@@ -238,7 +238,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     pay_tax_cash = config.get('pay_tax_cash', False)
     other_income = config.get('other_income', 0.0)
     filing_status = config.get('filing_status', 'Single')
-    tax_method = config.get('tax_method', '2025_fixed')
+    tax_method = config.get('tax_method', '2026_fixed')
     use_std_deduction = config.get('use_std_deduction', True)
     state_code = config.get('state_code', '')
 

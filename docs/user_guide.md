@@ -34,7 +34,7 @@ If the Testfol API goes down, backtests automatically run locally using the Shad
     -   **Calculation Method**:
         -   *Historical Smart (Default)*: Uses actual historical inclusion rates and brackets.
         -   *Historical Max*: Applies the top capital gains rate for that year.
-        -   *2025 Fixed*: Applies modern brackets to all years.
+        -   *2026 Fixed*: Applies modern brackets to all years.
 
 #### 🏦 Margin & Financing
 - **Tax Payment Mode**: 

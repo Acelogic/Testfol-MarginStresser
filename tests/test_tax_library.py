@@ -4,6 +4,7 @@ import pytest
 from app.core.tax_library import (
     get_standard_deduction,
     calculate_tax_on_realized_gains,
+    calculate_historical_tax,
     calculate_federal_tax,
 )
 
@@ -124,9 +125,10 @@ def test_mfs_niit_threshold():
 
 
 def test_standard_deduction_mfs():
-    """MFS deduction = MFJ // 2 for 2024 and 2025."""
+    """MFS deduction = half of MFJ for current years."""
     assert get_standard_deduction(2024, "Married Filing Separately") == 29200 // 2  # 14600
-    assert get_standard_deduction(2025, "Married Filing Separately") == 30000 // 2  # 15000
+    assert get_standard_deduction(2025, "Married Filing Separately") == 31500 / 2  # 15750
+    assert get_standard_deduction(2026, "Married Filing Separately") == 32200 / 2  # 16100
 
 
 def test_collectible_tax_included():
@@ -167,7 +169,7 @@ def test_niit_uses_gross_income():
 
 def test_year_passthrough_default_method():
     """Default method path must use year=2024 brackets when year=2024, not 2025."""
-    # 2024 Single 0% threshold = $47,025; 2025 = $49,450
+    # 2024 Single 0% threshold = $47,025; 2025 = $48,350
     # $48k gain on zero income: if 2024 brackets used, $975 taxed at 15%; if 2025, $0 tax
     tax_2024 = calculate_tax_on_realized_gains(
         long_term_gain=48000,
@@ -187,5 +189,18 @@ def test_year_passthrough_default_method():
     )
     # 2024: $48k - $47,025 = $975 at 15% = $146.25
     assert tax_2024 == pytest.approx(975 * 0.15, rel=1e-6)
-    # 2025: $48k < $49,450 → $0 bracket tax (only NIIT if applicable, but MAGI=$48k < $200k)
+    # 2025: $48k < $48,350 -> $0 bracket tax (only NIIT if applicable, but MAGI=$48k < $200k)
     assert tax_2025 == 0.0
+
+
+def test_capital_gains_2026_brackets():
+    """2026 LTCG brackets should use IRS Rev. Proc. 2025-32 thresholds."""
+    assert calculate_federal_tax(9_000, 40_000, "Single", year=2026) == 0.0
+    assert calculate_federal_tax(10_000, 40_000, "Single", year=2026) == pytest.approx(82.5)
+    assert calculate_federal_tax(10_000, 550_000, "Single", year=2026) == pytest.approx(2_000)
+
+
+def test_ordinary_income_2026_brackets():
+    """2026 ordinary brackets should load from the federal CSV."""
+    assert calculate_historical_tax(2026, 12_400, "Single") == pytest.approx(1_240)
+    assert calculate_historical_tax(2026, 50_400, "Single") == pytest.approx(5_800)

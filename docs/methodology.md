@@ -138,8 +138,8 @@ This method reconstructs the actual historical tax burden by simulating two eras
 ### Method 2: Historical Max Rate
 Simplified. Applies the top marginal capital gains tax rate for that specific year to all long-term gains.
 
-### Method 3: 2025 Fixed
-Applies current (2025) tax brackets to all historical years. Useful for "anachronistic" comparisons.
+### Method 3: 2026 Fixed
+Applies current (2026) tax brackets to all historical years. Useful for "anachronistic" comparisons.
 
 ## Limitations
 - **State Tax**: Applied as a flat rate on net gains.
