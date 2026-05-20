@@ -799,5 +799,51 @@
             "day": 1,
             "month_str": "Jan"
         }
+    },
+    {
+        "name": "VGT",
+        "allocation": [
+            {
+                "Ticker": "VGT",
+                "Weight %": 100,
+                "Maint %": 25,
+                "PM Maint %": 15.0
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
+    },
+    {
+        "name": "33% VGT / 33% VOO / 33% QBIG",
+        "allocation": [
+            {
+                "Ticker": "VGT",
+                "Weight %": 33.34,
+                "Maint %": 25.0,
+                "PM Maint %": 0.0
+            },
+            {
+                "Ticker": "SPYSIM",
+                "Weight %": 33.33,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            },
+            {
+                "Ticker": "NDXMEGASIM",
+                "Weight %": 33.33,
+                "Maint %": 25.0,
+                "PM Maint %": NaN
+            }
+        ],
+        "rebalance": {
+            "mode": "Standard",
+            "freq": "Yearly",
+            "day": 1,
+            "month_str": "Jan"
+        }
     }
 ]
