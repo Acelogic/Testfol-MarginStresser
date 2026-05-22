@@ -19,6 +19,11 @@ class CashflowConfig(BaseModel):
     pay_down_margin: bool = False
 
 
+class DcaConfig(BaseModel):
+    mode: str = "Proportional"
+    target_ticker: str = ""
+
+
 class TaxConfig(BaseModel):
     """Passthrough for tax_config dict — kept flexible."""
     st_rate: float = 0.0
@@ -33,6 +38,7 @@ class PortfolioConfig(BaseModel):
     maint_pcts: dict[str, float] = Field(default_factory=dict)
     pm_maint_pcts: dict[str, float] = Field(default_factory=dict)
     rebalance: RebalanceConfig = Field(default_factory=RebalanceConfig)
+    dca: DcaConfig = Field(default_factory=DcaConfig)
 
 
 class BacktestRequest(BaseModel):

@@ -15,6 +15,11 @@ class RebalMode:
     THRESHOLD_CALENDAR = "Threshold+Calendar"
 
 
+class DcaMode:
+    PROPORTIONAL = "Proportional"
+    SINGLE_ASSET = "Single Asset"
+
+
 class Tickers:
     NDXMEGASIM = "NDXMEGASIM"
     NDXMEGA2SIM = "NDXMEGA2SIM"

@@ -280,6 +280,52 @@ def test_dca_monthly(flat_prices, sample_allocation):
         assert len(buy_trades) >= 10  # At least 10 months of DCA
 
 
+def test_single_asset_dca_buys_target_before_rebalance():
+    """Targeted DCA should buy one sleeve first, then let the rebalance trade back to weights."""
+    dates = pd.to_datetime(["2023-01-27", "2023-01-30", "2023-01-31", "2023-02-01"])
+    prices = pd.DataFrame(
+        {
+            "A": [100.0, 100.0, 100.0, 100.0],
+            "B": [100.0, 100.0, 100.0, 100.0],
+        },
+        index=dates,
+    )
+
+    result = run_shadow_backtest(
+        allocation={"A": 60.0, "B": 40.0},
+        start_val=10000.0,
+        start_date="2023-01-27",
+        end_date="2023-02-01",
+        prices_df=prices,
+        rebalance_freq="Monthly",
+        cashflow=1000.0,
+        cashflow_freq="Monthly",
+        dca_mode="Single Asset",
+        dca_target_ticker="A",
+    )
+
+    trades_df, _, _, _, logs, port_series, _, *_ = result
+    jan31_trades = trades_df[trades_df["Date"] == pd.Timestamp("2023-01-31")]
+
+    assert port_series.loc[pd.Timestamp("2023-01-31")] == pytest.approx(11000.0)
+    assert not jan31_trades[
+        (jan31_trades["Ticker"] == "A")
+        & (jan31_trades["Trade Amount"].sub(1000.0).abs() < 1e-9)
+    ].empty
+    assert not jan31_trades[
+        (jan31_trades["Ticker"] == "A")
+        & (jan31_trades["Trade Amount"].sub(-400.0).abs() < 1e-9)
+    ].empty
+    assert not jan31_trades[
+        (jan31_trades["Ticker"] == "B")
+        & (jan31_trades["Trade Amount"].sub(400.0).abs() < 1e-9)
+    ].empty
+
+    dca_log_idx = next(idx for idx, entry in enumerate(logs) if "[DCA]" in entry)
+    rebal_log_idx = next(idx for idx, entry in enumerate(logs) if "[REBALANCE]" in entry)
+    assert dca_log_idx < rebal_log_idx
+
+
 def test_return_structure(flat_prices, sample_allocation):
     """Verify 7-tuple, correct types."""
     result = run_shadow_backtest(

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
-BACKTEST_CACHE_VERSION = "backtest-result-series-includes-dca-v2"
+BACKTEST_CACHE_VERSION = "backtest-result-series-includes-dca-routing-v3"
 
 
 def _pydantic_cache_key(req: BacktestRequest | MultiBacktestRequest) -> str:
@@ -107,6 +107,7 @@ def run_backtest(req: BacktestRequest):
             tax_config=req.tax_config,
             bearer_token=req.bearer_token,
             name=p.name,
+            dca_config=p.dca.model_dump(),
         )
         result = _serialize_result(raw)
         cache_set(key, result, prefix="single")
@@ -134,6 +135,7 @@ def run_multi_backtest_endpoint(req: MultiBacktestRequest):
                 "maint_pcts": p.maint_pcts,
                 "pm_maint_pcts": p.pm_maint_pcts,
                 "rebalance": p.rebalance.model_dump(),
+                "dca": p.dca.model_dump(),
             })
 
         results_raw, bench_raw = run_multi_backtest(

@@ -77,7 +77,7 @@ def render():
     _PF_KEY_BASES = [
         "p_name", "p_rmode", "p_rfreq", "p_rmon", "p_rday", "p_cmp",
         "p_rthresh", "p_rfreq_tc", "p_rthresh_tc", "p_rfreq_std",
-        "p_editor",
+        "p_dca_mode", "p_dca_target", "p_editor",
     ]
 
     def _pop_pf_keys(pid):
@@ -101,6 +101,7 @@ def render():
                 "rebalance": {
                     "mode": "Custom", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0
                 },
+                "dca": {"mode": "Proportional", "target_ticker": ""},
                 "cashflow": {
                      "start_val": 10000.0, "amount": 0.0, "freq": "Monthly", "invest_div": True, "pay_down_margin": False
                 }
@@ -123,6 +124,7 @@ def render():
                 _widget_name = st.session_state[_name_key]
                 if _widget_name in _canonical_portfolio_names:
                     st.session_state[_name_key] = _canonical_portfolio_names[_widget_name]
+            _portfolio.setdefault("dca", {"mode": "Proportional", "target_ticker": ""})
 
         if "global_cashflow" not in st.session_state:
             st.session_state.global_cashflow = {
@@ -205,7 +207,8 @@ def render():
                         "id": new_id,
                         "name": f"Portfolio {len(st.session_state.portfolios) + 1}",
                         "alloc_df": pd.DataFrame([{"Ticker":"SPY", "Weight %": 100, "Maint %": 25, "PM Maint %": 0.0}]),
-                        "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0}
+                        "rebalance": {"mode": "Standard", "freq": "Yearly", "month": 1, "day": 1, "compare_std": False, "threshold_pct": 5.0},
+                        "dca": {"mode": "Proportional", "target_ticker": ""}
                     })
                     st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                     st.session_state.pop("portfolio_selector", None)
@@ -254,7 +257,8 @@ def render():
                                 "cashflow": {
                                     "start_val": 10000.0, "amount": 0.0, "freq": "Monthly",
                                     "invest_div": True, "pay_down_margin": False
-                                }
+                                },
+                                "dca": {"mode": "Proportional", "target_ticker": ""}
                             })
                             st.session_state.active_tab_idx = len(st.session_state.portfolios) - 1
                             st.session_state.pop("portfolio_selector", None)
@@ -403,6 +407,42 @@ def render():
                         p["rebalance"]["freq"] = st.selectbox("Frequency", ["Yearly", "Quarterly", "Monthly"], index=["Yearly", "Quarterly", "Monthly"].index(p["rebalance"]["freq"]), key=f"p_rfreq_std_{pid}")
                     p["rebalance"]["month"] = 1
                     p["rebalance"]["day"] = 1
+
+            # --- DCA Routing ---
+            p.setdefault("dca", {"mode": "Proportional", "target_ticker": ""})
+            dca_mode_options = ["Proportional", "Single Asset"]
+            if p["dca"].get("mode") not in dca_mode_options:
+                p["dca"]["mode"] = "Proportional"
+            dca_tickers = [
+                str(ticker).strip()
+                for ticker in p["alloc_df"].get("Ticker", pd.Series(dtype=str)).tolist()
+                if str(ticker).strip()
+            ]
+            with st.expander("💵 DCA Routing", expanded=False):
+                dca_mode_idx = dca_mode_options.index(p["dca"].get("mode", "Proportional"))
+                p["dca"]["mode"] = st.radio(
+                    "Mode",
+                    dca_mode_options,
+                    index=dca_mode_idx,
+                    key=f"p_dca_mode_{pid}",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+                if p["dca"]["mode"] == "Single Asset":
+                    if dca_tickers:
+                        current_target = p["dca"].get("target_ticker") or dca_tickers[0]
+                        if current_target not in dca_tickers:
+                            current_target = dca_tickers[0]
+                        p["dca"]["target_ticker"] = st.selectbox(
+                            "DCA Target",
+                            dca_tickers,
+                            index=dca_tickers.index(current_target),
+                            key=f"p_dca_target_{pid}",
+                        )
+                    else:
+                        p["dca"]["target_ticker"] = ""
+                else:
+                    p["dca"]["target_ticker"] = ""
 
             st.markdown("##### 🥧 Asset Allocation")
             # Ensure PM Maint % column exists (backward compat)

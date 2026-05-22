@@ -100,6 +100,7 @@ def _deserialize_result(item):
         "wmaint": item.get("wmaint", 0.25),
         "wmaint_pm": item.get("wmaint_pm", 0.0),
         "pm_blocked_dates": item.get("pm_blocked_dates", []),
+        "_dca_config": item.get("_dca_config", {}),
     }
 
 
@@ -133,6 +134,7 @@ def _build_payload(config, start_date, end_date, bearer_token):
                 pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
+        dca = p.get("dca", {})
         api_portfolios.append({
             "name": p.get("name", "Portfolio"),
             "allocation": alloc_map,
@@ -145,6 +147,10 @@ def _build_payload(config, start_date, end_date, bearer_token):
                 "day": reb.get("day", 1),
                 "compare_std": reb.get("compare_std", False),
                 "threshold_pct": reb.get("threshold_pct", 5.0),
+            },
+            "dca": {
+                "mode": dca.get("mode", "Proportional"),
+                "target_ticker": dca.get("target_ticker", ""),
             },
         })
 
@@ -224,6 +230,10 @@ def _get_portfolios_cfg(config):
                 "invest_div": config.get("invest_div", True),
                 "pay_down_margin": config.get("pay_down_margin", False),
             },
+            "dca": {
+                "mode": "Proportional",
+                "target_ticker": "",
+            },
         }]
     return portfolios_cfg
 
@@ -235,7 +245,7 @@ def _cached_fetch_backtest(*args, **kwargs):
 
 
 @st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
-def _cached_run_shadow_backtest(*args, _v="local-dca-series-v3", **kwargs):
+def _cached_run_shadow_backtest(*args, _v="local-dca-routing-v4", **kwargs):
     from app.core import run_shadow_backtest
     return run_shadow_backtest(*args, **kwargs)
 
@@ -268,6 +278,7 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
                 pm_maint_pcts[ticker] = pm_val
 
         reb = p.get("rebalance", {})
+        dca = p.get("dca", {})
         portfolios_plain.append({
             "name": p.get("name", "Portfolio"),
             "allocation": alloc_map,
@@ -280,6 +291,10 @@ def _run_inprocess(config, start_date, end_date, bearer_token):
                 "day": reb.get("day", 1),
                 "compare_std": reb.get("compare_std", False),
                 "threshold_pct": reb.get("threshold_pct", 5.0),
+            },
+            "dca": {
+                "mode": dca.get("mode", "Proportional"),
+                "target_ticker": dca.get("target_ticker", ""),
             },
         })
 

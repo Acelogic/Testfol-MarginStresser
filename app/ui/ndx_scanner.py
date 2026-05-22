@@ -854,7 +854,8 @@ def render_ndx_scanner():
                         "freq": "Monthly",
                         "invest_div": True,
                         "pay_down_margin": False
-                    }
+                    },
+                    "dca": {"mode": "Proportional", "target_ticker": ""}
                 }
 
                 # Clear all portfolios and set only this one

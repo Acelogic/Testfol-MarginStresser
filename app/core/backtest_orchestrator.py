@@ -17,7 +17,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import pandas as pd
 import requests
 
-from app.common.constants import Freq, RebalMode, Tickers
+from app.common.constants import DcaMode, Freq, RebalMode, Tickers
 from app.core import calculations
 from app.core.shadow_backtest import run_shadow_backtest as _default_shadow
 from app.services.data_service import clip_component_data_to_synced_end, fetch_component_data
@@ -111,6 +111,29 @@ def _prefetch_component_universe(
         return None
 
 
+def _normalize_dca_config(dca_config: dict | None) -> dict:
+    cfg = dca_config or {}
+    mode = str(cfg.get("mode", DcaMode.PROPORTIONAL)).strip()
+    if mode.lower().replace("_", " ") not in {"single", "single asset", "target", "targeted", "target asset"}:
+        mode = DcaMode.PROPORTIONAL
+    else:
+        mode = DcaMode.SINGLE_ASSET
+    return {
+        "mode": mode,
+        "target_ticker": str(cfg.get("target_ticker") or cfg.get("target") or "").strip(),
+    }
+
+
+def _uses_single_asset_dca(dca_config: dict | None, cashflow_amount: float, pay_down_margin: bool) -> bool:
+    cfg = _normalize_dca_config(dca_config)
+    return (
+        cashflow_amount > 0
+        and not pay_down_margin
+        and cfg["mode"] == DcaMode.SINGLE_ASSET
+        and bool(cfg["target_ticker"])
+    )
+
+
 def _run_pass1_portfolio(
     index: int,
     portfolio: dict,
@@ -149,26 +172,53 @@ def _run_pass1_portfolio(
         pm_maint_pcts=portfolio.get("pm_maint_pcts"),
         pm_config=pm_config,
         prefetched_component_prices=prefetched_component_prices,
+        dca_config=portfolio.get("dca"),
     )
 
     bench_series = None
     reb = portfolio.get("rebalance", {})
+    dca_config = _normalize_dca_config(portfolio.get("dca"))
     if reb.get("compare_std", False) and reb.get("mode") == "Custom":
         try:
-            bench_series, _, _ = fetch_fn(
-                start_date=start_date,
-                end_date=end_date,
-                start_val=start_val,
-                cashflow=0.0 if pay_down_margin else cashflow_amount,
-                cashfreq=cashflow_freq,
-                rolling=60,
-                invest_div=invest_div,
-                rebalance="Yearly",
-                allocation=portfolio["allocation"],
-                return_raw=False,
-                bearer_token=bearer_token,
-            )
-            bench_series.name = f"{portfolio.get('name')} (Standard)"
+            if _uses_single_asset_dca(dca_config, cashflow_amount, pay_down_margin):
+                bench_raw = run_single_backtest(
+                    allocation=portfolio["allocation"],
+                    maint_pcts=portfolio.get("maint_pcts", {}),
+                    rebalance={"mode": RebalMode.STANDARD, "freq": Freq.YEARLY},
+                    start_date=start_date,
+                    end_date=end_date,
+                    start_val=start_val,
+                    cashflow_amount=cashflow_amount,
+                    cashflow_freq=cashflow_freq,
+                    invest_div=invest_div,
+                    pay_down_margin=pay_down_margin,
+                    tax_config=tax_config,
+                    bearer_token=bearer_token,
+                    name=f"{portfolio.get('name')} (Standard)",
+                    fetch_backtest_fn=fetch_fn,
+                    run_shadow_fn=shadow_fn,
+                    pm_maint_pcts=portfolio.get("pm_maint_pcts"),
+                    pm_config=pm_config,
+                    prefetched_component_prices=prefetched_component_prices,
+                    dca_config=dca_config,
+                )
+                bench_series = bench_raw.get("series")
+            else:
+                bench_series, _, _ = fetch_fn(
+                    start_date=start_date,
+                    end_date=end_date,
+                    start_val=start_val,
+                    cashflow=0.0 if pay_down_margin else cashflow_amount,
+                    cashfreq=cashflow_freq,
+                    rolling=60,
+                    invest_div=invest_div,
+                    rebalance="Yearly",
+                    allocation=portfolio["allocation"],
+                    return_raw=False,
+                    bearer_token=bearer_token,
+                )
+            if bench_series is not None:
+                bench_series.name = f"{portfolio.get('name')} (Standard)"
         except Exception as exc:
             logger.warning("Failed standard comparison: %s", exc)
 
@@ -204,6 +254,7 @@ def _rerun_result_for_common_start(
 
     alloc_map = res.get("_engine_allocation", res["allocation"])
     dynamic_schedule = res.get("_dynamic_allocation_schedule")
+    dca_config = _normalize_dca_config(res.get("_dca_config"))
     reb = res["_reb"]
     r_mode = res["_r_mode"]
     r_freq = reb.get("freq", "Yearly")
@@ -273,6 +324,8 @@ def _rerun_result_for_common_start(
                         loan_repayment=_pm_cfg_p2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                         loan_repayment_freq=_pm_cfg_p2.get("cashflow_freq", "Monthly"),
                         dynamic_allocation_schedule=dynamic_schedule,
+                        dca_mode=dca_config["mode"],
+                        dca_target_ticker=dca_config["target_ticker"],
                     )
                     res["trades_df"] = new_trades
                     res["trades"] = new_trades
@@ -368,6 +421,8 @@ def _rerun_result_for_common_start(
                     loan_repayment=_pm_cfg2.get("cashflow_for_loan", 0.0) if pay_down_margin else 0.0,
                     loan_repayment_freq=_pm_cfg2.get("cashflow_freq", "Monthly"),
                     dynamic_allocation_schedule=dynamic_schedule,
+                    dca_mode=dca_config["mode"],
+                    dca_target_ticker=dca_config["target_ticker"],
                 )
                 res["trades_df"] = new_trades
                 res["trades"] = new_trades
@@ -415,6 +470,7 @@ def run_single_backtest(
     pm_maint_pcts: dict | None = None,
     pm_config: dict | None = None,
     prefetched_component_prices: pd.DataFrame | None = None,
+    dca_config: dict | None = None,
 ) -> dict:
     """
     Run a single portfolio backtest (API or local engine).
@@ -425,6 +481,7 @@ def run_single_backtest(
     """
     fetch_fn = fetch_backtest_fn or _default_fetch
     shadow_fn = run_shadow_fn or _default_shadow
+    dca_config = _normalize_dca_config(dca_config)
 
     original_allocation = allocation
     dynamic_plan = build_dynamic_allocation_plan(
@@ -525,7 +582,7 @@ def run_single_backtest(
     )
     uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
     no_rebal = r_mode == RebalMode.NONE
-    use_local_engine = has_ndxmega or uses_threshold or no_rebal
+    use_local_engine = has_ndxmega or uses_threshold or no_rebal or _uses_single_asset_dca(dca_config, cashflow_amount, pay_down_margin)
 
     # Cashflow settings
     bt_cashflow = 0.0 if pay_down_margin else cashflow_amount
@@ -623,6 +680,8 @@ def run_single_backtest(
                     loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
                     loan_repayment_freq=pm_cf_freq,
                     dynamic_allocation_schedule=dynamic_plan.dynamic_schedule,
+                    dca_mode=dca_config["mode"],
+                    dca_target_ticker=dca_config["target_ticker"],
                 )
                 if api_twr_series is not None:
                     twr_series = api_twr_series
@@ -671,6 +730,8 @@ def run_single_backtest(
             loan_repayment=pm_cf_for_loan if pay_down_margin else 0.0,
             loan_repayment_freq=pm_cf_freq,
             dynamic_allocation_schedule=dynamic_plan.dynamic_schedule,
+            dca_mode=dca_config["mode"],
+            dca_target_ticker=dca_config["target_ticker"],
         )
         # Unpack: shadow backtest returns 7-tuple or 8-tuple (with pm_blocked_dates)
         if isinstance(_shadow_result, tuple) and len(_shadow_result) == 8:
@@ -719,6 +780,7 @@ def run_single_backtest(
         "_engine_pm_maint_pcts": engine_pm_maint_pcts,
         "_dynamic_allocation_schedule": dynamic_plan.dynamic_schedule,
         "_dynamic_allocation_notes": dynamic_plan.notes or [],
+        "_dca_config": dca_config,
         "_reb": reb,
         "_r_mode": r_mode,
     }

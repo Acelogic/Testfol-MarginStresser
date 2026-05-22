@@ -9,7 +9,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 
-from app.common.constants import Freq
+from app.common.constants import DcaMode, Freq
 from app.common.special_tickers import (
     provider_fallback_ticker,
     zero_return_series,
@@ -233,7 +233,14 @@ def _normalize_dynamic_allocation_schedule(dynamic_allocation_schedule):
     return sorted(entries, key=lambda item: item[0])
 
 
-def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly", dynamic_allocation_schedule=None):
+def _normalize_dca_mode(dca_mode):
+    value = str(dca_mode or DcaMode.PROPORTIONAL).strip().lower().replace("_", " ")
+    if value in {"single", "single asset", "target", "targeted", "target asset"}:
+        return DcaMode.SINGLE_ASSET
+    return DcaMode.PROPORTIONAL
+
+
+def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_series=None, rebalance_freq="Yearly", cashflow=0.0, cashflow_freq="Monthly", prices_df=None, rebalance_month=1, rebalance_day=1, custom_freq="Yearly", invest_dividends=True, pay_down_margin=False, tax_config=None, custom_rebal_config=None, threshold_pct=0.0, pm_buy_block=False, pm_buy_block_threshold=100000.0, starting_loan=0.0, margin_rate_annual=8.0, draw_monthly=0.0, draw_start_date=None, draw_monthly_retirement=0.0, retirement_date=None, dca_in_retirement=True, loan_repayment=0.0, loan_repayment_freq="Monthly", dynamic_allocation_schedule=None, dca_mode=DcaMode.PROPORTIONAL, dca_target_ticker=None):
     """
     Runs a local backtest using Tax Lots (FIFO) to calculate ST/LT capital gains.
     Supports periodic cashflow injections (DCA).
@@ -248,6 +255,8 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         pay_down_margin (bool): Whether cashflows are used to pay down margin loan.
         tax_config (dict): Global tax configuration (optional).
         custom_rebal_config (dict): Configuration for custom rebalancing logic (optional).
+        dca_mode (str): "Proportional" buys according to target weights; "Single Asset" buys one target before scheduled rebalances.
+        dca_target_ticker (str): Exact allocation ticker to receive DCA when dca_mode="Single Asset".
     """
 
     dynamic_schedule_entries = _normalize_dynamic_allocation_schedule(dynamic_allocation_schedule)
@@ -290,6 +299,14 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
 
     target_weight_fractions, target_weight_pcts = _target_arrays(allocation)
     tax_treatments = {ticker: get_tax_treatment(ticker) for ticker in tickers}
+    normalized_dca_mode = _normalize_dca_mode(dca_mode)
+    dca_target_idx = None
+    dca_target = str(dca_target_ticker or "").strip()
+    if normalized_dca_mode == DcaMode.SINGLE_ASSET:
+        if dca_target in tickers:
+            dca_target_idx = tickers.index(dca_target)
+        else:
+            normalized_dca_mode = DcaMode.PROPORTIONAL
 
     # Initialize logs
     logs = []
@@ -325,7 +342,13 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         logs.append(f"PM Buy Block: Enabled (threshold ${pm_buy_block_threshold:,.0f}, loan ${starting_loan:,.0f}, rate {margin_rate_annual:.1f}%, draw ${draw_monthly:,.0f}/mo)")
 
     if cashflow > 0:
-        logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq}")
+        if normalized_dca_mode == DcaMode.SINGLE_ASSET and dca_target_idx is not None:
+            logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq} into {dca_target}; rebalance schedule applies afterward")
+        elif dca_target and _normalize_dca_mode(dca_mode) == DcaMode.SINGLE_ASSET:
+            logs.append(f"DCA target '{dca_target}' was not found; using proportional DCA")
+            logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq} proportional")
+        else:
+            logs.append(f"DCA: ${cashflow:,.2f} {cashflow_freq} proportional")
     
     if prices_df is not None and not prices_df.empty:
         logs.append("Using pre-fetched price data (Hybrid Simulation).")
@@ -673,9 +696,16 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
 
         if should_inject:
             logs.append(f"\n[DCA] {date.date()} | Injecting ${cashflow:,.2f}")
+            if normalized_dca_mode == DcaMode.SINGLE_ASSET and dca_target_idx is not None:
+                dca_amounts = np.zeros(len(tickers), dtype=float)
+                dca_amounts[dca_target_idx] = cashflow
+            else:
+                dca_amounts = cashflow * target_weight_fractions
 
             for idx, ticker in enumerate(tickers):
-                amount = cashflow * target_weight_fractions[idx]
+                amount = float(dca_amounts[idx])
+                if amount <= 0:
+                    continue
                 current_pos = float(position_values[idx])
                 total_qty = float(lot_quantities[idx])
                 current_price = current_pos / total_qty if total_qty > 0 else 1.0

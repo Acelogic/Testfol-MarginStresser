@@ -112,6 +112,81 @@ class TestRunSingleBacktest:
         }
         assert expected_keys.issubset(set(result.keys()))
 
+    def test_single_asset_dca_forces_local_engine(self, monkeypatch):
+        """Targeted DCA cannot be represented by the external API cashflow model."""
+        captured = {}
+
+        def _component_fetch(tickers, start_date, end_date, **kwargs):
+            return _mock_component_prices(tickers, start_date, end_date)
+
+        def _fetch_should_not_run(**kwargs):
+            raise AssertionError("targeted DCA should use the local engine")
+
+        def _shadow_records_dca(
+            allocation,
+            start_val,
+            start_date,
+            end_date,
+            api_port_series=None,
+            rebalance_freq="Yearly",
+            cashflow=0.0,
+            cashflow_freq="Monthly",
+            prices_df=None,
+            rebalance_month=1,
+            rebalance_day=1,
+            custom_freq="Yearly",
+            invest_dividends=True,
+            pay_down_margin=False,
+            tax_config=None,
+            custom_rebal_config=None,
+            **kwargs,
+        ):
+            captured["dca_mode"] = kwargs.get("dca_mode")
+            captured["dca_target_ticker"] = kwargs.get("dca_target_ticker")
+            return _mock_shadow(
+                allocation,
+                start_val,
+                start_date,
+                end_date,
+                api_port_series=api_port_series,
+                rebalance_freq=rebalance_freq,
+                cashflow=cashflow,
+                cashflow_freq=cashflow_freq,
+                prices_df=prices_df,
+                rebalance_month=rebalance_month,
+                rebalance_day=rebalance_day,
+                custom_freq=custom_freq,
+                invest_dividends=invest_dividends,
+                pay_down_margin=pay_down_margin,
+                tax_config=tax_config,
+                custom_rebal_config=custom_rebal_config,
+                **kwargs,
+            )
+
+        monkeypatch.setattr(orchestrator, "fetch_component_data", _component_fetch)
+
+        result = run_single_backtest(
+            allocation={"SPY": 60.0, "BND": 40.0},
+            maint_pcts={"SPY": 25.0, "BND": 25.0},
+            rebalance={"mode": "Standard", "freq": "Yearly"},
+            start_date="2020-01-02",
+            end_date="2020-01-10",
+            start_val=10000.0,
+            cashflow_amount=1000.0,
+            cashflow_freq="Monthly",
+            invest_div=True,
+            pay_down_margin=False,
+            tax_config={},
+            bearer_token=None,
+            name="Targeted DCA",
+            fetch_backtest_fn=_fetch_should_not_run,
+            run_shadow_fn=_shadow_records_dca,
+            dca_config={"mode": "Single Asset", "target_ticker": "SPY"},
+        )
+
+        assert result["is_local"]
+        assert captured == {"dca_mode": "Single Asset", "dca_target_ticker": "SPY"}
+
     def test_name_propagated(self):
         """Portfolio name is propagated to result."""
         result = run_single_backtest(
