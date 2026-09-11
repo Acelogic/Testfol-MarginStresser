@@ -118,8 +118,8 @@ def _load_presets(preset_mtime: float | None = None):
         presets = json.load(f)
     return _sort_preset_names(presets), presets
 
-def render():
-    """Renders the configuration tabs and returns a config dictionary."""
+def render(start_date):
+    """Render configuration, with withdrawal dates bounded by the backtest start."""
     
     st.subheader("Strategy Configuration")
     
@@ -588,6 +588,13 @@ def render():
 
     @st.fragment
     def _margin_fragment():
+        # Preserve dates when changing widget bounds, clamping existing selections
+        # if the backtest start moves past them.
+        for date_key in ("draw_start_date", "retirement_date"):
+            selected_date = st.session_state.get(date_key)
+            if selected_date is not None:
+                st.session_state[date_key] = max(selected_date, start_date)
+
         # Move Tax Simulation to top to control state of other inputs
         tax_sim_mode = st.radio(
             "Tax Payment Simulation",
@@ -685,7 +692,7 @@ def render():
                         "Draw Start Date",
                         value=None,
                         key="draw_start_date",
-                        min_value=pd.Timestamp("2000-01-01").date(),
+                        min_value=start_date,
                         max_value=pd.Timestamp("2060-12-31").date(),
                         help="Date when pre-retirement draws begin. Defaults to backtest start if not set.",
                     )
@@ -704,7 +711,7 @@ def render():
                         "Retirement Date",
                         value=None,
                         key="retirement_date",
-                        min_value=pd.Timestamp("2000-01-01").date(),
+                        min_value=start_date,
                         max_value=pd.Timestamp("2060-12-31").date(),
                         help="Date when retirement draws begin (replaces pre-retirement draw if set).",
                     )

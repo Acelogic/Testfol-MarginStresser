@@ -4,6 +4,18 @@ from __future__ import annotations
 
 import pandas as pd
 
+from app.core.withdrawals import PERFORMANCE_CASHFLOW_POLICY
+
+
+def has_stale_margin_results(results_list: list[dict], config: dict) -> bool:
+    """Older results may mix retirement cashflows into the performance baseline."""
+    if not any(config.get(key) for key in ("draw_monthly", "draw_monthly_retirement", "pm_buy_block")):
+        return False
+    return any(
+        result.get("performance_cashflow_policy") != PERFORMANCE_CASHFLOW_POLICY
+        for result in results_list
+    )
+
 
 def looks_like_rebased_twr_series(
     result: dict,
@@ -11,6 +23,8 @@ def looks_like_rebased_twr_series(
     pay_down_margin: bool,
 ) -> bool:
     """Detect stale local results where money-valued series was cached as rebased TWR."""
+    if result.get("performance_cashflow_policy") == PERFORMANCE_CASHFLOW_POLICY:
+        return False
     try:
         cashflow_amount = float(cashflow_amount or 0.0)
     except (TypeError, ValueError):

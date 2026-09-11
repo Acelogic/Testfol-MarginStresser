@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/backtest", tags=["backtest"])
 
-BACKTEST_CACHE_VERSION = "backtest-result-effective-start-v4"
+BACKTEST_CACHE_VERSION = "backtest-result-independent-margin-v5"
 
 
 def _pydantic_cache_key(req: BacktestRequest | MultiBacktestRequest) -> str:
@@ -86,6 +86,8 @@ def _serialize_result(r: dict) -> BacktestResult:
         wmaint=r.get("wmaint", 0.25),
         wmaint_pm=r.get("wmaint_pm", 0.0),
         pm_blocked_dates=r.get("pm_blocked_dates", []),
+        performance_cashflow_policy=r.get("performance_cashflow_policy"),
+        margin_result=_serialize_result(r["margin_result"]) if r.get("margin_result") else None,
     )
 
 

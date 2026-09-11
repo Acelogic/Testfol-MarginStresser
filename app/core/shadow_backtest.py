@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 
 from app.common.constants import DcaMode, Freq
+from app.core.withdrawals import dca_stop_date
 from app.common.special_tickers import (
     provider_fallback_ticker,
     zero_return_series,
@@ -689,6 +690,11 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
     month_end_or_last = month_change.copy()
     month_end_or_last[-1] = True
 
+    dca_cutoff = dca_stop_date(
+        draw_monthly, draw_start_date, draw_monthly_retirement,
+        retirement_date, requested_start_ts,
+    )
+
     track_margin_loan = bool(
         pm_buy_block
         or starting_loan != 0
@@ -709,7 +715,12 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             starting_loan,
             margin_rate_annual,
         )
-        loan_balance = margin_ledger.advance(margin_accrual_start).total_liability
+        # The first return can fall on the requested start itself. In that case
+        # the main loop applies that day's cashflow and accrual exactly once.
+        if margin_accrual_start < dates[0]:
+            loan_balance = margin_ledger.advance(margin_accrual_start).total_liability
+        else:
+            loan_balance = margin_ledger.total_liability
 
     # Initialize History with Start Date
     portfolio_history_dates.append(simulation_seed_date)
@@ -749,16 +760,18 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
             repayment_log = None
             cur_month = int(date_months[i])
             if (draw_monthly > 0 or draw_monthly_retirement > 0) and _prev_month is not None and is_month_boundary:
-                if draw_start_date is None or date.date() >= draw_start_date:
-                    _cur_date = date.date()
-                    if draw_monthly_retirement > 0 and retirement_date is not None and _cur_date >= retirement_date:
-                        _draw_amt = draw_monthly_retirement
-                    else:
-                        _draw_amt = draw_monthly
-                    if _draw_amt > 0:
-                        loan_change += _draw_amt
-                        _draw_label = "RetDraw" if (retirement_date is not None and _cur_date >= retirement_date) else "Draw"
-                        draw_log = (_draw_label, _cur_date, _draw_amt)
+                _cur_date = date.date()
+                if draw_monthly_retirement > 0 and retirement_date is not None and _cur_date >= retirement_date:
+                    _draw_amt = draw_monthly_retirement
+                    _draw_label = "RetDraw"
+                elif draw_start_date is None or _cur_date >= draw_start_date:
+                    _draw_amt = draw_monthly
+                    _draw_label = "Draw"
+                else:
+                    _draw_amt = 0.0
+                if _draw_amt > 0:
+                    loan_change += _draw_amt
+                    draw_log = (_draw_label, _cur_date, _draw_amt)
 
             if loan_repayment > 0 and loan_balance > 0 and not is_last_trading_day:
                 _repay = False
@@ -820,8 +833,7 @@ def run_shadow_backtest(allocation, start_val, start_date, end_date, api_port_se
         # 2. Check for Cashflow Injection (DCA)
         should_inject = False
         if cashflow > 0:
-            _dca_cutoff_date = draw_start_date or retirement_date
-            if not dca_in_retirement and _dca_cutoff_date is not None and date.date() >= _dca_cutoff_date:
+            if not dca_in_retirement and dca_cutoff is not None and date.date() >= dca_cutoff:
                 should_inject = False
             elif cashflow_freq == Freq.YEARLY:
                 should_inject = is_year_boundary

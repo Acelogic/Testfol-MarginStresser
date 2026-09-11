@@ -86,6 +86,8 @@ class BacktestResult(BaseModel):
     wmaint: float = 0.25
     wmaint_pm: float = 0.0
     pm_blocked_dates: list = Field(default_factory=list)
+    performance_cashflow_policy: Optional[str] = None
+    margin_result: Optional["BacktestResult"] = None
 
 
 class MultiBacktestResponse(BaseModel):

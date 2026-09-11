@@ -19,6 +19,7 @@ import requests
 
 from app.common.constants import DcaMode, Freq, RebalMode, Tickers
 from app.core import calculations
+from app.core.withdrawals import PERFORMANCE_CASHFLOW_POLICY, dca_stop_date
 from app.core.shadow_backtest import run_shadow_backtest as _default_shadow
 from app.services.data_service import clip_component_data_to_synced_end, fetch_component_data
 from app.services.ndx_mega_rotation import (
@@ -513,9 +514,12 @@ def run_single_backtest(
     pm_config: dict | None = None,
     prefetched_component_prices: pd.DataFrame | None = None,
     dca_config: dict | None = None,
+    margin_scenario: bool = False,
 ) -> dict:
     """
-    Run a single portfolio backtest (API or local engine).
+    Run a performance baseline, or an explicitly requested local margin scenario.
+
+    Margin/retirement settings never change the baseline's contributions or trades.
 
     Returns a raw dict with all result fields (not yet serialized).
     Uses dependency injection for the two expensive functions so callers
@@ -582,7 +586,7 @@ def run_single_backtest(
                 current_wmaint_pm += (weight / total_w) * (m_pm / 100)
 
     # PM buy block config
-    _pm_cfg = pm_config or {}
+    _pm_cfg = (pm_config or {}) if margin_scenario else {}
     pm_buy_block = _pm_cfg.get("pm_buy_block", False)
     pm_buy_block_threshold = _pm_cfg.get("pm_buy_block_threshold", 100000.0)
     pm_draw_monthly = _pm_cfg.get("draw_monthly", 0.0)
@@ -590,26 +594,24 @@ def run_single_backtest(
     pm_dca_in_retirement = _pm_cfg.get("dca_in_retirement", True)
     _raw_retirement_date = _pm_cfg.get("retirement_date", None)
     _raw_draw_start = _pm_cfg.get("draw_start_date", None)
-    # Clamp draw_start_date to backtest range
+    # Dates before the backtest start apply from the start. Future withdrawals
+    # remain in the future instead of being pulled into the final backtest day.
     _bt_start = pd.Timestamp(start_date).date() if isinstance(start_date, str) else start_date
-    _bt_end = pd.Timestamp(end_date).date() if isinstance(end_date, str) else end_date
     if _raw_draw_start is not None:
         if isinstance(_raw_draw_start, str):
             _raw_draw_start = pd.Timestamp(_raw_draw_start).date()
         elif isinstance(_raw_draw_start, datetime.datetime):
             _raw_draw_start = _raw_draw_start.date()
         pm_draw_start_date = max(_raw_draw_start, _bt_start)
-        pm_draw_start_date = min(pm_draw_start_date, _bt_end)
     else:
         pm_draw_start_date = _bt_start
-    # Clamp retirement_date to backtest range
+    # Clamp retirement_date to the start, without changing future retirement.
     if _raw_retirement_date is not None:
         if isinstance(_raw_retirement_date, str):
             _raw_retirement_date = pd.Timestamp(_raw_retirement_date).date()
         elif isinstance(_raw_retirement_date, datetime.datetime):
             _raw_retirement_date = _raw_retirement_date.date()
         pm_retirement_date = max(_raw_retirement_date, _bt_start)
-        pm_retirement_date = min(pm_retirement_date, _bt_end)
     else:
         pm_retirement_date = None
     pm_margin_rate = _pm_cfg.get("margin_rate_annual", 8.0)
@@ -638,7 +640,7 @@ def run_single_backtest(
     )
     uses_threshold = r_mode in (RebalMode.THRESHOLD, RebalMode.THRESHOLD_CALENDAR)
     no_rebal = r_mode == RebalMode.NONE
-    use_local_engine = has_ndxmega or uses_threshold or no_rebal or _uses_single_asset_dca(dca_config, cashflow_amount, pay_down_margin)
+    use_local_engine = margin_scenario or has_ndxmega or uses_threshold or no_rebal or _uses_single_asset_dca(dca_config, cashflow_amount, pay_down_margin)
 
     # Cashflow settings
     bt_cashflow = 0.0 if pay_down_margin else cashflow_amount
@@ -833,6 +835,7 @@ def run_single_backtest(
         "wmaint": current_wmaint,
         "wmaint_pm": current_wmaint_pm,
         "pm_blocked_dates": pm_blocked_dates,
+        "performance_cashflow_policy": None if margin_scenario else PERFORMANCE_CASHFLOW_POLICY,
         # Internal: kept for pass-2 re-fetch
         "_engine_allocation": alloc_map,
         "_engine_maint_pcts": engine_maint_pcts,
@@ -870,6 +873,11 @@ def run_multi_backtest(
     """
     fetch_fn = fetch_backtest_fn or _default_fetch
     shadow_fn = run_shadow_fn or _default_shadow
+
+    # All comparison portfolios and common-start reruns use the same baseline
+    # cashflows. Apply margin rules only to a separate result after alignment.
+    margin_config = pm_config or {}
+    pm_config = None
 
     results_list: list[dict] = [None] * len(portfolios)
     bench_by_index: list = [None] * len(portfolios)
@@ -1111,5 +1119,46 @@ def run_multi_backtest(
         for res in results_list:
             if res is not None:
                 res["effective_start_date"] = pd.Timestamp(common_start)
+
+    cutoff = dca_stop_date(
+        margin_config.get("draw_monthly", 0.0),
+        margin_config.get("draw_start_date"),
+        margin_config.get("draw_monthly_retirement", 0.0),
+        margin_config.get("retirement_date"),
+        common_start or start_date,
+    )
+    needs_margin_portfolio = margin_config.get("pm_buy_block", False) or (
+        cutoff is not None
+        and cutoff <= pd.Timestamp(end_date).date()
+    )
+    if needs_margin_portfolio:
+        for result in results_list:
+            if result["series"].empty:
+                continue
+            scenario_start = result.get("effective_start_date", pd.Timestamp(start_date))
+            result["margin_result"] = run_single_backtest(
+                allocation=result["allocation"],
+                maint_pcts=result["maint_pcts"],
+                pm_maint_pcts=result.get("_engine_pm_maint_pcts"),
+                rebalance=result["rebalance"],
+                start_date=pd.Timestamp(scenario_start).strftime("%Y-%m-%d"),
+                end_date=end_date,
+                start_val=start_val,
+                cashflow_amount=cashflow_amount,
+                cashflow_freq=cashflow_freq,
+                invest_div=invest_div,
+                pay_down_margin=pay_down_margin,
+                tax_config=tax_config,
+                bearer_token=bearer_token,
+                name=result["name"],
+                run_shadow_fn=shadow_fn,
+                pm_config=margin_config,
+                prefetched_component_prices=result["component_prices"],
+                dca_config=result.get("_dca_config"),
+                margin_scenario=True,
+            )
+            if result["margin_result"]["series"].empty:
+                raise ValueError(f"No price data available for {result['name']}'s margin scenario")
+            result["margin_result"]["effective_start_date"] = pd.Timestamp(scenario_start)
 
     return results_list, bench_series_list

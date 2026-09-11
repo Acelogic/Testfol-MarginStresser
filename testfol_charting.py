@@ -12,7 +12,7 @@ import pandas as pd
 import streamlit as st
 import requests
 from app.common import utils
-from app.core.result_validation import has_stale_local_cashflow_series
+from app.core.result_validation import has_stale_local_cashflow_series, has_stale_margin_results
 
 logging.basicConfig(
     level=logging.INFO,
@@ -75,7 +75,7 @@ def _deserialize_result(item):
     unrealized = _deser_df(item.get("unrealized_pl_df_json"))
     prices = _deser_df(item.get("component_prices_json"))
 
-    return {
+    result = {
         "name": port_name,
         "series": series,
         "port_series": series,
@@ -106,7 +106,11 @@ def _deserialize_result(item):
         "wmaint_pm": item.get("wmaint_pm", 0.0),
         "pm_blocked_dates": item.get("pm_blocked_dates", []),
         "_dca_config": item.get("_dca_config", {}),
+        "performance_cashflow_policy": item.get("performance_cashflow_policy"),
     }
+    if item.get("margin_result"):
+        result["margin_result"] = _deserialize_result(item["margin_result"])
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -251,7 +255,7 @@ def _cached_fetch_backtest(*args, **kwargs):
 
 
 @st.cache_data(show_spinner="Running Shadow Backtest...", ttl=3600)
-def _cached_run_shadow_backtest(*args, _v="local-dca-routing-v4", **kwargs):
+def _cached_run_shadow_backtest(*args, _v="independent-margin-v5", **kwargs):
     from app.core import run_shadow_backtest
     return run_shadow_backtest(*args, **kwargs)
 
@@ -390,10 +394,9 @@ def _run_via_api(config, start_date, end_date, bearer_token):
             s.name = b.get("name", "Benchmark")
             bench_series_list.append(s)
 
-    if has_stale_local_cashflow_series(results_list, payload.get("cashflow", {})):
+    if has_stale_margin_results(results_list, config) or has_stale_local_cashflow_series(results_list, payload.get("cashflow", {})):
         st.warning(
-            "Backend cache returned a stale local portfolio curve without DCA deposits. "
-            "Recomputing locally with fresh cashflow-aware series."
+            "Refreshing portfolio results to keep comparison contributions independent of margin withdrawals."
         )
         return _run_inprocess(config, start_date, end_date, bearer_token)
 
@@ -424,7 +427,7 @@ if mode == "Changelog":
 start_date, end_date, bearer_token, run_placeholder = render_sidebar()
 
 # --- Main Area ---
-config = render_config()
+config = render_config(start_date=start_date)
 
 # --- Validation & Run ---
 auto_run = st.session_state.pop("_auto_run_backtest", False)
@@ -475,10 +478,9 @@ if "results_list" in st.session_state and st.session_state.results_list:
             f"**{', '.join(failover_names)}**. Results may differ slightly from Testfol."
         )
 
-    if has_stale_local_cashflow_series(results_list, config.get("global_cashflow", {})):
+    if has_stale_margin_results(results_list, config) or has_stale_local_cashflow_series(results_list, config.get("global_cashflow", {})):
         st.warning(
-            "Detected stale local portfolio results where the value curve matches TWR "
-            "instead of DCA-funded balance. Recomputing locally now."
+            "Refreshing portfolio results to keep comparison contributions independent of margin withdrawals."
         )
         with st.spinner("Refreshing stale local portfolio curves..."):
             try:

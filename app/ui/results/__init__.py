@@ -9,6 +9,7 @@ import logging
 
 from app.common import utils
 from app.core import calculations, tax_library
+from app.core.withdrawals import dca_stop_date
 from app.services import testfol_api as api
 from app.reporting import report_generator
 from app.ui import charts, xray_view
@@ -266,6 +267,13 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     start_val = port_series.iloc[0] # RE-BASE start val to the clipped start
 
+    # Keep performance data intact. Only the margin/equity charts consume the
+    # separate portfolio whose contributions and trades obey retirement rules.
+    margin_result = results.get("margin_result") or {}
+    margin_port_series = margin_result.get("port_series", port_series)
+    margin_port_series = margin_port_series.reindex(port_series.index, method="ffill").fillna(start_val)
+    margin_pl_by_year = margin_result.get("pl_by_year", pl_by_year)
+
     wmaint = results.get("wmaint", config.get('wmaint', 0.25))
 
     # Tax/Margin Config
@@ -335,7 +343,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         elif wmaint_pm == 0.0:
             # No PM rates configured — disable PM comparison
             pm_mode = 'Off'
-    pm_blocked_dates = results.get("pm_blocked_dates", [])
+    pm_blocked_dates = margin_result.get("pm_blocked_dates", results.get("pm_blocked_dates", []))
 
     # Extract Benchmark (Standard Comparison or Custom)
     bench_series = results.get("bench_series", None)
@@ -357,9 +365,9 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     fed_tax_series = pd.Series(dtype=float)
     state_tax_series = pd.Series(dtype=float)
 
-    if not pl_by_year.empty:
+    if not margin_pl_by_year.empty:
         fed_tax_series, state_tax_series = _cached_tax_calculations(
-            pl_by_year, other_income, filing_status, tax_method,
+            margin_pl_by_year, other_income, filing_status, tax_method,
             use_std_deduction, state_code,
             retirement_income, _retirement_year, retirement_date,
         )
@@ -431,9 +439,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             changes = years != np.roll(years, -1)
             changes[-1] = False
             dca_vals[changes] = cashflow
-        # Apply retirement cutoff — stop DCA at draw_start_date or retirement_date
+        # Stop financing contributions only when an active draw actually begins.
         if not dca_in_retirement:
-            _dca_cutoff = draw_start_date or retirement_date
+            _dca_cutoff = dca_stop_date(
+                draw_monthly, draw_start_date, draw_monthly_retirement,
+                retirement_date, analysis_start_date,
+            )
             if _dca_cutoff is not None:
                 cutoff = pd.Timestamp(_dca_cutoff)
                 dca_vals[dates >= cutoff] = 0.0
@@ -454,7 +465,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
               eff_loan, eff_draw, eff_draw_ret, draw_start_date, retirement_date, pay_tax_cash)
 
     loan_series, equity_series, equity_pct_series, usage_series, effective_rate_series = _cached_simulate_margin(
-        port_series, eff_loan,
+        margin_port_series, eff_loan,
         eff_rate, eff_draw, wmaint,
         tax_series=sim_tax_series,
         repayment_series=repayment_series,
@@ -469,7 +480,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # Compute PM usage series post-hoc (loan is invariant to margin type)
     pm_usage_series = pd.Series(dtype=float)
     if pm_mode != 'Off' and wmaint_pm > 0 and not loan_series.empty:
-        max_loan_pm = port_series * (1 - wmaint_pm)
+        max_loan_pm = margin_port_series * (1 - wmaint_pm)
         valid_pm = max_loan_pm > 0
         pm_usage_series = pd.Series(0.0, index=port_series.index)
         pm_usage_series[valid_pm] = loan_series[valid_pm] / max_loan_pm[valid_pm]
@@ -496,12 +507,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         elif pay_tax_cash:
             if tax_payment_series is not None and tax_payment_series.sum() > 0:
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, tax_payment_series, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
+                    equity_series, tax_payment_series, margin_port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
                 )
             else:
                 empty_tax = pd.Series(0.0, index=equity_series.index)
                 final_adj_series, final_tax_series = calculations.calculate_tax_adjusted_equity(
-                    equity_series, empty_tax, port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
+                    equity_series, empty_tax, margin_port_series, loan_series, rate_annual, draw_monthly=draw_monthly, draw_start_date=draw_start_date, draw_monthly_retirement=draw_monthly_retirement, retirement_date=retirement_date
                 )
         else: # None (Gross)
             final_adj_series = equity_series
@@ -509,6 +520,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     # --- Prepare Tax-Adjusted Data for Charts ---
     tax_adj_port_series = final_adj_series + loan_series
+    performance_view_series = port_series if margin_result else tax_adj_port_series
 
     # Use clipped bench_series if already set above, otherwise retrieve from results
     if bench_series is None:
@@ -572,14 +584,14 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
     # Comparison Logic
     if bench_series is not None:
          try:
-             aligned_pf = tax_adj_port_series.reindex(bench_series.index).ffill()
+             aligned_pf = performance_view_series.reindex(bench_series.index).ffill()
              diff_val = aligned_pf.iloc[-1] - bench_series.iloc[-1]
              diff_pct = (diff_val / bench_series.iloc[-1]) * 100
              st.info(f"**Comparison Active**: {portfolio_name} vs {bench_series.name if bench_series.name else 'Benchmark'} | Diff: ${diff_val:,.2f} ({diff_pct:+.2f}%)")
          except (IndexError, KeyError, ZeroDivisionError, TypeError):
              pass
 
-    total_return = (tax_adj_port_series.iloc[-1] / start_val - 1) * 100
+    total_return = (performance_view_series.iloc[-1] / start_val - 1) * 100
 
     # Use Stats reported by Testfol API (TWR)
     cagr = stats.get("cagr", 0.0)
@@ -647,7 +659,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             if not bench_label: bench_label = "Bench"
 
         # Primary Metrics Row - Gross (Pre-Tax) from API
-        m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m1.metric("Portfolio Value", f"${performance_view_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", f"{diff_cagr_display:+.2f}% vs {bench_label}", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", f"{diff_sharpe:+.2f} vs {bench_label}", help="Pre-tax risk-adjusted return")
         _dd_help = f"Trough: {max_dd_date.strftime('%b %d, %Y')}" if max_dd_date is not None else None
@@ -669,7 +681,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
         # Detailed Comparison Table
         bench_end_val = active_bench_series.iloc[-1] if active_bench_series is not None and not active_bench_series.empty else 0
-        strategy_end_val = tax_adj_port_series.iloc[-1]
+        strategy_end_val = performance_view_series.iloc[-1]
 
         comp_label = active_bench_series.name if active_bench_series is not None and hasattr(active_bench_series, 'name') and active_bench_series.name else "Benchmark"
 
@@ -685,7 +697,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     else:
         # Standard View (No Benchmark) - Gross (Pre-Tax) from API
-        m1.metric("Portfolio Value", f"${tax_adj_port_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
+        m1.metric("Portfolio Value", f"${performance_view_series.iloc[-1]:,.0f}", f"{total_return:+.1f}%")
         m2.metric("Gross CAGR", f"{cagr_display:.2f}%", help="Pre-tax return from Testfol API")
         m3.metric("Gross Sharpe", f"{sharpe:.2f}", help="Pre-tax risk-adjusted return")
         _dd_help2 = f"Trough: {max_dd_date.strftime('%b %d, %Y')}" if max_dd_date is not None else None
@@ -768,7 +780,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             effective_rate_resampled=effective_rate_resampled,
             bench_resampled=bench_resampled,
             comp_resampled=comp_resampled,
-            port_series=port_series,
+            port_series=margin_port_series,
             component_prices=component_prices,
             portfolio_name=portfolio_name,
             log_scale=log_scale,
@@ -783,7 +795,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
             draw_monthly_retirement=draw_monthly_retirement,
             draw_start_date=draw_start_date,
             retirement_date=retirement_date,
-            logs=logs,
+            logs=margin_result.get("logs", logs),
             final_tax_series=final_tax_series,
             tax_payment_series=tax_payment_series,
             start_val=start_val,
@@ -822,7 +834,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
                 )
 
         charts.render_returns_analysis(
-            tax_adj_port_series,
+            performance_view_series,
             bench_series=bench_aligned if bench_series is not None else None,
             comparison_series=comp_aligned if comp_series is not None else None,
             unique_id=portfolio_name,
@@ -965,7 +977,12 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
     else:
         from app.ui.results.tabs_withdrawals import render_withdrawals_tab
-        render_withdrawals_tab(st.container(), logs, draw_monthly, draw_start_date, loan_series=loan_series)
+        render_withdrawals_tab(
+            st.container(), margin_result.get("logs", logs),
+            draw_monthly or draw_monthly_retirement,
+            draw_start_date if draw_monthly > 0 else retirement_date,
+            loan_series=loan_series,
+        )
 
     # -------------------------------------------------------------------------
     # Post-Tabs (Charts Controls & Report)
