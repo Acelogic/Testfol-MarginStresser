@@ -251,7 +251,7 @@ def _render_seasonal_tab(
                     legend=dict(orientation="h", y=1.02, x=0.5, xanchor="center")
                 )
 
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
 
                 final_med = seas_df["Median"].iloc[-1]
                 st.metric("Typical Year Ending Balance", f"${final_med:,.0f}")

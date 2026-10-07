@@ -128,7 +128,7 @@ def render_asset_explorer():
         label = f"{emoji} {name}"
         btn_type = "secondary" if is_excluded else "primary"
         with cols1[i]:
-            if st.button(label, key=f"btn_{ticker}", type=btn_type, use_container_width=True):
+            if st.button(label, key=f"btn_{ticker}", type=btn_type, width="stretch"):
                 if is_excluded:
                     st.session_state.ae_excluded_assets.remove(name)
                 else:
@@ -144,7 +144,7 @@ def render_asset_explorer():
         label = f"{emoji} {name}"
         btn_type = "secondary" if is_excluded else "primary"
         with cols2[i]:
-            if st.button(label, key=f"btn_{ticker}", type=btn_type, use_container_width=True):
+            if st.button(label, key=f"btn_{ticker}", type=btn_type, width="stretch"):
                 if is_excluded:
                     st.session_state.ae_excluded_assets.remove(name)
                 else:
@@ -364,7 +364,7 @@ def render_asset_explorer():
     
     st.dataframe(
         df_display.style.map(color_cells),
-        use_container_width=True,
+        width="stretch",
         height=(n_assets + 1) * 35 + 50 
     )
 

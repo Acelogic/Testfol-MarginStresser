@@ -432,7 +432,7 @@ config = render_config(start_date=start_date)
 # --- Validation & Run ---
 auto_run = st.session_state.pop("_auto_run_backtest", False)
 
-if run_placeholder.button("🚀 Run Backtest", type="primary", use_container_width=True) or auto_run:
+if run_placeholder.button("🚀 Run Backtest", type="primary", width="stretch") or auto_run:
     st.divider()
     with st.spinner("Running Simulations..."):
         try:

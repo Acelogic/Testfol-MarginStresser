@@ -83,7 +83,7 @@ def render():
                  st.markdown("**Testfol Login**")
                  _tf_email = st.text_input("Email", key="_tf_email", label_visibility="collapsed", placeholder="Email")
                  _tf_pass = st.text_input("Password", type="password", key="_tf_pass", label_visibility="collapsed", placeholder="Password")
-                 if st.button("Sign In", use_container_width=True):
+                 if st.button("Sign In", width="stretch"):
                      if _tf_email and _tf_pass:
                          try:
                              login_with_credentials(_tf_email, _tf_pass)

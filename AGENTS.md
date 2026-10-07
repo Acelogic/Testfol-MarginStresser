@@ -2,11 +2,17 @@
 
 ## Quick Start
 ```bash
-streamlit run testfol_charting.py --server.port 8501
+.venv/bin/python -m streamlit run testfol_charting.py --server.port 8501
 ```
 
 ## Entry Point
 - **Main file:** `testfol_charting.py` (NOT `app/main.py`)
+- Use the project `.venv` and the Streamlit version pinned in `requirements.txt`.
+
+## Testing
+- Never write unit tests after you write code.
+- Highly prefer E2E tests as the sole testing mechanism. Use them to verify complex features work. At the end of E2E tests, produce a verifiable and repeatable artifact.
+- If you must test a system in isolation, first write down all the ways it could fail, then write the code.
 
 ## Project Structure
 - `app/core/backtest_orchestrator.py` - Backtest routing (API vs local engine with automatic failover)

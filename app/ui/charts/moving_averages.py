@@ -168,7 +168,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
         yaxis_type="log",
         hovermode="x unified"
     )
-    st.plotly_chart(fig, use_container_width=True, key=f"ma_chart_{key_suffix}")
+    st.plotly_chart(fig, width="stretch", key=f"ma_chart_{key_suffix}")
 
     if not events_df.empty:
         # Summary Metrics (Based on FILTERED events)
@@ -606,7 +606,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
             st.dataframe(
                 display_df,
                 column_config=column_config,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -739,7 +739,7 @@ def render_ma_analysis_tab(port_series, portfolio_name, unique_id, window=200, s
                     st.dataframe(
                         styled_df,
                         column_config=comp_column_config,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         key=f"comparison_table_{key_suffix}"
                     )
@@ -890,7 +890,7 @@ def render_munger_wma_tab(port_series, portfolio_name, unique_id, window=200):
         yaxis_type="log",
         hovermode="x unified"
     )
-    st.plotly_chart(fig, use_container_width=True, key=f"wma_chart_{key_suffix}")
+    st.plotly_chart(fig, width="stretch", key=f"wma_chart_{key_suffix}")
 
     if not events_df.empty:
         # Summary Metrics
@@ -1224,7 +1224,7 @@ Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The
             st.dataframe(
                 display_df,
                 column_config=column_config,
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -1351,10 +1351,9 @@ Charlie Munger and Warren Buffett emphasize patience and long-term thinking. The
                     st.dataframe(
                         styled_df,
                         column_config=comp_column_config,
-                        use_container_width=True,
+                        width="stretch",
                         hide_index=True,
                         key=f"wma_comparison_table_{key_suffix}"
                     )
             else:
                 st.info("No breach events to display.")
-

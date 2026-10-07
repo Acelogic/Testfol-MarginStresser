@@ -358,7 +358,7 @@ def render_candlestick_chart(ohlc_df, equity_series, loan_series,
     with st.expander("\U0001f4ca OHLC Table View", expanded=False):
         st.dataframe(
             data['display_df'],
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
             height=400,
         )

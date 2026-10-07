@@ -88,7 +88,7 @@ def render_xray(portfolio_dict, portfolio_name="Portfolio"):
             paper_bgcolor='rgba(0,0,0,0)',
             plot_bgcolor='rgba(0,0,0,0)',
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
     with col2:
         st.write("### Top Holdings")
@@ -106,7 +106,7 @@ def render_xray(portfolio_dict, portfolio_name="Portfolio"):
             df[['Name', 'Ticker', 'Weight', 'Source']].style.format({
                 'Weight': '{:.6%}'
             }),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 

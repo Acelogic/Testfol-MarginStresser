@@ -387,7 +387,7 @@ def render_rolling_metrics(
         margin=dict(l=60, r=20, t=40, b=40),
     )
 
-    st.plotly_chart(fig, use_container_width=True, key=f"roll_chart_{unique_id}")
+    st.plotly_chart(fig, width="stretch", key=f"roll_chart_{unique_id}")
 
     # Summary stats for the selected rolling metric
     with st.expander(f"Rolling {meta['label']} Summary Statistics", expanded=False):
@@ -413,4 +413,4 @@ def render_rolling_metrics(
                     f"{np.max(vals):{meta['fmt']}}{s}",
                 ],
             }
-            st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)

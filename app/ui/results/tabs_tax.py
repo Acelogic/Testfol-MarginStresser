@@ -210,7 +210,7 @@ def _render_tax_impact_chart(
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
 
-    st.plotly_chart(fig_tax_impact, use_container_width=True)
+    st.plotly_chart(fig_tax_impact, width="stretch")
 
     st.markdown("### Detailed Data")
-    st.dataframe(tax_impact_df.style.format("${:,.2f}"), use_container_width=True)
+    st.dataframe(tax_impact_df.style.format("${:,.2f}"), width="stretch")

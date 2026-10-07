@@ -798,7 +798,7 @@ def render_ndx_scanner():
     with qa_col2:
         # Align button with the selectbox input (compensate for label height)
         st.markdown('<div style="margin-top: 28px;"></div>', unsafe_allow_html=True)
-        if st.button("Load Stock", type="primary", use_container_width=True, disabled=not available_tickers):
+        if st.button("Load Stock", type="primary", width="stretch", disabled=not available_tickers):
             if "portfolios" in st.session_state:
                 import uuid
 
@@ -932,7 +932,7 @@ def render_ndx_scanner():
     st.dataframe(
         styled_df,
         column_config=column_config,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=600
     )

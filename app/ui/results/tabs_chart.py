@@ -178,7 +178,7 @@ def _render_cash_statistics(
             "Category": ["Monthly Draws", "Taxes Paid"],
             "Amount": [total_draws, total_tax_paid]
         })
-        st.dataframe(w_df.style.format({"Amount": "${:,.2f}"}), use_container_width=True, hide_index=True)
+        st.dataframe(w_df.style.format({"Amount": "${:,.2f}"}), width="stretch", hide_index=True)
 
 
 def _render_margin_statistics(
@@ -348,11 +348,11 @@ def _render_margin_statistics(
             else:
                 st.warning(full_msg)
 
-            st.dataframe(episodes_df, use_container_width=True, hide_index=True)
+            st.dataframe(episodes_df, width="stretch", hide_index=True)
 
         # PM Buy-Blocked Dates
         if pm_blocked_dates:
             st.markdown("##### PM Buy-Blocked Rebalance Dates")
             st.warning(f"{len(pm_blocked_dates)} rebalance(s) had buys blocked due to PM equity < ${pm_threshold:,.0f}")
             blocked_df = pd.DataFrame({"Date": [d.date() if hasattr(d, 'date') else d for d in pm_blocked_dates]})
-            st.dataframe(blocked_df, use_container_width=True, hide_index=True)
+            st.dataframe(blocked_df, width="stretch", hide_index=True)

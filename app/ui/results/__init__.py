@@ -693,7 +693,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
         }
         comp_df = pd.DataFrame(comp_data)
         with st.expander(f"📊 Detailed {portfolio_name} vs {comp_label} Statistics", expanded=False):
-            st.dataframe(comp_df, hide_index=True, use_container_width=True)
+            st.dataframe(comp_df, hide_index=True, width="stretch")
 
     else:
         # Standard View (No Benchmark) - Gross (Pre-Tax) from API
@@ -743,7 +743,7 @@ def render(results: dict, config: dict, portfolio_name: str = "", clip_start_dat
 
             unpaid_liability = total_tax_owed - display_tax
             if unpaid_liability > 1:
-                st.caption(f"ℹ️ **Timing Difference:** Total Tax Paid (\${display_tax:,.0f}) is lower than Total Tax Owed (\${total_tax_owed:,.0f}) because taxes are typically paid on **April 15th of the following year**. The tax bill for the final simulation year (\${unpaid_liability:,.0f}) is technically owed (Accrued) but the payment date falls **after** the simulation ends, so it was never deducted from your cash.")
+                st.caption(fr"ℹ️ **Timing Difference:** Total Tax Paid (\${display_tax:,.0f}) is lower than Total Tax Owed (\${total_tax_owed:,.0f}) because taxes are typically paid on **April 15th of the following year**. The tax bill for the final simulation year (\${unpaid_liability:,.0f}) is technically owed (Accrued) but the payment date falls **after** the simulation ends, so it was never deducted from your cash.")
 
     st.markdown("---")
 

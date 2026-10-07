@@ -162,7 +162,7 @@ def render_withdrawals_tab(
             margin=dict(l=0, r=0, t=40, b=0),
             hovermode="x unified",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         if loan_diverges:
             st.caption(
@@ -176,4 +176,4 @@ def render_withdrawals_tab(
             display["Date"] = display["Date"].dt.strftime("%Y-%m-%d")
             display["Amount"] = display["Amount"].map(lambda v: f"${v:,.0f}")
             display["Loan After"] = display["Loan After"].map(lambda v: f"${v:,.0f}")
-            st.dataframe(display, hide_index=True, use_container_width=True)
+            st.dataframe(display, hide_index=True, width="stretch")

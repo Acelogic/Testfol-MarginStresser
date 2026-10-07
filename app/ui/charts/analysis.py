@@ -96,7 +96,7 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax
     )
     fig.update_layout(barmode='stack', hovermode="x unified")
     fig.update_traces(hovertemplate="%{y:$,.0f}")
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     
     # 5. Detailed Table
     st.subheader("Detailed Tax Log")
@@ -112,7 +112,7 @@ def render_tax_analysis(pl_by_year, other_income, filing_status, state_code, tax
     
     st.dataframe(
         detail_df.style.format("${:,.2f}"),
-        use_container_width=True
+        width="stretch"
     )
 
 
@@ -306,7 +306,7 @@ def render_monte_carlo_view(mc_results, unique_id=None):
         )
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
     
     st.caption("""
     **Methodology:** Historical Bootstrap using your strategy's daily volatility.
@@ -442,4 +442,4 @@ def render_monte_carlo_view(mc_results, unique_id=None):
         hovermode="x" # Snap to x-axis (easier to hit lines)
     )
     
-    st.plotly_chart(fig_hist, use_container_width=True)
+    st.plotly_chart(fig_hist, width="stretch")

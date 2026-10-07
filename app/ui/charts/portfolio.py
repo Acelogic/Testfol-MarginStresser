@@ -174,7 +174,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True, ca
         margin=dict(l=40, r=40, t=60, b=40)
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # --- Drawdown Chart ---
     st.markdown("### Drawdowns")
@@ -252,7 +252,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True, ca
         margin=dict(l=40, r=40, t=30, b=40)
     )
         
-    st.plotly_chart(fig_dd, use_container_width=True)
+    st.plotly_chart(fig_dd, width="stretch")
 
     # Comparison Table (Stats are already accurate - refetched or calculated in main app)
     if results_list:
@@ -289,7 +289,7 @@ def render_multi_portfolio_chart(results_list, benchmarks=[], log_scale=True, ca
             }
             stats_data.append(row)
             
-        st.dataframe(pd.DataFrame(stats_data), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(stats_data), width="stretch", hide_index=True)
 
 def render_classic_chart(port_series, final_adj_series, loan_series,
                         equity_pct_series, usage_series,
@@ -569,7 +569,7 @@ def render_classic_chart(port_series, final_adj_series, loan_series,
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, stats, log_opts, bench_series=None, comparison_series=None, start_val=10000, rate_annual=8.0):
     """Render dashboard-style separate charts"""
@@ -642,7 +642,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
         legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
         hovermode="x unified"
     )
-    st.plotly_chart(fig1, use_container_width=True)
+    st.plotly_chart(fig1, width="stretch")
     
     # Row 2: Two columns for Leverage and Margin Debt
     col1, col2 = st.columns(2)
@@ -685,7 +685,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
             hovermode="x unified"
         )
-        st.plotly_chart(fig2, use_container_width=True)
+        st.plotly_chart(fig2, width="stretch")
     
     with col2:
         st.markdown("### Margin Debt Evolution")
@@ -759,7 +759,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             legend=dict(x=0.5, y=1.02, xanchor="center", orientation="h"),
             hovermode="x unified"
         )
-        st.plotly_chart(fig3, use_container_width=True)
+        st.plotly_chart(fig3, width="stretch")
     
     # Row 3: Final Margin Status - Enhanced display
     st.markdown("### Final Margin Status")
@@ -794,7 +794,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             height=300,
             margin=dict(l=20, r=20, t=40, b=20)
         )
-        st.plotly_chart(fig4, use_container_width=True)
+        st.plotly_chart(fig4, width="stretch")
         st.markdown(f"<p style='text-align: center; color: #888;'>{'Moderate Risk' if usage_pct.iloc[-1] < 0.8 else 'High Risk'}</p>", unsafe_allow_html=True)
     
     with col2:
@@ -821,7 +821,7 @@ def render_dashboard_view(port, equity, loan, equity_pct, usage_pct, maint_pct, 
             height=300,
             margin=dict(l=20, r=20, t=40, b=20)
         )
-        st.plotly_chart(fig5, use_container_width=True)
+        st.plotly_chart(fig5, width="stretch")
         st.markdown(f"<p style='text-align: center; color: #888;'>Peak {max_allowed:.2f}x</p>", unsafe_allow_html=True)
     
     with col3:

@@ -239,7 +239,7 @@ def render_cheat_sheet(port_series, portfolio_name, unique_id, component_data=No
             
             st.dataframe(
                 final_view.style.apply(style_barchart, axis=1), 
-                use_container_width=True, 
+                width="stretch",
                 height=(len(final_view) + 1) * 35,
                 hide_index=True
             )
@@ -315,7 +315,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             xaxis_tickformat=".2f",
             xaxis_ticksuffix="%",
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         st.subheader("Summary Statistics")
         pcts = [1, 5, 25, 50, 75, 95, 99]
@@ -339,7 +339,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         df_stats = pd.DataFrame(
             {"Statistic": stat_rows.keys(), col_name: stat_rows.values()}
         )
-        st.dataframe(df_stats, use_container_width=True, hide_index=True)
+        st.dataframe(df_stats, width="stretch", hide_index=True)
 
     # --- HEATMAP HELPERS ---
     def render_seasonal_summary(series, suffix=""):
@@ -422,7 +422,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 .background_gradient(cmap="Reds", subset=pd.IndexSlice["% Negative", :], vmin=0, vmax=1) \
                 .background_gradient(cmap="Oranges", subset=pd.IndexSlice[abs_rows, :])
 
-        st.dataframe(style_summary(stats_df), use_container_width=True)
+        st.dataframe(style_summary(stats_df), width="stretch")
         now_caption = f" Now YTD uses {latest_year}." if latest_year is not None else ""
         st.caption(
             "Avg YTD compounds January through each column month, then averages those same-month returns across years."
@@ -572,7 +572,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         fig.update_yaxes(showticklabels=False, col=2)
         if has_fresh:
             fig.update_yaxes(showticklabels=False, col=3)
-        st.plotly_chart(fig, use_container_width=True, key=f"q_hm_{full_suffix}")
+        st.plotly_chart(fig, width="stretch", key=f"q_hm_{full_suffix}")
         
         st.subheader("Quarterly Returns List")
         quarterly_bal = visible_series.resample("QE").last()
@@ -583,7 +583,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         st.dataframe(
             df_quarterly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
         return visible_series, quarterly_ret, selected_timeline_end
@@ -721,7 +721,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
         fig.update_yaxes(showticklabels=False, col=2)
         if has_fresh:
             fig.update_yaxes(showticklabels=False, col=3)
-        st.plotly_chart(fig, use_container_width=True, key=f"m_hm_{full_suffix}")
+        st.plotly_chart(fig, width="stretch", key=f"m_hm_{full_suffix}")
         return visible_series, m_ret, selected_timeline_end
 
     def render_year_drilldown_view(series, suffix=""):
@@ -867,7 +867,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             annotations=cumulative_label_annotations,
             margin=dict(t=80),
         )
-        st.plotly_chart(fig, use_container_width=True, key=f"year_drill_fig_{full_suffix}")
+        st.plotly_chart(fig, width="stretch", key=f"year_drill_fig_{full_suffix}")
 
         detail_df = chart_df[[
             "Month",
@@ -888,7 +888,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 color_return,
                 subset=["Monthly Return", "Compounded Contribution", "Cumulative Return"],
             ),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -967,7 +967,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 "Contribution": "${:+,.0f}",
                 "Leverage": "{:.2f}x",
             }).map(color_return, subset=["Underlying Return", "Effective Return", "Contribution"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1054,7 +1054,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             template="plotly_dark",
             height=400,
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
 
         annual_bal = port_series.resample("YE").last()
         ret_col = "Continuous" if has_fresh_annual else "Return"
@@ -1075,7 +1075,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
             style_cols.append("Fresh Start")
         st.dataframe(
             df_annual.style.format(fmt).map(color_return, subset=style_cols),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1143,7 +1143,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
                 df_monthly_list = df_monthly_list[["Date", "Return", "Balance"]].sort_index(ascending=False)
                 st.dataframe(
                     df_monthly_list.style.format({"Return": "{:+.1%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True,
                 )
 
@@ -1199,7 +1199,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
         st.dataframe(
             df_daily_list.style.format({"Return": "{:+.2%}", "Balance": "${:,.2f}"}).map(color_return, subset=["Return"]),
-            use_container_width=True,
+            width="stretch",
             hide_index=True,
         )
 
@@ -1354,7 +1354,7 @@ def render_returns_analysis(port_series, bench_series=None, comparison_series=No
 
             st.dataframe(
                 display_df.style.pipe(style_drawdowns),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=min(800, 35 * (len(display_df) + 1) + 38),
             )

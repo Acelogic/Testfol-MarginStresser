@@ -426,7 +426,7 @@ def render_risk_return_metrics(port_series, stats, raw_response=None, unique_id=
 
     st.dataframe(
         styled,
-        use_container_width=True,
+        width="stretch",
         hide_index=True,
         height=min(len(df) * 35 + 40, 2800),
     )

@@ -28,10 +28,12 @@ python -m venv .venv
 source .venv/bin/activate
 python -m pip install -r requirements.txt
 
-streamlit run testfol_charting.py --server.port 8501
+python -m streamlit run testfol_charting.py --server.port 8501
 ```
 
-The Streamlit app will be available at `http://localhost:8501`.
+The Streamlit app will be available at `http://localhost:8501`. The requirements pin
+Streamlit 1.64.0; use the activated project environment so an older global install
+does not launch the app. The local upgrade was verified with Python 3.12.
 
 To launch both the optional FastAPI backend and Streamlit frontend:
 
@@ -40,6 +42,16 @@ python run.py
 ```
 
 This starts FastAPI on port `8100` and Streamlit on port `8501`.
+
+To verify the Streamlit interface after dependency updates:
+
+```bash
+python scripts/verify_streamlit_upgrade.py --output artifacts/streamlit-upgrade/app-smoke.json
+```
+
+This runs the full app with local fixture data, checks a real local backtest and
+all eight result views, and saves repeatable JSON evidence. It does not replace
+browser layout checks or live API verification.
 
 ### Optional Credentials
 

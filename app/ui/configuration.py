@@ -258,7 +258,7 @@ def render(start_date):
         c_tool1, c_tool2, c_tool3 = st.columns([1, 2, 1])
 
         with c_tool1:
-            if st.button("➕ Add Empty", use_container_width=True):
+            if st.button("➕ Add Empty", width="stretch"):
                 if len(st.session_state.portfolios) < 5:
                     import uuid
                     new_id = f"p_{uuid.uuid4().hex[:8]}"
@@ -290,7 +290,7 @@ def render(start_date):
                 )
 
             with c_tool3:
-                if st.button("⬇️ Load Preset", use_container_width=True):
+                if st.button("⬇️ Load Preset", width="stretch"):
                     if preset_names and selected_preset and selected_preset != "No Presets":
                         if len(st.session_state.portfolios) < 5:
                             p_data = next(p for p in presets if p["name"] == selected_preset)
@@ -367,7 +367,7 @@ def render(start_date):
                     p["name"] = st.text_input("Portfolio Name", key=_nk, label_visibility="collapsed")
 
                 with c_save:
-                    if st.button("💾", key="p_save", help="Save as new Preset", use_container_width=True):
+                    if st.button("💾", key="p_save", help="Save as new Preset", width="stretch"):
                         alloc_list = p["alloc_df"].to_dict("records")
                         preset_data = {
                             "name": p["name"],
@@ -386,7 +386,7 @@ def render(start_date):
                         st.rerun(scope="app")
 
                 with c_del:
-                    if st.button("🗑️", key="p_del", help="Delete Portfolio", use_container_width=True):
+                    if st.button("🗑️", key="p_del", help="Delete Portfolio", width="stretch"):
                         if len(st.session_state.portfolios) > 1:
                             deleted_pid = p["id"]
                             st.session_state.portfolios.pop(idx)
@@ -518,7 +518,7 @@ def render(start_date):
                     "Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
                     "PM Maint %": st.column_config.NumberColumn(min_value=0.0, max_value=100.0, step=0.1, format="%.1f"),
                 },
-                use_container_width=True
+                width="stretch"
             )
 
             if not new_alloc_df.equals(p["alloc_df"]):

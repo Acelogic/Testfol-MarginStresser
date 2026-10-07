@@ -149,7 +149,7 @@ def render_rebalance_sankey(trades_df, view_freq="Yearly", unique_id=None):
         ))])
 
     fig.update_layout(title_text=f"Rebalancing Flow {selected_period}", font_size=12, height=500)
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 @st.cache_data(show_spinner=False)
 def render_portfolio_composition(composition_df, view_freq="Yearly"):
@@ -216,7 +216,7 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         yaxis=dict(type='category', categoryorder='category ascending') # Recent at top (Y-axis ascending puts largest/latest at top)
     )
     
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
     # --- Data Table View ---
     with st.expander(f"📋 Portfolio Composition Details ({view_freq})", expanded=False):
@@ -232,7 +232,7 @@ def render_portfolio_composition(composition_df, view_freq="Yearly"):
         # Format for display
         st.dataframe(
             table_df.style.format("${:,.0f}"),
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -631,7 +631,7 @@ def render_portfolio_allocation(
             zeroline=False,
         )
     fig_lines.update_layout(**layout_kwargs)
-    st.plotly_chart(fig_lines, use_container_width=True, key=f"comp_perf{key_suffix}")
+    st.plotly_chart(fig_lines, width="stretch", key=f"comp_perf{key_suffix}")
 
     # --- Per-Asset Correlation Breakdown ---
     if show_correlation and equity_assets and diversifiers and len(diversifiers) >= 2:
@@ -671,7 +671,7 @@ def render_portfolio_allocation(
                     margin=dict(l=80, r=20, t=20, b=40),
                     legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5),
                 )
-                st.plotly_chart(fig_breakdown, use_container_width=True, key=f"corr_breakdown{key_suffix}")
+                st.plotly_chart(fig_breakdown, width="stretch", key=f"corr_breakdown{key_suffix}")
                 st.caption(
                     "Rolling correlation of each diversifier vs the equity-weighted core. "
                     "**Positive** = moving with equities (pinned). "
@@ -732,7 +732,7 @@ def render_portfolio_allocation(
     )
 
     key_suffix = f"_{unique_id}" if unique_id else ""
-    st.plotly_chart(fig, use_container_width=True, key=f"port_alloc_area{key_suffix}")
+    st.plotly_chart(fig, width="stretch", key=f"port_alloc_area{key_suffix}")
 
 
 def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_method, other_income, filing_status, state_code, rebalance_freq="Yearly", use_standard_deduction=True, unrealized_pl_df=None, custom_freq="Yearly", unique_id=None, component_prices=None, allocation=None, start_val=10000, retirement_income=None, retirement_year=None, port_series=None, rebal_config=None):
@@ -1001,7 +1001,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             height=400,
             hovermode="x unified"
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
     with c2:
         st.subheader("Total Turnover")
@@ -1016,7 +1016,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
         
         st.dataframe(
             summary.style.format("${:,.0f}"),
-            use_container_width=True
+            width="stretch"
         )
 
 
@@ -1080,7 +1080,7 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
             
             st.dataframe(
                 pivot_df.style.format("${:,.0f}").map(color_return),
-                use_container_width=True
+                width="stretch"
             )
         
     with st.expander("Detailed Trade Log"):
@@ -1092,5 +1092,5 @@ def render_rebalancing_analysis(trades_df, pl_by_year, composition_df, tax_metho
                 "Trade Amount": "${:,.2f}",
                 "Realized P&L": "${:,.2f}"
             }).map(color_return, subset=["Trade Amount", "Realized P&L"]),
-            use_container_width=True
+            width="stretch"
         )
